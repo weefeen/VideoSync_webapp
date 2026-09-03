@@ -1,0 +1,1903 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Weefeen · Chopin Video Sync — Thumbnail Hero</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<style>/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* greek-ext */
+
+/* greek */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* greek-ext */
+
+/* greek */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* greek-ext */
+
+/* greek */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* greek-ext */
+
+/* greek */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* greek */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+/* cyrillic-ext */
+
+/* cyrillic */
+
+/* greek */
+
+/* vietnamese */
+
+/* latin-ext */
+
+/* latin */
+
+</style>
+<style>
+  :root {
+    --paper:        #f6f1e8;
+    --paper-2:      #efe8db;
+    --surface:      #ffffff;
+    --ink:          #1c1622;
+    --ink-soft:     #4a4256;
+    --ink-faint:    #8b8396;
+    --rule:         #241a33;
+    --brand-1:      #381C53;
+    --brand-2:      #552D7B;
+    --brand-3:      #663893;
+    --brand-soft:   #e7dcf2;
+    --brand-softer: #f2ecf8;
+    --accent:       #663893;
+    --ok:           #2f7a4a;
+    --warn:         #b75a22;
+    --err:          #a22e2e;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Inter", sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    -webkit-font-smoothing: antialiased;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  /* ============ HEADER ============ */
+  .app {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 36px;
+    border-bottom: 1px solid rgba(36, 26, 51, 0.1);
+    background: var(--paper);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .logo { height: 26px; width: auto; display: block; }
+  .brand-meta {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.12em;
+    color: var(--ink-faint); text-transform: uppercase;
+    border-left: 1px solid rgba(36,26,51,0.18);
+    padding-left: 10px; margin-left: 4px;
+  }
+  .topbar .actions { display: flex; gap: 8px; align-items: center; }
+  .ghost-link {
+    font: inherit; font-size: 13px; color: var(--ink-soft);
+    background: transparent; border: 0; padding: 8px 10px; cursor: pointer; border-radius: 6px;
+  }
+  .ghost-link:hover { background: rgba(102, 56, 147, 0.08); color: var(--brand-3); }
+
+  /* ============ STAGE ============ */
+  .stage {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 40px;
+    padding: 40px 48px 80px;
+    max-width: 1380px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  @media (max-width: 960px) {
+    .stage { grid-template-columns: 1fr; padding: 24px; gap: 24px; }
+  }
+  .stage.no-panel { grid-template-columns: 1fr; }
+  .stage.no-panel .panel { display: none; }
+
+  /* ============ LEFT PANEL — PARAMS ============ */
+  .panel {
+    background: var(--surface);
+    border: 1px solid rgba(36,26,51,0.09);
+    border-radius: 12px;
+    padding: 22px 22px 18px;
+    position: sticky; top: 100px; align-self: start;
+    box-shadow: 0 1px 0 rgba(36,26,51,0.04);
+  }
+  .panel-title {
+    font-family: "Fraunces", serif;
+    font-size: 20px; font-weight: 500;
+    letter-spacing: -0.01em;
+    margin: 0 0 2px;
+  }
+  .panel-sub {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.14em;
+    color: var(--ink-faint); text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .panel-disabled { opacity: 0.45; pointer-events: none; }
+
+  .field { margin-bottom: 18px; }
+  .field > label {
+    display: block;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 8px;
+  }
+  .swatches { display: flex; gap: 8px; }
+  .swatch {
+    width: 30px; height: 30px; border-radius: 7px; cursor: pointer;
+    border: 2px solid transparent;
+    box-shadow: inset 0 0 0 1px rgba(36,26,51,0.18);
+    transition: transform 0.15s;
+  }
+  .swatch:hover { transform: scale(1.06); }
+  .swatch.selected { border-color: var(--ink); box-shadow: inset 0 0 0 2px var(--surface), 0 0 0 2px var(--ink); }
+
+  .toggle-group {
+    display: inline-flex; border: 1px solid rgba(36,26,51,0.14); border-radius: 8px; padding: 3px;
+    background: var(--paper-2);
+  }
+  .toggle-group button {
+    font: inherit; font-size: 13px; color: var(--ink-soft);
+    background: transparent; border: 0; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  }
+  .toggle-group button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(36,26,51,0.1); font-weight: 500; }
+
+  .range-row { display: flex; align-items: center; gap: 10px; }
+  input[type=range] {
+    flex: 1;
+    -webkit-appearance: none; appearance: none;
+    height: 4px; background: var(--paper-2); border-radius: 2px;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
+    border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--accent);
+    cursor: pointer;
+  }
+  .range-val {
+    font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-soft);
+    min-width: 42px; text-align: right;
+  }
+
+  /* ============ RIGHT PANE — THUMBNAIL HERO ============ */
+  .hero {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .hero-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px;
+  }
+  .piece-title {
+    font-family: "Fraunces", serif;
+    font-size: 30px; font-weight: 400;
+    letter-spacing: -0.015em; line-height: 1.15;
+    margin: 0;
+  }
+  .piece-title .italic { font-style: italic; color: var(--ink-soft); font-weight: 400; }
+  .piece-meta {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase;
+    display: flex; gap: 14px; margin-top: 6px;
+  }
+  .piece-meta .conf { color: var(--ok); }
+
+  .change-btn {
+    font: inherit; font-size: 13px; color: var(--ink-soft);
+    background: var(--surface); border: 1px solid rgba(36,26,51,0.14); border-radius: 8px;
+    padding: 8px 14px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    white-space: nowrap;
+  }
+  .change-btn:hover { border-color: var(--brand-3); color: var(--brand-3); }
+
+  /* the 16:9 thumbnail */
+  .thumb-wrap {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    background: #141019;
+    overflow: hidden;
+    position: relative;
+    box-shadow:
+      0 1px 0 rgba(36,26,51,0.06),
+      0 20px 50px -20px rgba(36,26,51,0.25);
+  }
+  .thumb-tag {
+    position: absolute; top: 12px; left: 12px;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: rgba(255,255,255,0.75); letter-spacing: 0.12em;
+    background: rgba(255,255,255,0.08); backdrop-filter: blur(8px);
+    padding: 4px 8px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .thumb-tag-right {
+    position: absolute; top: 12px; right: 12px;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: rgba(255,255,255,0.55); letter-spacing: 0.12em;
+  }
+  .score-area {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 10% 6%;
+    gap: 6%;
+  }
+  .score-area[data-bandpos="top"] { padding-top: 18%; padding-bottom: 6%; }
+  .score-area[data-bandpos="bottom"] { padding-top: 6%; padding-bottom: 18%; }
+
+  .staff-svg { width: 100%; display: block; }
+
+  .band {
+    position: absolute; left: 0; right: 0;
+    height: 16%;
+    background: var(--accent);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 5%;
+    color: white;
+    transition: all 0.3s cubic-bezier(.4,0,.2,1);
+  }
+  .band[data-pos="top"] { top: 0; }
+  .band[data-pos="bottom"] { bottom: 0; }
+  .band-title {
+    font-family: "Fraunces", serif;
+    font-size: 22px; font-weight: 400; letter-spacing: -0.01em;
+  }
+  .band-time {
+    font-family: "JetBrains Mono", monospace; font-size: 13px;
+    letter-spacing: 0.05em; opacity: 0.82;
+  }
+
+  /* still frame badge (corner) */
+  .still-dot {
+    position: absolute; bottom: 12px; right: 12px;
+    display: flex; align-items: center; gap: 6px;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: rgba(255,255,255,0.7); letter-spacing: 0.12em;
+    z-index: 3;
+  }
+  .still-dot i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.7); display: inline-block; }
+
+  /* caption strip below thumbnail */
+  .thumb-caption {
+    display: flex; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase;
+  }
+
+  /* download block */
+  .download-row {
+    background: var(--surface);
+    border: 1px solid rgba(36,26,51,0.09); border-radius: 12px;
+    padding: 20px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .download-row .delivery-eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .download-row .social-row {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  }
+  .social-btn {
+    font: inherit; font-size: 13.5px; font-weight: 500;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 10px 12px;
+    border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(36,26,51,0.14);
+    background: var(--surface); color: var(--ink);
+    transition: all 0.15s;
+  }
+  .social-btn:hover { border-color: var(--brand-3); background: var(--paper); transform: translateY(-1px); }
+  .social-btn svg { width: 16px; height: 16px; }
+  .social-btn.google:hover { border-color: #4285f4; color: #1a73e8; }
+  .social-btn.facebook:hover { border-color: #1877f2; color: #1877f2; }
+  .social-btn.instagram:hover { border-color: #e1306c; color: #e1306c; }
+  .download-row .divider {
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .download-row .divider::before, .download-row .divider::after {
+    content: ''; height: 1px; background: rgba(36,26,51,0.1);
+  }
+  .download-row .email-field {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .download-row label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .download-row input[type=email],
+  .download-row input[type=text] {
+    font: inherit; font-size: 15px;
+    border: 1px solid rgba(36,26,51,0.14); border-radius: 8px;
+    padding: 10px 12px; background: var(--paper);
+    outline: none; color: var(--ink);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .download-row input[type=email]:focus,
+  .download-row input[type=text]:focus { border-color: var(--brand-3); background: var(--surface); }
+  .download-row .email-hint { font-size: 11px; color: var(--ink-faint); }
+  .download-row .generate-row {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .download-row .generate-row .btn-primary {
+    width: 100%;
+    padding: 14px 28px;
+    font-size: 16px;
+    justify-content: center;
+  }
+  .download-row .generate-row .hint-line {
+    text-align: center;
+    font-size: 11px; color: var(--ink-faint);
+    letter-spacing: 0.04em;
+  }
+  .download-row .signed-in {
+    display: none; gap: 10px; align-items: center;
+    background: var(--brand-softer); border: 1px solid rgba(102,56,147,0.18);
+    border-radius: 8px; padding: 10px 12px;
+    font-size: 13px; color: var(--ink);
+  }
+  .download-row .signed-in.show { display: flex; }
+  .download-row .signed-in .avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--brand-3); color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 13px;
+    flex-shrink: 0;
+  }
+  .download-row .signed-in .info { flex: 1; line-height: 1.3; }
+  .download-row .signed-in .info b { font-weight: 600; }
+  .download-row .signed-in .info span { display: block; font-size: 11.5px; color: var(--ink-soft); }
+  .download-row .signed-in .unlink {
+    font: inherit; font-size: 11px; color: var(--ink-soft);
+    background: transparent; border: 0; cursor: pointer;
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+
+  .btn-primary {
+    font: inherit; font-weight: 600; font-size: 15px;
+    color: white;
+    background: linear-gradient(180deg, var(--brand-3) 0%, var(--brand-1) 100%);
+    border: 0; border-radius: 10px;
+    padding: 0 28px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 2px 8px rgba(56,28,83,0.25);
+    align-self: stretch;
+    white-space: nowrap;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary svg { width: 16px; height: 16px; }
+
+  /* ============ STATE 01 — LANDING (DROP) ============ */
+  .drop-hero {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border: 2px dashed rgba(36,26,51,0.25);
+    border-radius: 14px;
+    background: var(--paper-2);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .drop-hero::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 80% 20%, rgba(102,56,147,0.08), transparent 50%),
+      radial-gradient(circle at 20% 80%, rgba(56,28,83,0.06), transparent 50%);
+  }
+  .drop-hero:hover, .drop-hero.hover {
+    border-color: var(--brand-3); background: var(--brand-softer);
+  }
+  .drop-hero .icon {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: var(--surface); border: 1px solid rgba(36,26,51,0.12);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--brand-3);
+    z-index: 1;
+  }
+  .drop-hero h2 {
+    font-family: "Fraunces", serif; font-size: 32px; font-weight: 400;
+    letter-spacing: -0.015em; margin: 0; z-index: 1;
+  }
+  .drop-hero .sub {
+    font-size: 14px; color: var(--ink-soft); z-index: 1;
+  }
+  .drop-hero .formats {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--ink-faint); letter-spacing: 0.1em; text-transform: uppercase;
+    z-index: 1;
+  }
+  .drop-hero input[type=file] { display: none; }
+
+  /* status banner below drop zone */
+  .drop-status {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0 4px;
+  }
+  .drop-status .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 8px; vertical-align: middle; }
+
+  /* processing overlay inside drop hero */
+  .processing {
+    position: absolute; inset: 0;
+    background: rgba(20, 16, 25, 0.92);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; color: white;
+  }
+  .processing-stages {
+    display: flex; gap: 24px; align-items: center;
+  }
+  .p-stage { display: flex; align-items: center; gap: 8px; font-size: 13px; opacity: 0.5; }
+  .p-stage.done { opacity: 0.8; color: #cfa8ff; }
+  .p-stage.active { opacity: 1; }
+  .p-stage .bullet { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .p-stage.active .bullet { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { transform: scale(1.6); opacity: 0.5; } }
+
+  /* ============ DID YOU MEAN CARD ============ */
+  .dym {
+    background: var(--surface);
+    border: 1px solid rgba(36,26,51,0.09);
+    border-radius: 12px;
+    padding: 20px 22px;
+  }
+  .dym h3 {
+    font-family: "Fraunces", serif; font-size: 20px; font-weight: 500;
+    margin: 0 0 4px; letter-spacing: -0.01em;
+  }
+  .dym p.sub { margin: 0 0 14px; color: var(--ink-soft); font-size: 13px; }
+  .dym-list { display: flex; flex-direction: column; gap: 8px; }
+  .dym-row {
+    display: grid; grid-template-columns: auto 1fr auto auto; gap: 14px; align-items: center;
+    padding: 10px 12px; border: 1px solid rgba(36,26,51,0.1); border-radius: 10px;
+    background: var(--paper); cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dym-row:hover { border-color: var(--brand-3); background: var(--brand-softer); }
+  .dym-row.top { border-color: var(--brand-3); background: var(--brand-softer); box-shadow: 0 0 0 3px rgba(102,56,147,0.1); }
+  .dym-row .play {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--ink); color: white;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dym-row .info .title { font-family: "Fraunces", serif; font-size: 17px; font-weight: 500; }
+  .dym-row .info .sub { font-size: 12px; color: var(--ink-soft); }
+  .dym-row .conf {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--ink-faint); letter-spacing: 0.05em;
+  }
+  .dym-row .pick {
+    font: inherit; font-weight: 600; font-size: 13px; color: var(--brand-3);
+    background: transparent; border: 1px solid var(--brand-3); border-radius: 6px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  .dym-row.top .pick { background: var(--brand-3); color: white; }
+
+  /* ============ ERROR BANNER ============ */
+  .banner {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 14px 16px; border-radius: 10px;
+    border: 1px solid rgba(162, 46, 46, 0.25);
+    background: #fcf0ee;
+    color: var(--ink);
+  }
+  .banner.warn { border-color: rgba(183, 90, 34, 0.3); background: #fbf1e6; }
+  .banner .icon {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--err); color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 14px;
+    flex-shrink: 0;
+  }
+  .banner.warn .icon { background: var(--warn); }
+  .banner h4 {
+    margin: 0 0 2px; font-size: 14px; font-weight: 600;
+  }
+  .banner p { margin: 0; font-size: 13px; color: var(--ink-soft); line-height: 1.45; }
+  .banner .coverage-link {
+    display: inline-block; margin-top: 6px;
+    font-size: 13px; color: var(--brand-3); font-weight: 500;
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+
+  /* ============ SUCCESS STATE ============ */
+  .sent {
+    background: var(--surface);
+    border: 1px solid rgba(47, 122, 74, 0.25);
+    border-radius: 12px;
+    padding: 28px;
+    display: flex; gap: 20px; align-items: center;
+  }
+  .sent .check {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: var(--ok); color: white;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    font-size: 26px;
+  }
+  .sent h3 {
+    font-family: "Fraunces", serif; font-size: 24px; font-weight: 500;
+    margin: 0 0 4px; letter-spacing: -0.01em;
+  }
+  .sent p { margin: 0; color: var(--ink-soft); font-size: 14px; }
+  .sent code {
+    font-family: "JetBrains Mono", monospace; font-size: 13px;
+    background: var(--paper-2); padding: 2px 6px; border-radius: 4px;
+    color: var(--ink);
+  }
+
+  /* ============ STATE SWITCHER (dev UI) ============ */
+  .state-switcher {
+    position: fixed; left: 24px; bottom: 24px;
+    background: var(--surface);
+    border: 1px solid rgba(36,26,51,0.12);
+    border-radius: 12px;
+    padding: 10px;
+    display: flex; gap: 6px;
+    box-shadow: 0 4px 20px rgba(36,26,51,0.12);
+    z-index: 20;
+    font-family: "JetBrains Mono", monospace;
+  }
+  .state-switcher .label {
+    font-size: 10px; color: var(--ink-faint);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 6px 8px; align-self: center;
+  }
+  .state-switcher button {
+    font: inherit; font-size: 11px; font-weight: 500;
+    background: transparent; border: 1px solid rgba(36,26,51,0.12);
+    border-radius: 6px; padding: 6px 10px; cursor: pointer;
+    color: var(--ink-soft);
+  }
+  .state-switcher button.on { background: var(--ink); color: white; border-color: var(--ink); }
+
+  /* ============ STATE VISIBILITY ============ */
+  [data-screen] { display: none; }
+  [data-screen].active { display: contents; }
+
+  /* keyboard hint */
+  .kbd-hint {
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase;
+    text-align: center;
+    padding-top: 6px;
+  }
+
+  /* footer */
+  .site-foot {
+    border-top: 1px solid rgba(36,26,51,0.08);
+    padding: 16px 36px;
+    display: flex; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .site-foot a { color: inherit; text-decoration: none; }
+  .site-foot a:hover { color: var(--brand-3); }
+
+  /* ============ CORPUS MODAL ============ */
+  .corpus-modal {
+    position: fixed; inset: 0;
+    background: rgba(28, 22, 34, 0.5);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 30;
+    padding: 40px 20px;
+  }
+  .corpus-modal.open { display: flex; }
+  .corpus-card {
+    background: var(--surface);
+    border-radius: 14px;
+    width: 100%; max-width: 720px;
+    max-height: 85vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 24px 60px -20px rgba(28,22,34,0.4);
+    overflow: hidden;
+  }
+  .corpus-head {
+    padding: 22px 26px 18px;
+    border-bottom: 1px solid rgba(36,26,51,0.08);
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  }
+  .corpus-head h2 {
+    font-family: "Fraunces", serif; font-size: 24px; font-weight: 500;
+    letter-spacing: -0.015em; margin: 0 0 4px;
+  }
+  .corpus-head .corpus-stats {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--brand-3);
+  }
+  .corpus-head .corpus-sub {
+    font-size: 13px; color: var(--ink-soft); margin: 6px 0 0; line-height: 1.5;
+  }
+  .corpus-close {
+    font: inherit; font-size: 13px;
+    background: transparent; border: 0; cursor: pointer;
+    width: 32px; height: 32px; border-radius: 8px;
+    color: var(--ink-soft);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .corpus-close:hover { background: var(--paper-2); color: var(--ink); }
+
+  .corpus-search {
+    padding: 14px 26px;
+    border-bottom: 1px solid rgba(36,26,51,0.06);
+    background: var(--paper);
+  }
+  .corpus-search input {
+    font: inherit; font-size: 14px;
+    width: 100%;
+    border: 1px solid rgba(36,26,51,0.12); border-radius: 8px;
+    padding: 9px 12px;
+    background: var(--surface); color: var(--ink);
+    outline: none;
+  }
+  .corpus-search input:focus { border-color: var(--brand-3); }
+
+  .corpus-body {
+    overflow-y: auto;
+    padding: 8px 26px 22px;
+  }
+  .corpus-table {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 32px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12.5px;
+  }
+  .corpus-row {
+    display: grid; grid-template-columns: 1fr auto;
+    align-items: baseline;
+    padding: 7px 0;
+    border-bottom: 1px dashed rgba(36,26,51,0.08);
+    gap: 12px;
+  }
+  .corpus-row .cname { color: var(--ink); }
+  .corpus-row .ccount {
+    font-weight: 600; color: var(--brand-3);
+    min-width: 24px; text-align: right;
+  }
+  .corpus-row.hi .ccount { color: var(--ink); background: var(--brand-soft); padding: 1px 6px; border-radius: 4px; }
+  .corpus-foot {
+    padding: 14px 26px 18px;
+    border-top: 1px solid rgba(36,26,51,0.08);
+    background: var(--paper);
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--ink-soft); letter-spacing: 0.06em;
+  }
+  .corpus-foot strong { color: var(--ink); font-weight: 600; }
+  @media (max-width: 640px) { .corpus-table { grid-template-columns: 1fr; gap: 0; } }
+
+  /* ============ CORPUS TEASER (landing strip) ============ */
+  .corpus-teaser {
+    display: grid; grid-template-columns: auto 1fr auto;
+    gap: 16px; align-items: center;
+    padding: 14px 18px;
+    background: var(--brand-softer);
+    border: 1px solid rgba(102,56,147,0.15);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .corpus-teaser:hover { background: var(--brand-soft); border-color: rgba(102,56,147,0.3); }
+  .corpus-teaser .big {
+    font-family: "Fraunces", serif;
+    font-size: 36px; font-weight: 500; color: var(--brand-1);
+    line-height: 1; letter-spacing: -0.02em;
+  }
+  .corpus-teaser .text { display: flex; flex-direction: column; gap: 2px; }
+  .corpus-teaser .text strong { font-size: 14px; color: var(--ink); }
+  .corpus-teaser .text span { font-size: 12px; color: var(--ink-soft); }
+  .corpus-teaser .arrow {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    letter-spacing: 0.1em; color: var(--brand-3); text-transform: uppercase;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* ============ DEMO / PRE-TASTE ============ */
+  .demo-video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    background: #141019;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 1px 0 rgba(36,26,51,0.06), 0 20px 50px -20px rgba(36,26,51,0.25);
+  }
+  .demo-video .badge {
+    position: absolute; top: 14px; left: 14px;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: var(--paper); letter-spacing: 0.14em; text-transform: uppercase;
+    background: rgba(102,56,147,0.85); padding: 5px 10px; border-radius: 4px;
+    z-index: 3;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .demo-video .badge i {
+    width: 6px; height: 6px; border-radius: 50%; background: #f3b8d6;
+    box-shadow: 0 0 8px #f3b8d6;
+    animation: live-pulse 1.6s infinite;
+  }
+  @keyframes live-pulse { 50% { opacity: 0.3; } }
+  .demo-video .play-toggle {
+    position: absolute; bottom: 14px; right: 14px;
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+    color: white; font: inherit; font-size: 11px;
+    padding: 5px 12px; border-radius: 14px; cursor: pointer;
+    font-family: "JetBrains Mono", monospace; letter-spacing: 0.1em;
+    z-index: 3;
+  }
+  .demo-video .play-toggle:hover { background: rgba(255,255,255,0.18); }
+
+  /* headline that lives over the demo */
+  .demo-headline {
+    position: absolute; left: 28px; bottom: 18%;
+    margin-bottom: 22px;
+    z-index: 2;
+    max-width: 70%;
+    pointer-events: none;
+  }
+  .demo-headline h1 {
+    font-family: "Fraunces", serif;
+    font-size: 34px; font-weight: 400;
+    letter-spacing: -0.02em; line-height: 1.1;
+    margin: 0;
+    color: white;
+    text-shadow: 0 2px 18px rgba(0,0,0,0.5);
+  }
+  .demo-headline h1 .italic { font-style: italic; color: #f3b8d6; }
+  .demo-headline .sub {
+    margin-top: 8px; font-size: 13px;
+    color: rgba(255,255,255,0.75);
+    text-shadow: 0 1px 8px rgba(0,0,0,0.5);
+  }
+
+  .demo-stage {
+    position: absolute; inset: 0;
+    overflow: hidden;
+  }
+  .demo-staff-scroller {
+    position: absolute; left: 0; top: 0; bottom: 18%;
+    width: 300%;
+    display: flex; align-items: center;
+    will-change: transform;
+    opacity: 0.55;
+  }
+  .demo-staff-scroller svg { width: 33.333%; height: 100%; display: block; flex-shrink: 0; }
+
+  /* dark scrim so headline reads */
+  .demo-scrim {
+    position: absolute; left: 0; right: 0; top: 0; bottom: 18%;
+    background: linear-gradient(90deg, rgba(20,16,25,0.7) 0%, rgba(20,16,25,0.4) 50%, rgba(20,16,25,0) 80%);
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  .demo-band {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 18%;
+    background: linear-gradient(90deg, var(--brand-1), var(--brand-3));
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px;
+    color: white;
+    z-index: 2;
+  }
+  .demo-band .bt {
+    font-family: "Fraunces", serif; font-size: 17px; font-weight: 500;
+  }
+  .demo-band .tc { font-family: "JetBrains Mono", monospace; font-size: 12px; opacity: 0.82; }
+
+  /* drop bar: a single horizontal strip rather than a giant box */
+  .drop-bar {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 18px;
+    align-items: center;
+    padding: 16px 18px;
+    border: 2px dashed rgba(36,26,51,0.22);
+    border-radius: 14px;
+    background: var(--surface);
+    cursor: pointer;
+    transition: all 0.18s;
+    position: relative;
+  }
+  .drop-bar:hover, .drop-bar.hover {
+    border-color: var(--brand-3);
+    background: var(--brand-softer);
+    transform: translateY(-1px);
+  }
+  .drop-bar .icon {
+    width: 44px; height: 44px; border-radius: 10px;
+    background: var(--brand-soft); color: var(--brand-1);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .drop-bar .copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .drop-bar .copy strong {
+    font-family: "Fraunces", serif;
+    font-size: 19px; font-weight: 500; letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .drop-bar .copy span {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px;
+    color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .drop-bar .browse {
+    font: inherit; font-weight: 600; font-size: 14px;
+    background: linear-gradient(180deg, var(--brand-3), var(--brand-1));
+    color: white; border: 0; border-radius: 10px;
+    padding: 12px 20px; cursor: pointer;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(56,28,83,0.2);
+  }
+  .drop-bar input[type=file] { display: none; }
+
+  /* small utilities */
+  .muted { color: var(--ink-faint); }
+
+  /* ============ SCRUBBER + FILMSTRIP ============ */
+  .scrub {
+    background: var(--surface);
+    border: 1px solid rgba(36,26,51,0.09);
+    border-radius: 12px;
+    padding: 18px 20px 16px;
+  }
+  .scrub-head {
+    display: flex; flex-direction: column; gap: 2px;
+    margin-bottom: 14px;
+  }
+  .scrub-title {
+    font-family: "Fraunces", serif; font-size: 17px; font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .scrub-sub {
+    font-size: 12.5px; color: var(--ink-soft); line-height: 1.45;
+  }
+  .scrub-track-wrap { position: relative; padding: 6px 0 14px; }
+  .scrub-ruler {
+    display: flex; justify-content: space-between;
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.06em;
+    margin-bottom: 8px;
+    padding: 0 2px;
+  }
+  .scrub-track {
+    position: relative; height: 6px;
+    background: var(--paper-2); border-radius: 3px; cursor: pointer;
+  }
+  .scrub-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--brand-3); border-radius: 3px;
+    transition: width 0.12s;
+  }
+  .scrub-handle {
+    position: absolute; top: 50%; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--brand-3);
+    border: 3px solid var(--surface);
+    box-shadow: 0 0 0 1px var(--brand-3), 0 2px 6px rgba(56,28,83,0.3);
+    transform: translate(-50%, -50%); cursor: grab;
+    transition: left 0.12s;
+  }
+  .scrub-handle:active { cursor: grabbing; }
+
+  .filmstrip {
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 6px;
+  }
+  .frame {
+    aspect-ratio: 16 / 9;
+    border-radius: 5px;
+    background: #141019;
+    overflow: hidden;
+    position: relative;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: border-color 0.12s, transform 0.12s;
+  }
+  .frame:hover { transform: translateY(-2px); border-color: rgba(102,56,147,0.4); }
+  .frame.active { border-color: var(--brand-3); box-shadow: 0 0 0 1px var(--brand-3); }
+  .frame svg { width: 100%; height: 100%; display: block; }
+  .frame .ft {
+    position: absolute; bottom: 2px; left: 0; right: 0;
+    font-family: "JetBrains Mono", monospace; font-size: 8px;
+    color: rgba(255,255,255,0.75); text-align: center;
+    letter-spacing: 0.05em;
+  }
+  .frame .fband {
+    position: absolute; left: 0; right: 0;
+    height: 20%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .frame .fband[data-pos="top"] { top: 0; }
+  .frame .fband[data-pos="bottom"] { bottom: 0; }
+</style>
+</head>
+
+<body>
+<div class="app" data-screen-label="Thumbnail Hero">
+
+  <!-- ============ TOPBAR ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <!-- inline weefeen mark (purple gradient circle) -->
+      <svg class="logo" viewBox="0 0 272 277" aria-hidden="true">
+        <defs>
+          <linearGradient id="wf-g" x1="0" y1="0" x2="272" y2="277" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#381C53"></stop>
+            <stop offset="0.5" stop-color="#552D7B"></stop>
+            <stop offset="1" stop-color="#663893"></stop>
+          </linearGradient>
+        </defs>
+        <path fill="url(#wf-g)" d="M135.961 0C60.874 0 0 61.997 0 138.46c0 76.473 60.874 138.47 135.961 138.47S271.923 214.933 271.923 138.46C271.923 61.997 211.048 0 135.961 0Zm54.559 206.493c-2.741-9.403-15.266-8.707-30.075-7.885-14.238.791-30.589 1.699-42.386-6.139-18.492-12.273-27.604-59.928-33.8-92.328-3.137-16.41-5.527-28.907-8.008-30.911-.07-.401 25.887 7.225 38.235 66.593.332 1.598.658 3.196.983 4.789 3.732 18.311 7.321 35.917 19.048 45.669 2.827 2.354 7.448 5.115 12.607 5.844-12.384-8.099-18.188-27.049-19.85-45.584-2.223-24.883-4.762-46.87-19.534-61.069-.034-.173-.071-.348-.108-.524l-.021-.099c-.018-.085-.035-.169-.053-.253 25.213 6.739 34.324 33.298 37.874 64.618.351 3.086.609 6.166.862 9.198 1.113 13.298 2.15 25.69 10.653 33.777 2.201-.065 4.622-.137 7.134-.17-7.656-6.854-7.091-20.47-6.493-34.88.366-8.839.745-17.977-.753-26.036-2.753-14.832-8.202-26.407-19.416-33.459.14-.514.811-1.218 1.014-.601 22.242 2.972 36.46 23.863 35.185 48.912-.236 4.578-1.32 9.586-2.439 14.765-2.264 10.468-4.678 21.629-.549 31.326 13.802.347 27.054 2.884 19.89 14.448Z"></path>
+      </svg>
+      <svg class="logo" viewBox="310 0 670 277" style="height:18px;">
+        <defs>
+          <linearGradient id="wf-t" x1="310" y1="0" x2="980" y2="277" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#381C53"></stop>
+            <stop offset="1" stop-color="#663893"></stop>
+          </linearGradient>
+        </defs>
+        <!-- approximate wordmark paths via simplified text -->
+        <text x="310" y="205" font-family="Fraunces,serif" font-weight="500" font-size="210" letter-spacing="-6" fill="url(#wf-t)">weefeen</text>
+      </svg>
+      <span class="brand-meta">Chopin · Video Sync</span>
+    </div>
+    <div class="actions">
+      <button class="ghost-link" id="corpus-btn">Corpus (231)</button>
+      <button class="ghost-link">How it works</button>
+    </div>
+  </header>
+
+  <!-- ============ STAGE ============ -->
+  <div class="stage">
+
+    <!-- LEFT: params panel (disabled until piece is matched) -->
+    <aside class="panel" id="panel">
+      <div class="panel-title">Customize</div>
+      <div class="panel-sub" id="panel-status">awaiting recording</div>
+
+      <div class="field">
+        <label>Band color</label>
+        <div class="swatches" data-group="band">
+          <div class="swatch selected" data-v="#663893" style="background:#663893"></div>
+          <div class="swatch" data-v="#1c1622" style="background:#1c1622"></div>
+          <div class="swatch" data-v="#c1432a" style="background:#c1432a"></div>
+          <div class="swatch" data-v="#d4a73c" style="background:#d4a73c"></div>
+          <div class="swatch" data-v="#466b87" style="background:#466b87"></div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Note color</label>
+        <div class="swatches" data-group="note">
+          <div class="swatch selected" data-v="#f6f1e8" style="background:#f6f1e8"></div>
+          <div class="swatch" data-v="#ffffff" style="background:#ffffff"></div>
+          <div class="swatch" data-v="#e7dcf2" style="background:#e7dcf2"></div>
+          <div class="swatch" data-v="#d4a73c" style="background:#d4a73c"></div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Band position</label>
+        <div class="toggle-group" data-group="pos">
+          <button data-v="top">Top</button>
+          <button class="on" data-v="bottom">Bottom</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Staff size</label>
+        <div class="range-row">
+          <input type="range" min="70" max="140" value="100" id="staff-size">
+          <span class="range-val" id="staff-val">100%</span>
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom: 0;">
+        <label>Aspect</label>
+        <div class="toggle-group" data-group="aspect">
+          <button class="on" data-v="16/9">16:9</button>
+          <button data-v="1/1" disabled="" style="opacity:0.4;cursor:not-allowed">1:1</button>
+          <button data-v="9/16" disabled="" style="opacity:0.4;cursor:not-allowed">9:16</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- RIGHT: hero area (swaps content per state) -->
+    <main class="hero">
+
+      <!-- ============ STATE 01 · LANDING / DROP ============ -->
+      <div data-screen="landing" class="active" style="display:contents">
+
+        <div class="demo-video" id="demo-video">
+          <div class="badge"><i></i>Sample output</div>
+          <button class="play-toggle" id="demo-toggle">⏸ pause</button>
+          <div class="demo-stage">
+            <div class="demo-staff-scroller" id="demo-scroller"></div>
+            <div class="demo-scrim"></div>
+            <div class="demo-headline">
+              <h1>Turn your <span class="italic">Chopin</span> video<br>into a synced score video.</h1>
+              <div class="sub">Here’s what you’ll get — your performance, with the score scrolling in time.</div>
+            </div>
+            <div class="demo-band">
+              <div class="bt">Nocturne Op. 9 №2 · Chopin</div>
+              <div class="tc" id="demo-tc">00:00 / 03:48</div>
+            </div>
+          </div>
+        </div>
+
+        <label class="drop-bar" id="drop-zone" for="file-input">
+          <div class="icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          </div>
+          <div class="copy">
+            <strong>Drop your Chopin video to start</strong>
+            <span>.mp4 · .mov · .avi · .mkv  ·  up to 500 mb  ·  ephemeral · no account</span>
+          </div>
+          <button class="browse" type="button" onclick="document.getElementById('file-input').click()">Browse files</button>
+          <input type="file" id="file-input" accept="video/*">
+        </label>
+
+        <div class="corpus-teaser" id="corpus-teaser">
+          <div class="big">231</div>
+          <div class="text">
+            <strong>works in our Chopin corpus</strong>
+            <span>56 Mazurkas · 27 Etudes · 26 Preludes · 21 Nocturnes · 19 Songs · 18 Polonaises · 18 Waltzes · …</span>
+          </div>
+          <div class="arrow">See full coverage →</div>
+        </div>
+      </div>
+
+      <!-- ============ STATE 02 · PROCESSING ============ -->
+      <div data-screen="processing">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title"><span class="italic">Identifying…</span></h1>
+            <div class="piece-meta"><span>nocturne-op9-no2.mp4 · 38.4 mb · 03:48</span></div>
+          </div>
+        </div>
+
+        <div class="drop-hero" style="border-style: solid; border-color: rgba(36,26,51,0.12); cursor: default;">
+          <div class="processing">
+            <div style="font-family:'Fraunces',serif; font-size:26px;">Analyzing your recording</div>
+            <div class="processing-stages">
+              <div class="p-stage done"><span class="bullet"></span>Fingerprint</div>
+              <div class="p-stage active"><span class="bullet"></span>Load score</div>
+              <div class="p-stage"><span class="bullet"></span>Align</div>
+            </div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:rgba(255,255,255,0.6); letter-spacing:0.14em; text-transform:uppercase;">usually under 6 seconds</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ STATE 03 · MATCHED (main) ============ -->
+      <div data-screen="matched">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title">Nocturne in E♭ major, <span class="italic">Op. 9 №2</span></h1>
+            <div class="piece-meta">
+              <span>F. Chopin · 1832</span>
+              <span>·</span>
+              <span>03:48</span>
+              <span>·</span>
+              <span class="conf">matched</span>
+            </div>
+          </div>
+          <button class="change-btn" data-goto="landing">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            Change video
+          </button>
+        </div>
+
+        <div class="thumb-wrap" id="thumb">
+          <div class="thumb-tag">Preview · frame <span id="hero-frame-idx">5</span> of 9</div>
+          <div class="thumb-tag-right">16:9 · exports 1920×1080</div>
+          <div class="score-area" data-bandpos="bottom">
+            <svg class="staff-svg" viewBox="0 0 640 200" preserveAspectRatio="xMidYMid meet" id="score-svg"></svg>
+          </div>
+          <div class="band" data-pos="bottom" id="band">
+            <div class="band-title" id="band-title">Nocturne Op. 9 №2 · Chopin</div>
+            <div class="band-time" id="band-time">01:54 / 03:48</div>
+          </div>
+          <div class="still-dot"><i></i>STILL · sampled at <span id="hero-time">01:54</span></div>
+        </div>
+
+        <!-- scrubber row -->
+        <div class="scrub">
+          <div class="scrub-head">
+            <div class="scrub-title">Preview sanity check</div>
+            <div class="scrub-sub">9 frames sampled across the recording · click any thumb or drag the handle to jump. If every frame looks right, you're good to render.</div>
+          </div>
+          <div class="scrub-track-wrap">
+            <div class="scrub-ruler" id="scrub-ruler"></div>
+            <div class="scrub-track" id="scrub-track">
+              <div class="scrub-fill" id="scrub-fill"></div>
+              <div class="scrub-handle" id="scrub-handle"></div>
+            </div>
+          </div>
+          <div class="filmstrip" id="filmstrip"></div>
+        </div>
+
+        <div class="download-row">
+          <div class="signed-in" id="signed-in">
+            <div class="avatar" id="si-avatar">G</div>
+            <div class="info">
+              <b id="si-name">Connected</b>
+              <span id="si-email">you@example.com</span>
+            </div>
+            <button class="unlink" id="si-unlink">use a different email</button>
+          </div>
+
+          <div id="delivery-block">
+            <div class="delivery-eyebrow">Where should we send your video?</div>
+            <div class="social-row" style="margin-top:10px;">
+              <button class="social-btn google" data-provider="google" data-email="chopin.fan@gmail.com" data-name="Continue with Google">
+                <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.5-5.9 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.3 6 29.5 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.2-.1-2.4-.4-3.5z"></path><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.3 6 29.5 4 24 4 16.3 4 9.7 8.4 6.3 14.7z"></path><path fill="#4CAF50" d="M24 44c5.4 0 10.3-2 14-5.4l-6.5-5.5C29.4 34.7 26.8 36 24 36c-5.4 0-9.7-3.5-11.3-8l-6.6 5.1C9.5 39.5 16.2 44 24 44z"></path><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.5 5.5C41 35.5 44 30.2 44 24c0-1.2-.1-2.4-.4-3.5z"></path></svg>
+                Google
+              </button>
+              <button class="social-btn facebook" data-provider="facebook" data-email="you.name@facebook.com" data-name="Continue with Facebook">
+                <svg viewBox="0 0 24 24" fill="#1877F2"><path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.412c0-3.013 1.792-4.677 4.532-4.677 1.312 0 2.686.235 2.686.235v2.957H15.83c-1.491 0-1.956.93-1.956 1.886v2.26h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"></path></svg>
+                Facebook
+              </button>
+              <button class="social-btn instagram" data-provider="instagram" data-email="you@insta.com" data-name="Continue with Instagram">
+                <svg viewBox="0 0 24 24"><defs><linearGradient id="ig-g" x1="0" y1="0" x2="24" y2="24"><stop offset="0" stop-color="#f58529"></stop><stop offset="0.5" stop-color="#dd2a7b"></stop><stop offset="1" stop-color="#8134af"></stop></linearGradient></defs><path fill="url(#ig-g)" d="M12 2.16c3.2 0 3.58 0 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s0 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23a3.7 3.7 0 0 1-.9 1.38c-.42.42-.82.68-1.38.9-.43.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58 0-4.85-.07c-1.17-.05-1.8-.25-2.23-.41a3.7 3.7 0 0 1-1.38-.9c-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s0-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16M12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63a5.86 5.86 0 0 0-2.13 1.38A5.86 5.86 0 0 0 .63 4.14C.33 4.9.13 5.78.07 7.05.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.73 1.47 1.38 2.13a5.86 5.86 0 0 0 2.13 1.38c.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56a5.86 5.86 0 0 0 2.13-1.38 5.86 5.86 0 0 0 1.38-2.13c.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91a5.86 5.86 0 0 0-1.38-2.13A5.86 5.86 0 0 0 19.86.63c-.76-.3-1.64-.5-2.91-.56C15.67.01 15.26 0 12 0zm0 5.84a6.16 6.16 0 1 0 0 12.32 6.16 6.16 0 0 0 0-12.32zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.4-11.85a1.44 1.44 0 1 0 0 2.88 1.44 1.44 0 0 0 0-2.88z"></path></svg>
+                Instagram
+              </button>
+            </div>
+
+            <div class="divider">or use email</div>
+
+            <div class="email-field">
+              <input type="email" id="email" placeholder="you@example.com">
+              <span class="email-hint">No account, no password. We just need somewhere to send the link.</span>
+            </div>
+          </div>
+
+          <div class="generate-row">
+            <button class="btn-primary" id="generate-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Generate &amp; email .mp4
+            </button>
+            <div class="hint-line">Render runs server-side (~45s) · link expires in 7 days · we don’t keep your video.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ STATE 04 · DID YOU MEAN ============ -->
+      <div data-screen="dym">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title">Did you mean…</h1>
+            <div class="piece-meta"><span>3 possibilities — pick the one you played</span></div>
+          </div>
+          <button class="change-btn" data-goto="landing">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            Change video
+          </button>
+        </div>
+
+        <div class="dym">
+          <h3>Pick the closest match</h3>
+          <p class="sub">We found a few possibilities. Preview each and choose the one you played.</p>
+          <div class="dym-list">
+            <div class="dym-row top" data-pick="op9-2">
+              <div class="play"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div>
+              <div class="info">
+                <div class="title">Nocturne in E♭ major, Op. 9 №2</div>
+                <div class="sub">F. Chopin · 03:48 · our best guess</div>
+              </div>
+              <div class="conf">0.71</div>
+              <button class="pick">Use this</button>
+            </div>
+            <div class="dym-row" data-pick="op55-1">
+              <div class="play"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div>
+              <div class="info">
+                <div class="title">Nocturne in F minor, Op. 55 №1</div>
+                <div class="sub">F. Chopin · 05:06</div>
+              </div>
+              <div class="conf">0.68</div>
+              <button class="pick">Use this</button>
+            </div>
+            <div class="dym-row" data-pick="op27-2">
+              <div class="play"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div>
+              <div class="info">
+                <div class="title">Nocturne in D♭ major, Op. 27 №2</div>
+                <div class="sub">F. Chopin · 06:02</div>
+              </div>
+              <div class="conf">0.64</div>
+              <button class="pick">Use this</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ STATE 05 · NOT CHOPIN ============ -->
+      <div data-screen="not-chopin">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title">We couldn’t <span class="italic">recognize</span> this piece.</h1>
+            <div class="piece-meta"><span>recital-clip.mp4 · 52.1 mb · 04:21</span></div>
+          </div>
+          <button class="change-btn" data-goto="landing">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            Change video
+          </button>
+        </div>
+
+        <div class="banner warn">
+          <div class="icon">!</div>
+          <div>
+            <h4>We couldn’t recognize this piece.</h4>
+            <p>It might not be Chopin — or it could be a piece we haven’t added yet. Try a different recording, or pick a piece manually.</p>
+            <a class="coverage-link" href="#">See the full Chopin corpus →</a>
+          </div>
+        </div>
+
+        <div class="download-row" style="grid-template-columns: 1fr;">
+          <div class="email-field">
+            <label>Pick a piece manually instead</label>
+            <input type="email" placeholder="⌕  search Nocturnes, Ballades, Études, Preludes…" style="padding-left:14px">
+            <span class="email-hint">Or drop a clearer recording — compressed audio can confuse the fingerprint.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ STATE 06 · FILE REJECTED ============ -->
+      <div data-screen="rejected">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title"><span class="italic">Can't use this file.</span></h1>
+            <div class="piece-meta"><span>performance.mkv · 1.2 gb</span></div>
+          </div>
+          <button class="change-btn" data-goto="landing">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            Change video
+          </button>
+        </div>
+
+        <div class="banner">
+          <div class="icon">×</div>
+          <div>
+            <h4>File too large or wrong format.</h4>
+            <p>We need .mp4, .mov, .avi, or .mkv under 500 MB. Your file is 1.2 GB in a container we cannot read — try re-exporting as H.264 / AAC .mp4 from your editor, or trim the clip before uploading.</p>
+          </div>
+        </div>
+
+        <div class="drop-status" style="padding-top:4px;">
+          <span>ACCEPTED · .mp4  .mov  .avi  .mkv  ·  max 500 mb  ·  piano solo · we use the audio track only</span>
+        </div>
+      </div>
+
+      <!-- ============ STATE 07 · SENT ============ -->
+      <div data-screen="sent">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title">Rendering — <span class="italic">check your inbox.</span></h1>
+            <div class="piece-meta"><span>Nocturne Op. 9 №2 · 03:48 · 1920×1080</span></div>
+          </div>
+          <button class="change-btn" data-goto="landing">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            Start over
+          </button>
+        </div>
+
+        <div class="sent">
+          <div class="check">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          </div>
+          <div>
+            <h3>We'll email your video in about 45 seconds.</h3>
+            <p>A download link is on its way to <code id="sent-email">you@example.com</code>. The link stays live for 7 days. No account, no history — close this tab whenever you like.</p>
+          </div>
+        </div>
+
+        <div class="thumb-wrap" style="box-shadow:none; opacity:0.85;">
+          <div class="thumb-tag">Rendering · 1920×1080 · 30 fps</div>
+          <div class="score-area" data-bandpos="bottom">
+            <svg class="staff-svg" viewBox="0 0 640 200" preserveAspectRatio="xMidYMid meet" id="score-svg-2"></svg>
+          </div>
+          <div class="band" data-pos="bottom">
+            <div class="band-title">Nocturne Op. 9 №2 · Chopin</div>
+            <div class="band-time">00:41 / 03:48</div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <footer class="site-foot">
+    <span>© 2026 Weefeen · Phase 1</span>
+    <span>Ephemeral · we don't store your audio</span>
+    <a href="#" id="corpus-link">Corpus coverage · 231 works · 26 genres</a>
+  </footer>
+</div>
+
+<!-- ============ CORPUS MODAL ============ -->
+<div class="corpus-modal" id="corpus-modal" role="dialog" aria-modal="true" aria-labelledby="corpus-title">
+  <div class="corpus-card">
+    <div class="corpus-head">
+      <div>
+        <div class="corpus-stats">Total count by genre</div>
+        <h2 id="corpus-title">What’s in the Chopin corpus</h2>
+        <p class="corpus-sub">231 individual pieces across 26 genres. If your performance is one of these, we can sync. We don’t cover other composers — yet.</p>
+      </div>
+      <button class="corpus-close" aria-label="Close" id="corpus-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
+    <div class="corpus-search">
+      <input type="text" id="corpus-search" placeholder="Filter genres… (e.g. nocturnes, etudes)" autocomplete="off">
+    </div>
+    <div class="corpus-body">
+      <div class="corpus-table" id="corpus-table"></div>
+    </div>
+    <div class="corpus-foot">
+      <span>GRAND TOTAL</span>
+      <span><strong>231</strong> individual pieces</span>
+    </div>
+  </div>
+</div>
+
+<!-- dev state switcher -->
+<div class="state-switcher" id="switcher">
+  <span class="label">State</span>
+  <button data-state="landing" class="on">01 Drop</button>
+  <button data-state="rejected">02 Rejected</button>
+  <button data-state="processing">03 Process</button>
+  <button data-state="not-chopin">04 Not Chopin</button>
+  <button data-state="dym">05 Did-you-mean</button>
+  <button data-state="matched">06 Matched</button>
+  <button data-state="sent">07 Sent</button>
+</div>
+
+<script>
+// ================= staff rendering =================
+// seed: offset so each frame looks slightly different (simulating score scroll)
+// highlight: measure index (0..7 across the two systems) to highlight
+function drawScore(svg, opts = {}) {
+  if (!svg) return;
+  const { noteColor = '#f6f1e8', seed = 0, highlight = -1, highlightColor = '#663893' } = opts;
+  const W = 640;
+  let html = '';
+  const systems = [{y: 50, s: seed + 1}, {y: 130, s: seed + 2}];
+  systems.forEach((sys, sysI) => {
+    html += `<text x="18" y="${sys.y + 22}" font-family="Fraunces, serif" font-size="44" fill="${noteColor}">𝄞</text>`;
+    for (let i = 0; i < 5; i++) {
+      html += `<line x1="58" y1="${sys.y + i*8}" x2="${W-24}" y2="${sys.y + i*8}" stroke="${noteColor}" stroke-width="1" stroke-opacity="0.85"/>`;
+    }
+    // 4 measures per system
+    const measuresPerSys = 4;
+    for (let m = 0; m < measuresPerSys; m++) {
+      const mx0 = 58 + ((W - 82) / measuresPerSys) * m;
+      const mx1 = 58 + ((W - 82) / measuresPerSys) * (m + 1);
+      const measureIdx = sysI * measuresPerSys + m;
+      if (measureIdx === highlight) {
+        html += `<rect x="${mx0}" y="${sys.y - 6}" width="${mx1 - mx0}" height="42" fill="${highlightColor}" fill-opacity="0.35" rx="2"/>`;
+      }
+      if (m > 0) {
+        html += `<line x1="${mx0}" y1="${sys.y - 2}" x2="${mx0}" y2="${sys.y + 34}" stroke="${noteColor}" stroke-opacity="0.55" stroke-width="1"/>`;
+      }
+    }
+    // notes
+    const n = 12;
+    for (let i = 0; i < n; i++) {
+      const nx = 74 + i * ((W - 100) / n);
+      const ny = sys.y + 2 + ((i * 3 + sys.s) % 5) * 4;
+      html += `<ellipse cx="${nx}" cy="${ny}" rx="4" ry="3" fill="${noteColor}" transform="rotate(-18 ${nx} ${ny})"/>`;
+      html += `<line x1="${nx+3}" y1="${ny-1}" x2="${nx+3}" y2="${ny-22}" stroke="${noteColor}" stroke-width="1.2"/>`;
+    }
+  });
+  svg.innerHTML = html;
+}
+
+// ================= frame sampling =================
+const TOTAL_SEC = 228; // 03:48
+const N_FRAMES = 9;
+// each frame has: time, measure, system-seed
+const FRAMES = Array.from({length: N_FRAMES}, (_, i) => {
+  const t = Math.round((i / (N_FRAMES - 1)) * TOTAL_SEC);
+  return { idx: i, time: t, measure: i % 8, seed: i };
+});
+function fmtTime(s) {
+  const m = Math.floor(s / 60).toString().padStart(2, '0');
+  const ss = (s % 60).toString().padStart(2, '0');
+  return `${m}:${ss}`;
+}
+
+let activeFrame = 4; // middle
+
+// ================= state =================
+const TWEAK_DEFAULS = /*EDITMODE-BEGIN*/{
+  "bandColor": "#466b87",
+  "noteColor": "#d4a73c",
+  "bandPos": "top",
+  "staffSize": 88
+}/*EDITMODE-END*/;
+
+const state = { ...TWEAK_DEFAULS, screen: 'landing' };
+
+function applyState() {
+  // screens
+  document.querySelectorAll('[data-screen]').forEach(el => {
+    const on = el.dataset.screen === state.screen;
+    el.style.display = on ? 'contents' : 'none';
+  });
+  document.querySelectorAll('#switcher button').forEach(b => {
+    b.classList.toggle('on', b.dataset.state === state.screen);
+  });
+
+  // panel only shows on matched
+  const stage = document.querySelector('.stage');
+  if (stage) stage.classList.toggle('no-panel', state.screen !== 'matched');
+  const panel = document.getElementById('panel');
+  panel.classList.toggle('panel-disabled', state.screen !== 'matched');
+  document.getElementById('panel-status').textContent =
+    state.screen === 'matched' ? 'nocturne op. 9 №2 · editable' :
+    state.screen === 'landing' ? 'awaiting recording' :
+    state.screen === 'processing' ? 'identifying…' :
+    state.screen === 'sent' ? 'render queued · locked' :
+    'unavailable';
+
+  // hero thumbnail render (reflects activeFrame)
+  const f = FRAMES[activeFrame];
+  const band = document.getElementById('band');
+  if (band) {
+    band.style.background = state.bandColor;
+    band.dataset.pos = state.bandPos;
+    band.style.top = state.bandPos === 'top' ? '0' : 'auto';
+    band.style.bottom = state.bandPos === 'bottom' ? '0' : 'auto';
+  }
+  const bt = document.getElementById('band-time');
+  if (bt) bt.textContent = `${fmtTime(f.time)} / 03:48`;
+  const ht = document.getElementById('hero-time');
+  if (ht) ht.textContent = fmtTime(f.time);
+  const hfi = document.getElementById('hero-frame-idx');
+  if (hfi) hfi.textContent = activeFrame + 1;
+
+  const scoreSvg = document.getElementById('score-svg');
+  if (scoreSvg) {
+    scoreSvg.parentElement.dataset.bandpos = state.bandPos;
+    scoreSvg.style.transform = `scale(${state.staffSize/100})`;
+    scoreSvg.style.transformOrigin = 'center';
+    drawScore(scoreSvg, { noteColor: state.noteColor, seed: f.seed, highlight: f.measure, highlightColor: state.bandColor });
+  }
+  const scoreSvg2 = document.getElementById('score-svg-2');
+  if (scoreSvg2) drawScore(scoreSvg2, { noteColor: state.noteColor, seed: 2, highlight: 2, highlightColor: state.bandColor });
+
+  // filmstrip
+  renderFilmstrip();
+  renderScrubber();
+}
+
+// ============ filmstrip + scrubber ============
+function renderFilmstrip() {
+  const strip = document.getElementById('filmstrip');
+  if (!strip) return;
+  strip.innerHTML = '';
+  FRAMES.forEach((f, i) => {
+    const el = document.createElement('div');
+    el.className = 'frame' + (i === activeFrame ? ' active' : '');
+    el.innerHTML = `
+      <svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice">
+        <rect x="0" y="0" width="640" height="360" fill="#141019"/>
+        <g transform="translate(0, 80) scale(1, 0.9)">
+          ${staffMini(f, state)}
+        </g>
+      </svg>
+      <div class="fband" data-pos="${state.bandPos}" style="background:${state.bandColor};"></div>
+      <div class="ft">${fmtTime(f.time)}</div>
+    `;
+    el.addEventListener('click', () => { activeFrame = i; applyState(); });
+    strip.appendChild(el);
+  });
+}
+function staffMini(f, st) {
+  // simplified staff for mini frames
+  const W = 640;
+  let html = '';
+  const systems = [{y: 50, s: f.seed + 1}, {y: 130, s: f.seed + 2}];
+  systems.forEach((sys, sysI) => {
+    for (let i = 0; i < 5; i++) {
+      html += `<line x1="40" y1="${sys.y + i*8}" x2="${W-30}" y2="${sys.y + i*8}" stroke="${st.noteColor}" stroke-width="1.2" stroke-opacity="0.8"/>`;
+    }
+    const mps = 4;
+    for (let m = 0; m < mps; m++) {
+      const mx0 = 40 + ((W - 70) / mps) * m;
+      const mx1 = 40 + ((W - 70) / mps) * (m + 1);
+      const measureIdx = sysI * mps + m;
+      if (measureIdx === f.measure) {
+        html += `<rect x="${mx0}" y="${sys.y - 6}" width="${mx1 - mx0}" height="42" fill="${st.bandColor}" fill-opacity="0.4"/>`;
+      }
+      if (m > 0) html += `<line x1="${mx0}" y1="${sys.y - 2}" x2="${mx0}" y2="${sys.y + 34}" stroke="${st.noteColor}" stroke-opacity="0.55"/>`;
+    }
+    for (let i = 0; i < 10; i++) {
+      const nx = 55 + i * ((W - 100) / 10);
+      const ny = sys.y + 2 + ((i * 3 + sys.s) % 5) * 4;
+      html += `<ellipse cx="${nx}" cy="${ny}" rx="5" ry="3.5" fill="${st.noteColor}" transform="rotate(-18 ${nx} ${ny})"/>`;
+    }
+  });
+  return html;
+}
+function renderScrubber() {
+  const track = document.getElementById('scrub-track');
+  const fill = document.getElementById('scrub-fill');
+  const handle = document.getElementById('scrub-handle');
+  const ruler = document.getElementById('scrub-ruler');
+  if (!track) return;
+  const pct = (activeFrame / (N_FRAMES - 1)) * 100;
+  fill.style.width = pct + '%';
+  handle.style.left = pct + '%';
+  if (ruler && !ruler.dataset.init) {
+    ruler.innerHTML = [0, 0.25, 0.5, 0.75, 1].map(r => `<span>${fmtTime(Math.round(r * TOTAL_SEC))}</span>`).join('');
+    ruler.dataset.init = '1';
+  }
+}
+// scrub drag
+function bindScrub() {
+  const track = document.getElementById('scrub-track');
+  if (!track) return;
+  const onMove = (x) => {
+    const r = track.getBoundingClientRect();
+    const p = Math.max(0, Math.min(1, (x - r.left) / r.width));
+    activeFrame = Math.round(p * (N_FRAMES - 1));
+    applyState();
+  };
+  track.addEventListener('mousedown', e => {
+    onMove(e.clientX);
+    const mm = ev => onMove(ev.clientX);
+    const mu = () => { window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); };
+    window.addEventListener('mousemove', mm);
+    window.addEventListener('mouseup', mu);
+  });
+}
+bindScrub();
+
+function setKey(k, v) {
+  state[k] = v;
+  applyState();
+  window.parent.postMessage({type:'__edit_mode_set_keys', edits:{[k]: v}}, '*');
+}
+
+// ================= events =================
+// swatches
+document.querySelectorAll('[data-group="band"] .swatch').forEach(s => {
+  s.addEventListener('click', () => {
+    document.querySelectorAll('[data-group="band"] .swatch').forEach(x => x.classList.remove('selected'));
+    s.classList.add('selected');
+    setKey('bandColor', s.dataset.v);
+  });
+});
+document.querySelectorAll('[data-group="note"] .swatch').forEach(s => {
+  s.addEventListener('click', () => {
+    document.querySelectorAll('[data-group="note"] .swatch').forEach(x => x.classList.remove('selected'));
+    s.classList.add('selected');
+    setKey('noteColor', s.dataset.v);
+  });
+});
+// toggle groups
+document.querySelectorAll('[data-group="pos"] button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('[data-group="pos"] button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    setKey('bandPos', b.dataset.v);
+  });
+});
+// staff size
+const sz = document.getElementById('staff-size');
+const szv = document.getElementById('staff-val');
+sz.addEventListener('input', () => {
+  szv.textContent = sz.value + '%';
+  setKey('staffSize', +sz.value);
+});
+
+// state switcher
+document.querySelectorAll('#switcher button').forEach(b => {
+  b.addEventListener('click', () => {
+    state.screen = b.dataset.state;
+    applyState();
+    localStorage.setItem('wfsync_screen', state.screen);
+  });
+});
+// change video buttons
+document.querySelectorAll('[data-goto]').forEach(b => {
+  b.addEventListener('click', () => {
+    state.screen = b.dataset.goto;
+    applyState();
+  });
+});
+
+// drop/file interactions — simulate
+const dz = document.getElementById('drop-zone');
+if (dz) {
+  ['dragover','dragenter'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('hover'); }));
+  ['dragleave','drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('hover'); }));
+  dz.addEventListener('drop', () => {
+    state.screen = 'processing'; applyState();
+    setTimeout(() => { state.screen = 'matched'; applyState(); }, 1400);
+  });
+  document.getElementById('file-input').addEventListener('change', () => {
+    state.screen = 'processing'; applyState();
+    setTimeout(() => { state.screen = 'matched'; applyState(); }, 1400);
+  });
+}
+
+// generate button → sent
+const genBtn = document.getElementById('generate-btn');
+if (genBtn) {
+  genBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const email = document.getElementById('email').value || 'you@example.com';
+    document.getElementById('sent-email').textContent = email;
+    state.screen = 'sent'; applyState();
+  });
+}
+
+// did-you-mean pick
+document.querySelectorAll('.dym-row .pick').forEach(b => {
+  b.addEventListener('click', () => { state.screen = 'matched'; applyState(); });
+});
+
+// restore last screen
+const saved = localStorage.getItem('wfsync_screen');
+if (saved) state.screen = saved;
+
+// edit-mode protocol
+window.addEventListener('message', (e) => {
+  const d = e.data || {};
+  if (d.type === '__activate_edit_mode') document.body.classList.add('edit-mode');
+  if (d.type === '__deactivate_edit_mode') document.body.classList.remove('edit-mode');
+});
+window.parent.postMessage({type:'__edit_mode_available'}, '*');
+
+applyState();
+
+// ============ corpus modal ============
+const CORPUS = [
+  ['Mazurkas', 56], ['Etudes', 27], ['Preludes', 26], ['Nocturnes', 21],
+  ['Songs', 19], ['Polonaises', 18], ['Waltzes', 18], ['Variations', 5],
+  ['Rondos', 5], ['Ballades', 4], ['Impromptus', 4], ['Scherzos', 4],
+  ['Sonatas', 4], ['Ecossaises', 3], ['Concertos', 2], ['Fantasies', 2],
+  ['Allegro de Concert', 1], ['Barcarolle', 1], ['Berceuse', 1], ['Bolero', 1],
+  ['Cantabile', 1], ['Duo Concertant', 1], ['Fugue', 1], ['Funeral March', 1],
+  ['Largo', 1], ['Moderato (Feuille d’Album)', 1], ['Souvenir de Paganini', 1],
+  ['Tarantella', 1], ['Trio', 1],
+];
+function renderCorpusTable(filter = '') {
+  const tbl = document.getElementById('corpus-table');
+  if (!tbl) return;
+  const f = filter.trim().toLowerCase();
+  const rows = CORPUS.filter(([n]) => !f || n.toLowerCase().includes(f));
+  tbl.innerHTML = rows.map(([name, count]) => `
+    <div class="corpus-row${count >= 18 ? ' hi' : ''}">
+      <span class="cname">${name}</span>
+      <span class="ccount">${count}</span>
+    </div>
+  `).join('') || '<div style="padding:20px;text-align:center;color:var(--ink-faint);font-size:12px;grid-column:1/-1;">No genres match that filter.</div>';
+}
+renderCorpusTable();
+function openCorpus() {
+  document.getElementById('corpus-modal').classList.add('open');
+  setTimeout(() => document.getElementById('corpus-search').focus(), 60);
+}
+function closeCorpus() { document.getElementById('corpus-modal').classList.remove('open'); }
+document.getElementById('corpus-btn')?.addEventListener('click', openCorpus);
+document.getElementById('corpus-teaser')?.addEventListener('click', openCorpus);
+document.getElementById('corpus-link')?.addEventListener('click', (e) => { e.preventDefault(); openCorpus(); });
+document.getElementById('corpus-close')?.addEventListener('click', closeCorpus);
+document.getElementById('corpus-modal')?.addEventListener('click', (e) => { if (e.target.id === 'corpus-modal') closeCorpus(); });
+document.getElementById('corpus-search')?.addEventListener('input', (e) => renderCorpusTable(e.target.value));
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCorpus(); });
+
+// ============ social auth simulation ============
+document.querySelectorAll('.social-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const provider = btn.dataset.provider;
+    const email = btn.dataset.email;
+    const initial = provider === 'google' ? 'G' : provider === 'facebook' ? 'F' : 'I';
+    const name = provider === 'google' ? 'Connected with Google' : provider === 'facebook' ? 'Connected with Facebook' : 'Connected with Instagram';
+    document.getElementById('si-avatar').textContent = initial;
+    document.getElementById('si-avatar').style.background =
+      provider === 'google' ? '#4285f4' :
+      provider === 'facebook' ? '#1877f2' :
+      'linear-gradient(135deg, #f58529, #dd2a7b, #8134af)';
+    document.getElementById('si-name').textContent = name;
+    document.getElementById('si-email').textContent = email;
+    document.getElementById('signed-in').classList.add('show');
+    document.getElementById('delivery-block').style.display = 'none';
+    document.getElementById('email').value = email;
+  });
+});
+document.getElementById('si-unlink')?.addEventListener('click', () => {
+  document.getElementById('signed-in').classList.remove('show');
+  document.getElementById('delivery-block').style.display = '';
+  document.getElementById('email').value = '';
+});
+
+// ============ landing demo animation ============
+(function setupDemo() {
+  const scroller = document.getElementById('demo-scroller');
+  const tc = document.getElementById('demo-tc');
+  const toggle = document.getElementById('demo-toggle');
+  if (!scroller || !tc) return;
+
+  function staffPanel(seed, highlight) {
+    const W = 640, H = 360;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"><rect x="0" y="0" width="${W}" height="${H}" fill="#141019"/>`;
+    const noteColor = '#f6e9c4';
+    const systems = [{y: 130, s: seed + 1}, {y: 240, s: seed + 2}];
+    systems.forEach((sys, sysI) => {
+      svg += `<text x="24" y="${sys.y + 24}" font-family="Fraunces, serif" font-size="50" fill="${noteColor}">𝄞</text>`;
+      for (let i = 0; i < 5; i++) {
+        svg += `<line x1="68" y1="${sys.y + i*9}" x2="${W-24}" y2="${sys.y + i*9}" stroke="${noteColor}" stroke-width="1.2" stroke-opacity="0.85"/>`;
+      }
+      const mps = 4;
+      for (let m = 0; m < mps; m++) {
+        const mx0 = 68 + ((W - 92) / mps) * m;
+        const mx1 = 68 + ((W - 92) / mps) * (m + 1);
+        if (sysI * mps + m === highlight) {
+          svg += `<rect x="${mx0}" y="${sys.y - 8}" width="${mx1 - mx0}" height="50" fill="#663893" fill-opacity="0.45" rx="3"/>`;
+        }
+        if (m > 0) svg += `<line x1="${mx0}" y1="${sys.y - 4}" x2="${mx0}" y2="${sys.y + 40}" stroke="${noteColor}" stroke-opacity="0.55"/>`;
+      }
+      const n = 12;
+      for (let i = 0; i < n; i++) {
+        const nx = 90 + i * ((W - 120) / n);
+        const ny = sys.y + 3 + ((i * 3 + sys.s) % 5) * 5;
+        svg += `<ellipse cx="${nx}" cy="${ny}" rx="5" ry="4" fill="${noteColor}" transform="rotate(-18 ${nx} ${ny})"/>`;
+        svg += `<line x1="${nx+4}" y1="${ny-1}" x2="${nx+4}" y2="${ny-26}" stroke="${noteColor}" stroke-width="1.5"/>`;
+      }
+    });
+    svg += '</svg>';
+    return svg;
+  }
+
+  let frameCounter = 0;
+  function rebuild() {
+    const panels = [0, 1, 2].map(i => staffPanel(frameCounter + i * 7, (frameCounter + i) % 8));
+    scroller.innerHTML = panels.join('');
+  }
+  rebuild();
+
+  let raf = null;
+  let lastT = performance.now();
+  let elapsed = 0;
+  let running = true;
+  const SCROLL_PERIOD = 4.5;
+
+  function tick(now) {
+    if (!running) { raf = null; return; }
+    const dt = (now - lastT) / 1000;
+    lastT = now;
+    elapsed += dt;
+
+    const cycle = elapsed % SCROLL_PERIOD;
+    const prog = cycle / SCROLL_PERIOD;
+    const offsetPct = -prog * 33.333;
+    scroller.style.transform = `translateX(${offsetPct}%)`;
+
+    if (cycle < dt + 0.01 && elapsed > 0.1) {
+      frameCounter++;
+      rebuild();
+      scroller.style.transform = `translateX(0%)`;
+    }
+
+    const playSec = (Math.floor(elapsed * 1.4) % 228);
+    const mm = String(Math.floor(playSec / 60)).padStart(2, '0');
+    const ss = String(playSec % 60).padStart(2, '0');
+    tc.textContent = `${mm}:${ss} / 03:48`;
+
+    raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+
+  toggle?.addEventListener('click', () => {
+    running = !running;
+    toggle.textContent = running ? '⏸ pause' : '▶ play';
+    if (running) { lastT = performance.now(); raf = requestAnimationFrame(tick); }
+  });
+})();
+</script>
+
+</body></html>

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Weefeen · Score Video Sync</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='overrides.css') }}">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 272 277" aria-hidden="true">
+        <defs>
+          <linearGradient id="wf-g" x1="0" y1="0" x2="272" y2="277" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#381C53"/><stop offset="0.5" stop-color="#552D7B"/><stop offset="1" stop-color="#663893"/>
+          </linearGradient>
+        </defs>
+        <path fill="url(#wf-g)" d="M135.961 0C60.874 0 0 61.997 0 138.46c0 76.473 60.874 138.47 135.961 138.47S271.923 214.933 271.923 138.46C271.923 61.997 211.048 0 135.961 0Zm54.559 206.493c-2.741-9.403-15.266-8.707-30.075-7.885-14.238.791-30.589 1.699-42.386-6.139-18.492-12.273-27.604-59.928-33.8-92.328-3.137-16.41-5.527-28.907-8.008-30.911-.07-.401 25.887 7.225 38.235 66.593.332 1.598.658 3.196.983 4.789 3.732 18.311 7.321 35.917 19.048 45.669 2.827 2.354 7.448 5.115 12.607 5.844-12.384-8.099-18.188-27.049-19.85-45.584-2.223-24.883-4.762-46.87-19.534-61.069-.034-.173-.071-.348-.108-.524l-.021-.099c-.018-.085-.035-.169-.053-.253 25.213 6.739 34.324 33.298 37.874 64.618.351 3.086.609 6.166.862 9.198 1.113 13.298 2.15 25.69 10.653 33.777 2.201-.065 4.622-.137 7.134-.17-7.656-6.854-7.091-20.47-6.493-34.88.366-8.839.745-17.977-.753-26.036-2.753-14.832-8.202-26.407-19.416-33.459.14-.514.811-1.218 1.014-.601 22.242 2.972 36.46 23.863 35.185 48.912-.236 4.578-1.32 9.586-2.439 14.765-2.264 10.468-4.678 21.629-.549 31.326 13.802.347 27.054 2.884 19.89 14.448Z"/>
+      </svg>
+      <span style="font-family:Fraunces,serif;font-size:19px;font-weight:500;color:#381C53;">weefeen</span>
+      <span class="brand-meta">Score · Video Sync</span>
+    </div>
+    <div class="actions">
+      <button class="ghost-link" id="corpus-btn">Scores (<span id="corpus-count">–</span>)</button>
+    </div>
+  </header>
+
+  <div class="stage">
+
+    <!-- LEFT: score + performance details -->
+    <aside class="panel" id="panel">
+      <div class="panel-title">Score &amp; details</div>
+      <div class="panel-sub" id="panel-status">awaiting recording</div>
+
+      <div class="field">
+        <label for="score-select">Score</label>
+        <select id="score-select" class="fld"></select>
+        <div class="field-hint" id="score-hint">Pick the piece this recording plays.</div>
+      </div>
+
+      <div class="field">
+        <label for="f-composer">Composer</label>
+        <input type="text" id="f-composer" class="fld" placeholder="CHOPIN">
+      </div>
+
+      <div class="field">
+        <label for="f-composition">Composition</label>
+        <input type="text" id="f-composition" class="fld" placeholder="Nocturne in E♭ major, Op. 9 No. 2">
+      </div>
+
+      <div class="field">
+        <label>Performer</label>
+        <div class="two-up">
+          <input type="text" id="f-first" class="fld" placeholder="First name">
+          <input type="text" id="f-last" class="fld" placeholder="Last name">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Country &amp; age</label>
+        <div class="two-up">
+          <input type="text" id="f-country" class="fld" placeholder="Country">
+          <input type="text" id="f-age" class="fld" placeholder="Age">
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom:0;">
+        <label for="f-round">Header line</label>
+        <input type="text" id="f-round" class="fld" placeholder="Recital">
+        <div class="field-hint">Drawn at the top of the title panel.</div>
+      </div>
+    </aside>
+
+    <!-- RIGHT: state-driven hero -->
+    <main class="hero">
+
+      <div id="banner-slot"></div>
+
+      <!-- 01 · DROP -->
+      <section data-screen="landing" class="active">
+        <div class="drop-hero" id="drop-zone">
+          <div class="icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </div>
+          <h2>Drop your performance video</h2>
+          <div class="sub">We align the score to your playing and burn it into the video.</div>
+          <div class="formats">.mp4 · .mov · .avi · .mkv · up to 500 mb</div>
+          <button class="btn-primary" type="button" id="browse-btn" style="padding:12px 24px;">Browse files</button>
+          <input type="file" id="file-input" accept="video/*" hidden>
+        </div>
+
+        <div class="corpus-teaser" id="corpus-teaser">
+          <div class="big" id="teaser-count">–</div>
+          <div class="text">
+            <strong>scores ready to sync</strong>
+            <span id="teaser-list">loading…</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 02 · PROCESSING -->
+      <section data-screen="processing">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title"><span class="italic">Working…</span></h1>
+            <div class="piece-meta"><span id="proc-meta"></span></div>
+          </div>
+        </div>
+        <div class="drop-hero" style="border-style:solid;border-color:rgba(36,26,51,0.12);cursor:default;">
+          <div class="processing">
+            <div style="font-family:'Fraunces',serif;font-size:26px;" id="proc-headline">Analyzing your recording</div>
+            <div class="processing-stages" id="proc-stages">
+              <div class="p-stage" data-stage="fingerprint"><span class="bullet"></span>Fingerprint</div>
+              <div class="p-stage" data-stage="load_score"><span class="bullet"></span>Load score</div>
+              <div class="p-stage" data-stage="align"><span class="bullet"></span>Align</div>
+              <div class="p-stage" data-stage="render"><span class="bullet"></span>Render</div>
+            </div>
+            <div id="proc-detail" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:rgba(255,255,255,0.6);letter-spacing:0.14em;text-transform:uppercase;">starting</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 03 · MATCHED / READY -->
+      <section data-screen="matched">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title" id="matched-title">Ready to render</h1>
+            <div class="piece-meta">
+              <span id="matched-file"></span><span>·</span>
+              <span id="matched-dur"></span><span>·</span>
+              <span class="conf" id="matched-score"></span>
+            </div>
+          </div>
+          <button class="change-btn" data-goto="landing">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Change video
+          </button>
+        </div>
+
+        <div class="thumb-wrap" id="thumb">
+          <div class="thumb-tag">Layout preview</div>
+          <div class="thumb-tag-right">16:9 · exports 1920×1080</div>
+          <div class="layout-preview">
+            <div class="lp-panel"><span id="lp-round">Recital</span><b id="lp-name">Performer</b><i id="lp-composer">Composer</i><i id="lp-composition">Composition</i></div>
+            <div class="lp-video">your video</div>
+            <div class="lp-band">score band · synced to your playing</div>
+          </div>
+        </div>
+
+        <div class="download-row">
+          <div class="delivery-eyebrow">Rendering happens on this machine — nothing is uploaded anywhere.</div>
+          <div class="generate-row">
+            <button class="btn-primary" id="generate-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Generate synced video
+            </button>
+            <div class="hint-line" id="generate-hint">Takes roughly as long as the recording itself.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 04 · DONE -->
+      <section data-screen="done">
+        <div class="hero-head">
+          <div>
+            <h1 class="piece-title">Done — <span class="italic">your video is ready.</span></h1>
+            <div class="piece-meta"><span id="done-meta"></span></div>
+          </div>
+          <button class="change-btn" data-goto="landing">Start another</button>
+        </div>
+        <div class="sent">
+          <div class="check">✓</div>
+          <div style="flex:1;">
+            <h3>Score synced and burned in</h3>
+            <p>Saved as <code id="done-name"></code></p>
+          </div>
+          <a class="btn-primary" id="download-btn" href="#" style="padding:14px 28px;text-decoration:none;">Download .mp4</a>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer class="site-foot">
+    <span>Weefeen · Score Video Sync</span>
+    <span id="foot-env">local</span>
+  </footer>
+</div>
+
+<div class="corpus-modal" id="corpus-modal" hidden>
+  <div class="corpus-card">
+    <div class="corpus-head">
+      <h2 id="corpus-title">Scores ready to sync</h2>
+      <button class="corpus-close" id="corpus-close">✕</button>
+    </div>
+    <div class="corpus-body" id="corpus-body"></div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

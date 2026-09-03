@@ -1,0 +1,16 @@
+# VideoSync_webapp — video creation from music_line_extractor packages.
+# No dependency on music_line_extractor or VideoScoreSync; the interface
+# between them is a folder layout, not an import.
+
+Flask>=3.0
+python-dotenv>=1.0
+Pillow>=10.0            # band raster handling, recolouring, tiling
+
+# Vector bands. Digital packages ship .svg, which we rasterise at exactly
+# the output resolution instead of resampling a fixed-size PNG. Optional:
+# without it, .png/.jpg bands still render.
+cairosvg>=2.7
+
+# ffmpeg and ffprobe are external binaries, not Python packages.
+# Windows: https://www.gyan.dev/ffmpeg/builds/
+# Debian/Ubuntu: sudo apt install ffmpeg
