@@ -1,0 +1,135 @@
+/* Additions to the ported design system.
+ *
+ * app.css is generated from the design export and gets overwritten by
+ * tools/port_styles.py, so anything hand-written lives here. These are the
+ * few elements the app needs that the mockup didn't have: form inputs, the
+ * layout preview, and the score picker.
+ */
+
+.wordmark {
+  font-family: "Fraunces", serif;
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--brand-1);
+}
+
+/* ---- form controls ---- */
+.fld {
+  font: inherit;
+  font-size: 14px;
+  width: 100%;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid rgba(36, 26, 51, 0.14);
+  border-radius: 8px;
+  padding: 9px 11px;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.fld + .fld { margin-top: 6px; }
+.fld:focus { border-color: var(--brand-3); background: var(--surface); }
+select.fld { cursor: pointer; }
+
+.field-hint {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-top: 6px;
+  line-height: 1.35;
+}
+
+.two-up {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.toggle-group button[disabled] { cursor: not-allowed; }
+
+/* ---- layout preview ---- */
+/* A schematic of the chosen layout, not a render: enough to see where the
+   band, video and panel will sit before committing minutes to encoding. */
+.layout-preview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(255, 255, 255, 0.03) 0 8px, transparent 8px 16px), #141019;
+}
+.layout-preview[data-panel="on"] .lp-panel { display: block; }
+
+.lp-panel {
+  display: none;
+  width: 30%;
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.04);
+}
+.lp-stack {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.lp-video {
+  flex: 1;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+/* The band mirrors the real thing: its paper colour, its note colour as
+   ruled lines, and its transparency. */
+.lp-band {
+  height: 22%;
+  min-height: 26px;
+  border-radius: 4px;
+  background: var(--band-bg, #ffffff);
+  opacity: var(--band-alpha, 1);
+  position: relative;
+  overflow: hidden;
+}
+.lp-band::after {
+  content: '';
+  position: absolute;
+  left: 8%; right: 8%; top: 28%; bottom: 28%;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--band-fg, #1c1622) 0 1px, transparent 1px 5px);
+  opacity: 0.75;
+}
+
+/* NOTE: .corpus-teaser, .drop-bar and .demo-* are deliberately NOT redefined
+   here. The design export already styles them, and overriding them with
+   plainer surfaces is what made this page look worse than the mockup. */
+
+/* ---- demo hero ---- */
+/* The scrolling staff behind the headline. The mockup animated three copies
+   of a stave SVG; the same trick, driven by CSS rather than a timer. */
+.demo-staff-scroller { animation: staff-drift 42s linear infinite; }
+.demo-staff-scroller.paused { animation-play-state: paused; }
+@keyframes staff-drift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-33.333%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-staff-scroller { animation: none; }
+  .demo-video .badge i { animation: none; }
+}
+
+/* The panel is long once every control is shown; let it scroll rather than
+   pushing the page down. */
+@media (min-height: 700px) {
+  .panel { max-height: calc(100vh - 140px); overflow-y: auto; }
+}

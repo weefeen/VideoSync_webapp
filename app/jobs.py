@@ -1,9 +1,11 @@
-"""In-memory job registry with a background worker thread per render.
+"""In-memory job registry with a worker thread per render.
 
-Deliberately simple: one process, no broker, no database. A render is a
-long ffmpeg run, so it goes on a thread and the page follows along over
-Server-Sent Events. State is lost on restart, which is fine for local use
-and is the thing to replace first if this ever runs for real users.
+Deliberately simple: one process, no broker, no database. A job aligns a
+recording and then encodes it, which takes minutes, so it runs on a thread
+and the page follows along over Server-Sent Events.
+
+State is lost on restart. That is fine for a local tool and is the first
+thing to replace if this ever serves real users.
 """
 
 from __future__ import annotations
@@ -18,9 +20,7 @@ import uuid
 from typing import Any, Iterator
 
 from . import pipeline
-
-# How long a finished job's files stick around before cleanup can reap them.
-RETENTION_SECONDS = 60 * 60 * 6
+from . import render as rnd
 
 
 @dataclasses.dataclass
@@ -28,13 +28,17 @@ class Job:
     id: str
     original_name: str
     upload_path: pathlib.Path
-    score_id: str | None = None
+    score: str | None = None
+    mode: str | None = None
     state: str = "uploaded"          # uploaded | running | done | error
     error: str | None = None
     result: pathlib.Path | None = None
+    detail: str = ""
     duration: float | None = None
     size_bytes: int | None = None
     created: float = dataclasses.field(default_factory=time.time)
+    started: float | None = None
+    finished: float | None = None
     stages: dict[str, str] = dataclasses.field(
         default_factory=lambda: {s: "pending" for s in pipeline.STAGES})
 
@@ -44,10 +48,17 @@ class Job:
             "name": self.original_name,
             "state": self.state,
             "error": self.error,
-            "score_id": self.score_id,
+            "detail": self.detail,
+            "score": self.score,
+            "mode": self.mode,
+            "mode_label": pipeline.MODE_LABELS.get(self.mode or "", ""),
             "duration": self.duration,
             "size_bytes": self.size_bytes,
+            "elapsed": round((self.finished or time.time()) - self.started, 1)
+                       if self.started else None,
             "stages": dict(self.stages),
+            "output_bytes": self.result.stat().st_size
+                            if self.result and self.result.is_file() else None,
             "download": f"/api/jobs/{self.id}/download" if self.state == "done" else None,
         }
 
@@ -69,6 +80,10 @@ class Registry:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def all(self) -> list[Job]:
+        with self._lock:
+            return sorted(self._jobs.values(), key=lambda j: -j.created)
+
     # -- events ----------------------------------------------------------
     def subscribe(self, job_id: str) -> queue.Queue:
         q: queue.Queue = queue.Queue()
@@ -88,42 +103,61 @@ class Registry:
             q.put(payload)
 
     # -- running ---------------------------------------------------------
-    def start(self, job: Job, score_id: str, meta: dict) -> None:
-        """Kick off the render on a background thread."""
-        job.score_id = str(score_id)
+    def start(self, job: Job, score: str, mode: str | None,
+              style: rnd.Style, meta: dict) -> None:
+        """Kick off alignment and rendering on a background thread."""
+        job.score = score
+        job.mode = mode
         job.state = "running"
-        threading.Thread(target=self._run, args=(job, meta),
-                         name=f"render-{job.id}", daemon=True).start()
+        job.started = time.time()
+        threading.Thread(target=self._run, args=(job, style, meta),
+                         name=f"job-{job.id}", daemon=True).start()
 
-    def _run(self, job: Job, meta: dict) -> None:
-        def on_progress(stage: str, status: str, detail: str = "") -> None:
-            job.stages[stage] = status
+    def _run(self, job: Job, style: rnd.Style, meta: dict) -> None:
+        def on_progress(stage: str, detail: str = "") -> None:
+            # Stages arrive in order; mark everything before this one done.
+            if stage in job.stages:
+                for name in pipeline.STAGES:
+                    if name == stage:
+                        break
+                    if job.stages[name] == "pending":
+                        job.stages[name] = "done"
+                job.stages[stage] = "active"
+            job.detail = detail
             self._emit(job.id, {"type": "progress", "stage": stage,
-                                "status": status, "detail": detail,
-                                "job": job.public()})
+                                "detail": detail, "job": job.public()})
 
         try:
-            task = pipeline.build_task(
-                job_id=f"job_r1_c{job.id[:6]}_s{job.score_id}",
-                score_id=job.score_id,
-                meta=meta,
-                ext=job.upload_path.suffix or ".mp4",
-            )
-            paths = pipeline.prepare_job(task, job.upload_path)
-            job.result = pipeline.run(task, paths, on_progress)
+            package = pipeline.find_package(job.score or "")
+            if package is None:
+                raise pipeline.PipelineError(f"No score package named {job.score!r}.")
+
+            result = pipeline.run(package, job.upload_path, job.id,
+                                  style, job.mode, meta, on_progress)
+            job.result = result.output
+            job.mode = result.mode
+            for name in job.stages:
+                job.stages[name] = "done"
             job.state = "done"
+            job.finished = time.time()
             self._emit(job.id, {"type": "done", "job": job.public()})
+
         except pipeline.PipelineError as exc:
-            job.state, job.error = "error", str(exc)
-            self._emit(job.id, {"type": "error", "job": job.public()})
-        except Exception as exc:  # noqa: BLE001 - never kill the thread silently
-            job.state = "error"
-            job.error = f"Unexpected failure: {exc}"
+            self._fail(job, str(exc))
+        except Exception as exc:  # noqa: BLE001 - never die silently
             traceback.print_exc()
-            self._emit(job.id, {"type": "error", "job": job.public()})
+            self._fail(job, f"Unexpected failure: {exc}")
+
+    def _fail(self, job: Job, message: str) -> None:
+        job.state, job.error = "error", message
+        job.finished = time.time()
+        for name, value in job.stages.items():
+            if value == "active":
+                job.stages[name] = "failed"
+        self._emit(job.id, {"type": "error", "job": job.public()})
 
     def stream(self, job_id: str) -> Iterator[dict]:
-        """Yield events for a job until it finishes. Replays current state first."""
+        """Yield events for a job until it finishes. Replays state first."""
         job = self.get(job_id)
         if job is None:
             return
@@ -136,7 +170,7 @@ class Registry:
                 try:
                     event = q.get(timeout=15)
                 except queue.Empty:
-                    yield {"type": "ping"}          # keep the connection warm
+                    yield {"type": "ping"}        # keep the connection warm
                     continue
                 yield event
                 if event["type"] in ("done", "error"):

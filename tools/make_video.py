@@ -37,11 +37,31 @@ def main() -> int:
     ap.add_argument("--job", help="job id (default: random)")
     ap.add_argument("--keep", action="store_true",
                     help="keep the job workspace after a failure")
-    ap.add_argument("--aspect", default="16/9", choices=sorted(rnd.ASPECTS))
-    ap.add_argument("--position", default="bottom", choices=["top", "bottom"])
-    ap.add_argument("--band-width", type=float, default=1.0)
-    ap.add_argument("--band-bg", default="#ffffff")
-    ap.add_argument("--band-fg", default="#1c1622")
+    layout = ap.add_argument_group("layout")
+    layout.add_argument("--aspect", default="16/9", choices=sorted(rnd.ASPECTS))
+    layout.add_argument("--position", default="bottom", choices=[rnd.TOP, rnd.BOTTOM],
+                        help="where the score band sits")
+    layout.add_argument("--background", default=rnd.NONE, choices=rnd.BACKGROUNDS,
+                        help="none = plain colour; static = an image; "
+                             "dynamic = a looping video")
+    layout.add_argument("--background-path", help="image or video for the backdrop")
+    layout.add_argument("--panel", action="store_true",
+                        help="reserve a left column for the title text")
+    layout.add_argument("--panel-width", type=float, default=0.301,
+                        help="panel width as a fraction of the canvas (default 0.301)")
+    layout.add_argument("--canvas-bg", default="#141019")
+    layout.add_argument("--band-bg", default="#ffffff", help="the band's paper colour")
+    layout.add_argument("--band-fg", default="#1c1622", help="the note colour")
+    layout.add_argument("--band-bg-opacity", type=float, default=1.0,
+                        help="paper transparency: 0 = notes float over the "
+                             "backdrop, 1 = solid (default 1.0)")
+    layout.add_argument("--band-opacity", type=float, default=1.0,
+                        help="fades the whole band, notes included (default 1.0)")
+
+    info = ap.add_argument_group("panel text (only drawn with --panel)")
+    for field in ("round-name", "subtitle", "first-name", "last-name",
+                  "country", "age", "composer", "composition"):
+        info.add_argument(f"--{field}", default="")
     args = ap.parse_args()
 
     settings.ensure_dirs()
@@ -96,18 +116,28 @@ def main() -> int:
         video = clip
 
     style = rnd.Style(aspect=args.aspect, band_position=args.position,
-                      band_width=args.band_width,
-                      band_bg=args.band_bg, band_fg=args.band_fg)
+                      background=args.background,
+                      background_path=args.background_path,
+                      panel=args.panel, panel_width=args.panel_width,
+                      canvas_bg=args.canvas_bg,
+                      band_bg=args.band_bg, band_fg=args.band_fg,
+                      band_bg_opacity=args.band_bg_opacity,
+                      band_opacity=args.band_opacity)
+    meta = {k: getattr(args, k) for k in
+            ("round_name", "subtitle", "first_name", "last_name",
+             "country", "age", "composer", "composition")}
 
     print(f"score : {p.name}")
     print(f"bands : {len(p.bands)} "
           f"({sum(1 for b in p.bands if b.is_vector)} svg)")
     print(f"video : {video.name}")
+    print(f"style : {args.aspect} · band {args.position} · bg {args.background}"
+          f"{' · panel' if args.panel else ''}")
     print(f"job   : {job_dir}")
 
     t0 = time.time()
     try:
-        result = pipeline.run(p, video, job_id, style, args.mode,
+        result = pipeline.run(p, video, job_id, style, args.mode, meta,
                               on_progress=lambda s, d="": print(
                                   f"  [{s:8}] {d}", flush=True))
     except pipeline.PipelineError as exc:

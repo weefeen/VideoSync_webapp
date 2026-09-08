@@ -48,6 +48,38 @@ class ScorePackage:
     manifest: dict
     measures_path: pathlib.Path
     chroma_path: pathlib.Path | None = None   # reference chroma; unused here
+    # Humdrum reference records from the score source: COM, OTL, OPS, AGN...
+    metadata: dict[str, str] = dataclasses.field(default_factory=dict)
+
+    @property
+    def composer(self) -> str:
+        """'Chopin, Fryderyk' -> 'Fryderyk Chopin'."""
+        raw = self.metadata.get("COM", "").strip()
+        if "," in raw:
+            family, given = (p.strip() for p in raw.split(",", 1))
+            return f"{given} {family}".strip()
+        return raw
+
+    @property
+    def surname(self) -> str:
+        """The family name alone, for matching and filtering."""
+        raw = self.metadata.get("COM", "").strip()
+        return (raw.split(",")[0] if "," in raw else raw.split()[-1] if raw
+                else "").strip()
+
+    @property
+    def title(self) -> str:
+        return self.metadata.get("OTL", "").strip()
+
+    @property
+    def opus(self) -> str:
+        return self.metadata.get("OPS", "").strip()
+
+    @property
+    def display_name(self) -> str:
+        """Something a musician would recognise, not the folder name."""
+        parts = [p for p in (self.title, self.opus) if p]
+        return ", ".join(parts) if parts else self.name
 
     # -- manifest conveniences ------------------------------------------
     @property
@@ -177,11 +209,8 @@ def _read_measures(path: pathlib.Path) -> list[tuple[int, float]]:
 
 def can_rasterize_svg() -> bool:
     """Whether .svg bands can actually be turned into pixels here."""
-    try:
-        import cairosvg  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    from . import svg
+    return svg.available()
 
 
 def _read_bands(lines_dir: pathlib.Path) -> list[Band]:
@@ -244,6 +273,34 @@ _MEASURES_AT = ("reference/measures.data", "performance/measures.data",
                 "measures.data", "export/measures.data")
 _MANIFEST_AT = ("score/export.json", "export.json", "export/export.json")
 _CHROMA_AT = ("score/chroma.npy", "chroma.npy", "export/chroma.npy")
+_SOURCE_AT = ("score/source.krn", "source.krn", "score/source.musicxml")
+
+# Humdrum reference records worth surfacing. COM is the composer, OTL the
+# title, OPS the opus number, AGN the genre.
+_WANTED_RECORDS = ("COM", "OTL", "OPS", "ONM", "AGN", "OTP", "PDT")
+
+
+def _read_score_metadata(source: pathlib.Path) -> dict[str, str]:
+    """Pull the reference records from a score source's header.
+
+    Humdrum puts these as `!!!KEY: value` lines. Only the header is scanned —
+    the notation itself is of no interest here, and these files are large.
+    """
+    found: dict[str, str] = {}
+    try:
+        with source.open("r", encoding="utf-8", errors="replace") as fh:
+            for n, line in enumerate(fh):
+                if n > 400:
+                    break
+                if not line.startswith("!!!"):
+                    continue
+                key, _, value = line[3:].partition(":")
+                key = key.strip().upper()
+                if key in _WANTED_RECORDS and value.strip():
+                    found.setdefault(key, value.strip())
+    except OSError:
+        pass
+    return found
 
 
 def _first(root: pathlib.Path, candidates: tuple[str, ...],
@@ -281,10 +338,12 @@ def load(root: str | pathlib.Path) -> ScorePackage:
         except json.JSONDecodeError as exc:
             raise PackageError(f"{manifest_path.name} is not valid JSON: {exc}") from exc
 
+    source = _first(root, _SOURCE_AT)
     return ScorePackage(root=root, bands=_read_bands(lines),
                         timeline=_read_measures(measures) if measures else [],
                         manifest=manifest, measures_path=measures,
-                        chroma_path=_first(root, _CHROMA_AT))
+                        chroma_path=_first(root, _CHROMA_AT),
+                        metadata=_read_score_metadata(source) if source else {})
 
 
 def is_package(path: pathlib.Path) -> bool:

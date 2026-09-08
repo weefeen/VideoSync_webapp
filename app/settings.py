@@ -77,11 +77,79 @@ class Settings:
     # imported — so its repo is untouched and its dependencies stay its own.
     mle_root: pathlib.Path | None = None
     mle_python: str = ""
+    # Backdrop artwork offered by the UI for background=static / dynamic.
+    background_static: pathlib.Path | None = None
+    background_dynamic: pathlib.Path | None = None
+    # Restrict the library to one composer. Matched against the score's own
+    # Humdrum COM record, so it is based on what the score says rather than
+    # on folder naming. Empty means no restriction.
+    composer_filter: str = ""
+    # Recognition. music_finrgerprint names the piece from the performance
+    # audio. Like music_line_extractor it runs as a subprocess with its own
+    # interpreter — and here that is not a preference: identifying needs
+    # torch and CUDA, which this app must not carry.
+    id_root: pathlib.Path | None = None
+    id_python: str = ""
+    id_index_dir: pathlib.Path | None = None
+    pair_list: pathlib.Path | None = None
+    # Below this the recogniser plans a single window, and a single window
+    # always agrees with itself: consensus comes out at 1.0 and the open-set
+    # gate stops meaning anything. Refuse such uploads rather than guess.
+    identify_min_seconds: float = 20.0
+    identify_timeout: float = 600.0
+
+    def allows(self, surname: str) -> bool:
+        """Whether a score by this composer belongs in the library."""
+        if not self.composer_filter:
+            return True
+        return self.composer_filter.strip().lower() in (surname or "").lower()
+
+    def background_for(self, kind: str) -> str | None:
+        """The configured artwork for a background kind, if it exists."""
+        path = {"static": self.background_static,
+                "dynamic": self.background_dynamic}.get(kind)
+        return str(path) if path and path.is_file() else None
 
     @property
     def can_autosync(self) -> bool:
         return bool(self.mle_root and (self.mle_root / "services").is_dir()
                     and self.mle_python)
+
+    @property
+    def pitch_index(self) -> pathlib.Path | None:
+        d = self.id_index_dir
+        return (d / "amt_pitch_index.pkl") if d else None
+
+    @property
+    def chord_index(self) -> pathlib.Path | None:
+        d = self.id_index_dir
+        return (d / "amt_chord_index.pkl") if d else None
+
+    @property
+    def can_identify(self) -> bool:
+        """Whether this install can name a piece from its audio."""
+        return bool(
+            self.id_root and (self.id_root / "src" / "weefeen_id").is_dir()
+            and self.id_python
+            and self.pitch_index and self.pitch_index.is_file()
+            and self.chord_index and self.chord_index.is_file()
+        )
+
+    def why_cannot_identify(self) -> str:
+        """A diagnostic for the operator; empty when recognition works."""
+        if not self.id_root:
+            return "ID_ROOT is not set."
+        if not (self.id_root / "src" / "weefeen_id").is_dir():
+            return f"No weefeen_id package under {self.id_root / 'src'}."
+        if not self.id_python:
+            return "ID_PYTHON is not set."
+        for label, path in (("pitch", self.pitch_index), ("chord", self.chord_index)):
+            if not path:
+                return "ID_INDEX_DIR is not set."
+            if not path.is_file():
+                return (f"No {label} index at {path}. Build it in "
+                        f"music_finrgerprint, or point ID_INDEX_DIR elsewhere.")
+        return ""
 
     @property
     def upload_dir(self) -> pathlib.Path:
@@ -132,7 +200,29 @@ def load() -> Settings:
         work_dir=pathlib.Path(work) if work else REPO_ROOT / "var",
         mle_root=pathlib.Path(mle) if mle else None,
         mle_python=os.getenv("MLE_PYTHON", "").strip().strip('"') or "python",
+        background_static=_one("BACKGROUND_STATIC"),
+        background_dynamic=_one("BACKGROUND_DYNAMIC"),
+        composer_filter=os.getenv("COMPOSER_FILTER", "").strip(),
+        id_root=_one("ID_ROOT"),
+        id_python=os.getenv("ID_PYTHON", "").strip().strip('"') or "python",
+        id_index_dir=_one("ID_INDEX_DIR"),
+        pair_list=_one("PAIR_LIST"),
+        identify_min_seconds=_number("IDENTIFY_MIN_SECONDS", 20.0),
+        identify_timeout=_number("IDENTIFY_TIMEOUT", 600.0),
     )
+
+
+def _number(var: str, default: float) -> float:
+    raw = os.getenv(var, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
+
+
+def _one(var: str) -> pathlib.Path | None:
+    raw = os.getenv(var, "").strip().strip('"')
+    return pathlib.Path(raw) if raw else None
 
 
 settings = load()

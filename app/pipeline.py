@@ -99,6 +99,7 @@ def job_folder(job_id: str) -> pathlib.Path:
 
 def run(p: pkg.ScorePackage, video: pathlib.Path, job_id: str,
         style: rnd.Style | None = None, mode: str | None = None,
+        meta: dict | None = None,
         on_progress: ProgressFn = _noop) -> JobResult:
     """Run one job to completion. Returns where the video landed."""
     if not video.is_file():
@@ -129,7 +130,7 @@ def run(p: pkg.ScorePackage, video: pathlib.Path, job_id: str,
 
     output = job_dir / f"{_safe(p.name)}_synced.mp4"
     try:
-        rnd.render(timed, video, output, style, on_progress)
+        rnd.render(timed, video, output, style, meta or {}, on_progress)
     except rnd.RenderError as exc:
         raise PipelineError(str(exc)) from exc
 
@@ -144,26 +145,37 @@ def _safe(name: str) -> str:
 
 
 def find_package(name: str) -> pkg.ScorePackage | None:
-    """Locate a usable package by exact name, or unique fragment."""
+    """Locate a package in the library by exact name, or unique fragment.
+
+    Searches only what usable_packages() admits, so a filtered-out composer
+    cannot be reached by naming it directly.
+    """
     matches: list[pkg.ScorePackage] = []
-    for root in settings.score_roots:
-        for _, p, _ in pkg.inspect(root.path):
-            if p is None:
-                continue
-            if p.name == name:
-                return p
-            if name.lower() in p.name.lower():
-                matches.append(p)
+    for p in usable_packages():
+        if p.name == name:
+            return p
+        needle = name.lower()
+        if needle in p.name.lower() or needle in p.display_name.lower():
+            matches.append(p)
     return matches[0] if matches else None
 
 
 def usable_packages() -> list[pkg.ScorePackage]:
-    """Every package that can be rendered, deduplicated across roots."""
+    """Every renderable package the library admits, deduplicated across roots.
+
+    Honours COMPOSER_FILTER, which is matched against each score's own
+    Humdrum COM record rather than its folder name. A package whose source
+    declares no composer is admitted — better to show an unlabelled score
+    than to hide one because its metadata is thin.
+    """
     seen: dict[str, pkg.ScorePackage] = {}
     for root in settings.score_roots:
         for _, p, _ in pkg.inspect(root.path):
-            if p is not None:
-                seen.setdefault(p.name, p)
+            if p is None:
+                continue
+            if p.surname and not settings.allows(p.surname):
+                continue
+            seen.setdefault(p.name, p)
     return list(seen.values())
 
 
