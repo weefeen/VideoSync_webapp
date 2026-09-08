@@ -22,6 +22,7 @@ these roots only say where to look.
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 import pathlib
 import shutil
@@ -128,27 +129,34 @@ class Settings:
     @property
     def can_identify(self) -> bool:
         """Whether this install can name a piece from its audio."""
-        return bool(
-            self.id_root and (self.id_root / "src" / "weefeen_id").is_dir()
-            and self.id_python
-            and self.pitch_index and self.pitch_index.is_file()
-            and self.chord_index and self.chord_index.is_file()
-        )
+        return not self.why_cannot_identify()
 
     def why_cannot_identify(self) -> str:
-        """A diagnostic for the operator; empty when recognition works."""
+        """A diagnostic for the operator; empty when recognition works.
+
+        Every check here is one that would otherwise surface a minute later
+        as a stack trace from another process.
+        """
         if not self.id_root:
             return "ID_ROOT is not set."
         if not (self.id_root / "src" / "weefeen_id").is_dir():
             return f"No weefeen_id package under {self.id_root / 'src'}."
         if not self.id_python:
-            return "ID_PYTHON is not set."
+            return ("ID_PYTHON is not set. Recognition needs its own "
+                    "interpreter — the one with torch, which is not this one.")
+        if not (pathlib.Path(self.id_python).is_file()
+                or shutil.which(self.id_python)):
+            return f"No interpreter at {self.id_python!r}."
         for label, path in (("pitch", self.pitch_index), ("chord", self.chord_index)):
             if not path:
                 return "ID_INDEX_DIR is not set."
             if not path.is_file():
                 return (f"No {label} index at {path}. Build it in "
                         f"music_finrgerprint, or point ID_INDEX_DIR elsewhere.")
+        # Configured but missing is worse than absent: without it every
+        # recognition would resolve to no score at all.
+        if self.pair_list and not self.pair_list.is_file():
+            return f"PAIR_LIST is set but there is no file at {self.pair_list}."
         return ""
 
     @property
@@ -204,7 +212,10 @@ def load() -> Settings:
         background_dynamic=_one("BACKGROUND_DYNAMIC"),
         composer_filter=os.getenv("COMPOSER_FILTER", "").strip(),
         id_root=_one("ID_ROOT"),
-        id_python=os.getenv("ID_PYTHON", "").strip().strip('"') or "python",
+        # No fallback to "python" on purpose: recognition runs in a *different*
+        # interpreter from this one, so guessing the current one would only
+        # turn a configuration mistake into a slow, obscure import error.
+        id_python=os.getenv("ID_PYTHON", "").strip().strip('"'),
         id_index_dir=_one("ID_INDEX_DIR"),
         pair_list=_one("PAIR_LIST"),
         identify_min_seconds=_number("IDENTIFY_MIN_SECONDS", 20.0),
@@ -213,11 +224,20 @@ def load() -> Settings:
 
 
 def _number(var: str, default: float) -> float:
+    """A positive, finite number from the environment, or the default.
+
+    Anything else — a typo, a negative, an infinity — falls back rather
+    than travelling on to fail somewhere less obvious, such as a timeout
+    of NaN reaching subprocess.run.
+    """
     raw = os.getenv(var, "").strip()
+    if not raw:
+        return default
     try:
-        return float(raw) if raw else default
+        value = float(raw)
     except ValueError:
         return default
+    return value if math.isfinite(value) and value > 0 else default
 
 
 def _one(var: str) -> pathlib.Path | None:

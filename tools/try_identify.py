@@ -29,7 +29,6 @@ from app.settings import settings              # noqa: E402
 
 OUTCOME_NOTE = {
     ident.MATCHED: "say it and move on",
-    ident.AMBIGUOUS: "ask 'did you mean'",
     ident.UNRECOGNISED: "let them pick from the library",
 }
 
@@ -38,14 +37,18 @@ def report(media: pathlib.Path, expect_refused: bool) -> bool:
     print("\n" + "-" * 74)
     print(f"  {media.name}")
 
-    duration = ident.duration_of(media)
-    print(f"  {duration:.0f} seconds" if duration else "  length unknown")
+    duration, has_audio = ident.probe_media(media)
+    print(f"  {duration:.0f} seconds" if duration else "  length unknown",
+          "" if has_audio else "· no audio track")
 
     try:
         result = ident.identify(media, duration)
-    except ident.TooShort as exc:
+    except (ident.TooShort, ident.NoAudio) as exc:
         print(f"  REFUSED AT THE DOOR: {exc}")
         return expect_refused
+    except ident.IdentifyUnavailable as exc:
+        print(f"  MISCONFIGURED: {exc}")
+        return False
     except ident.IdentifyError as exc:
         print(f"  FAILED: {exc}")
         return False
