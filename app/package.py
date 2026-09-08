@@ -276,8 +276,12 @@ _CHROMA_AT = ("score/chroma.npy", "chroma.npy", "export/chroma.npy")
 _SOURCE_AT = ("score/source.krn", "source.krn", "score/source.musicxml")
 
 # Humdrum reference records worth surfacing. COM is the composer, OTL the
-# title, OPS the opus number, AGN the genre.
-_WANTED_RECORDS = ("COM", "OTL", "OPS", "ONM", "AGN", "OTP", "PDT")
+# title, OPS the opus number, AGN the genre. PPR and PPP name the first
+# edition's publisher and city: the scores are CC BY 4.0 from the Fryderyk
+# Chopin Institute and the licence requires that attribution, so it is read
+# from the score itself rather than typed in anywhere.
+_WANTED_RECORDS = ("COM", "OTL", "OPS", "ONM", "AGN", "OTP", "PDT",
+                   "PPR", "PPP")
 
 
 def _read_score_metadata(source: pathlib.Path) -> dict[str, str]:

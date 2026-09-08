@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import pathlib
+import threading
 
 from flask import (Blueprint, Flask, current_app, jsonify, render_template,
                    request, send_file, Response)
 from werkzeug.utils import secure_filename
 
 from . import autosync, jobs, package as pkg, panel, pipeline
+from . import identify as ident
+from . import library
 from . import render as rnd
+from . import sync as syncing
 from .settings import settings
 
 bp = Blueprint("main", __name__)
@@ -31,6 +35,147 @@ def _uploads() -> pathlib.Path:
 @bp.get("/")
 def index():
     return render_template("index.html")
+
+
+@bp.get("/app")
+def studio():
+    """The designed interface, served as-is from its own folder.
+
+    The design package ships as plain files with relative links, so it is
+    served rather than templated: the markup and stylesheet stay byte for
+    byte what was handed over, and everything that talks to this server
+    lives in one added script beside them.
+    """
+    return send_file(pathlib.Path(current_app.static_folder) / "svs" / "index.html")
+
+
+@bp.get("/Credits.html")
+def credits():
+    """The score-attribution page the footer links to (CC BY 4.0)."""
+    return send_file(pathlib.Path(current_app.static_folder) / "svs" / "Credits.html")
+
+
+# --------------------------------------------------------------------------
+# the library, in the shape the interface wants
+# --------------------------------------------------------------------------
+@bp.get("/api/library")
+def api_library():
+    """Every score we could actually render, for the manual picker.
+
+    Keyed by the package's folder name, which is also what recognition
+    resolves to, so the two lists refer to the same things by the same id.
+    """
+    works = []
+    for p in library.packages():
+        works.append({
+            "id": p.name,
+            "t": p.title or p.display_name,
+            "op": p.opus,
+            "bars": p.last_measure,
+            "ref": True,
+            # Backdrop artwork is configured per install, not per score.
+            "art": {"image": bool(settings.background_for("static")),
+                    "video": bool(settings.background_for("dynamic"))},
+            # Read from the score's own Humdrum header, because CC BY 4.0
+            # requires the first edition be credited.
+            "src": "nifc-first-editions",
+            "ppr": p.metadata.get("PPR", ""),
+            "ppp": p.metadata.get("PPP", ""),
+        })
+    return jsonify({"works": works,
+                    "can_identify": settings.can_identify,
+                    "can_sync": settings.can_sync})
+
+
+# --------------------------------------------------------------------------
+# recognition
+# --------------------------------------------------------------------------
+# Identification takes the better part of a minute, so it runs on a thread
+# and the page asks how it went. Kept beside the route rather than in the
+# job record while this is the only thing that needs it.
+_identifications: dict[str, dict] = {}
+_identify_lock = threading.Lock()
+
+# Below this share of the winner's score a candidate is noise: measured
+# runner-ups at a hundredth of the winner reordered between identical runs,
+# so offering them as "did you mean" would suggest a different wrong piece
+# each time. One real alternative is worth more than three random ones.
+ALTERNATIVE_FLOOR = 0.02
+
+
+def _candidates(result) -> list[dict]:
+    """Recognition's answer in the shape the interface draws."""
+    resolved = [library.resolve(c) for c in result.candidates]
+    if not resolved:
+        return []
+    total = sum(max(c["score"], 0.0) for c in resolved) or 1.0
+    best = resolved[0]["score"] or 1.0
+    out = []
+    for c in resolved:
+        if c is not resolved[0] and c["score"] < best * ALTERNATIVE_FLOOR:
+            continue
+        out.append({**c, "confidence": round(100 * c["score"] / total)})
+    return out
+
+
+def _identify_now(job: jobs.Job) -> dict:
+    try:
+        result = ident.identify(job.upload_path, job.duration)
+    except ident.IdentifyUnavailable as exc:
+        return {"state": "error", "recognised": False, "error": str(exc),
+                "configured": False}
+    except ident.IdentifyError as exc:
+        return {"state": "error", "recognised": False, "error": str(exc)}
+
+    candidates = _candidates(result)
+    renderable = [c for c in candidates if c["renderable"]]
+    if result.outcome != ident.MATCHED:
+        state = "unrecognised"
+    elif renderable:
+        state = "matched"
+    else:
+        # Named it, but the score is not in this library yet. A different
+        # answer from "we could not place it", and with one package
+        # installed it is the likely one.
+        state = "unavailable"
+    return {"state": "done", "recognised": result.outcome == ident.MATCHED,
+            "outcome": state, "candidates": candidates,
+            "consensus": result.consensus, "windows": result.n_windows,
+            "timing": result.timing}
+
+
+@bp.post("/api/jobs/<job_id>/identify")
+def api_identify(job_id: str):
+    """Start listening to an upload. Returns at once; ask again for the answer."""
+    job = jobs.registry.get(job_id)
+    if job is None:
+        return jsonify({"error": "No such job."}), 404
+    if not settings.can_identify:
+        return jsonify({"error": settings.why_cannot_identify()}), 503
+
+    with _identify_lock:
+        current = _identifications.get(job_id)
+        if current and current.get("state") in ("running", "done"):
+            return jsonify(current), 202
+        _identifications[job_id] = {"state": "running"}
+
+    def work() -> None:
+        outcome = _identify_now(job)
+        with _identify_lock:
+            _identifications[job_id] = outcome
+
+    threading.Thread(target=work, name=f"identify-{job_id}", daemon=True).start()
+    return jsonify({"state": "running"}), 202
+
+
+@bp.get("/api/jobs/<job_id>/identification")
+def api_identification(job_id: str):
+    """How the listening went, or that it is still going."""
+    with _identify_lock:
+        current = _identifications.get(job_id)
+    if current is None:
+        return jsonify({"state": "idle"})
+    return jsonify(current)
 
 
 # --------------------------------------------------------------------------
