@@ -13,8 +13,11 @@ one code path serves all combinations:
     panel        a left column of title text, or not
     aspect       16:9 | 1:1 | 9:16
 
-The band and the video ALWAYS keep their own aspect ratio. The layout gives
-each a box and each is fitted inside it; neither is ever stretched.
+The band and the video ALWAYS keep their own aspect ratio; neither is ever
+stretched. The band is fitted inside its box. The video spans the content
+width instead, so it stays as large as the frame allows, and whatever
+height that demands beyond the space left over is cropped — `video_offset`
+chooses which slice survives.
 
 Two ffmpeg passes, because it is far easier to reason about than one:
 the band images become a video whose cuts land on the measure timestamps,
@@ -85,6 +88,10 @@ class Style:
     # 1.0 = solid. Independent of band_opacity, which fades the whole band.
     band_bg_opacity: float = 1.0
     band_opacity: float = 1.0
+    # Which slice of the video's height survives when it is taller
+    # than the space beside the band. 0 keeps the top of the frame,
+    # 1 the bottom, 0.5 the middle.
+    video_offset: float = 0.5
     crf: int = 20
 
     @property
@@ -128,8 +135,18 @@ class Style:
 class Layout:
     canvas: tuple[int, int]
     band: Rect
-    video: Rect
+    video: Rect                      # where the video lands on the canvas
     panel: Rect | None
+    # The video keeps its aspect and spans the full content width, so when
+    # the space left beside the band is shorter than that demands, the
+    # surplus height is cropped rather than the picture shrunk. These say
+    # what to scale to and which slice of it to keep.
+    video_source: tuple[int, int] = (0, 0)
+    video_crop_y: int = 0
+
+    @property
+    def crops(self) -> bool:
+        return self.video_source[1] > self.video.h
 
 
 def _even(n: float) -> int:
@@ -159,9 +176,10 @@ def compute_layout(style: Style, band_aspect: float,
     """Place the band and the video, each keeping its own aspect ratio.
 
     The band spans the content width and takes whatever height its aspect
-    demands. The video gets the space left over and is fitted inside it —
-    scaled down to fit if need be, never stretched, and centred in the gap
-    it doesn't fill.
+    demands. The video also spans that width — fitting it inside the space
+    left over would shrink it and leave a bar down each side — so its
+    height is whatever its aspect demands, and the surplus is cropped.
+    `style.video_offset` chooses which slice of it survives.
     """
     width, height = style.canvas
     panel_w = _even(width * style.panel_width) if style.panel else 0
@@ -186,9 +204,21 @@ def compute_layout(style: Style, band_aspect: float,
     if video_box_h < 16:
         raise RenderError("No room left for the video beside the band.")
 
-    video_w, video_h = _fit(content_w, video_box_h, video_aspect)
-    # Centre each in the width it doesn't fill.
-    video_x = content_x + _even((content_w - video_w) / 2)
+    # The video spans the content width and keeps its aspect, so its height
+    # is whatever that demands. Fitting it inside the leftover space instead
+    # would shrink it and leave bars down both sides; filling the width and
+    # cropping the surplus keeps the picture as large as the frame allows.
+    video_w = _even(content_w)
+    natural_h = _even(video_w / video_aspect)
+    video_h = min(natural_h, _even(video_box_h))
+
+    # Which slice of the height survives. 0 keeps the top of the frame, 1
+    # keeps the bottom, and the default keeps the middle — the same part a
+    # centred fit would have shown.
+    surplus = max(0, natural_h - video_h)
+    video_crop_y = _even(surplus * _clamp01(style.video_offset))
+
+    video_x = content_x
     band_x = content_x + _even((content_w - band_w) / 2)
 
     if style.band_position == TOP:
@@ -201,7 +231,13 @@ def compute_layout(style: Style, band_aspect: float,
     return Layout(canvas=(width, height),
                   band=Rect(band_x, band_y, band_w, band_h),
                   video=Rect(video_x, video_y, video_w, video_h),
-                  panel=panel)
+                  panel=panel,
+                  video_source=(video_w, natural_h),
+                  video_crop_y=video_crop_y)
+
+
+def _clamp01(value: float) -> float:
+    return 0.0 if value < 0 else 1.0 if value > 1 else float(value)
 
 
 # --------------------------------------------------------------------------
@@ -450,7 +486,9 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
             # that is a limitation of the artwork, not of the scaling.
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},setsar=1,format=yuv420p[bg]",
-            f"[1:v]setpts=PTS-STARTPTS,scale={layout.video.w}:{layout.video.h}[vid]",
+            f"[1:v]setpts=PTS-STARTPTS,"
+            f"scale={layout.video_source[0]}:{layout.video_source[1]},"
+            f"crop={layout.video.w}:{layout.video.h}:0:{layout.video_crop_y}[vid]",
             f"[bg][vid]overlay=x={layout.video.x}:y={layout.video.y}[s1]",
             f"[2:v]setpts=PTS-STARTPTS,scale={layout.band.w}:{layout.band.h}[bnd]",
             f"[s1][bnd]overlay=x={layout.band.x}:y={layout.band.y}:shortest=1[s2]",

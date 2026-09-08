@@ -206,6 +206,7 @@ paint = function(){
   const real = !!realBand();
   $$('.frame .band, .frame .ctr-band').forEach(el =>
     el.classList.toggle('real', real));
+  applyRealLayout();
   return out;
 };
 
@@ -350,6 +351,7 @@ $('#submit').onclick = async function(){
           band_bg: S.bandColor,
           band_fg: S.noteColor,
           band_bg_opacity: S.alpha / 100,
+          video_offset: S.vidOffset ?? 0.5,
           canvas_bg: S.bdColor,
           background: S.bd === 'colour' ? 'none' : S.bd,
         },
@@ -377,3 +379,164 @@ $('#rightsGo').onclick = ()=>{
 };
 
 const READY = loadLibrary().then(()=>{ if(!S.file) draw(); });
+
+/* ── the frame, laid out the way the renderer lays it out ────────────── */
+/* The preview placed the video across the whole frame and drew the band on
+ * top of it, so the band appeared to cover the picture. The renderer never
+ * did that: it gives the band its own height, takes that plus the gap off
+ * the frame, and puts the video in what is left.
+ *
+ * What the renderer now does — and what this mirrors — is fill the content
+ * width with the video rather than shrinking it to fit the leftover height,
+ * because fitting a 16:9 picture into a shorter box leaves a bar down each
+ * side. The height that will not fit is cropped, and `S.vidOffset` chooses
+ * which slice survives: 0 the top of the frame, 1 the bottom.
+ *
+ * Behind the band is the backdrop, never the video, so a translucent band
+ * shows the background colour through it exactly as the render will.
+ */
+const CANVAS = { '16/9':[1920,1080], '1/1':[1080,1080], '9/16':[1080,1920] };
+const MARGIN = 36, GAP = 27, PANEL_W = 0.301;
+
+if(S.vidOffset === undefined) S.vidOffset = 0.5;
+
+function renderLayout(){
+  const w = realBand();
+  if(!w) return null;
+  const [cw, ch] = CANVAS[S.aspect] || CANVAS['16/9'];
+  const [va, vb] = (S.src.aspect || '16/9').split('/').map(Number);
+  const videoAspect = va / vb, bandAspect = w.band_w / w.band_h;
+
+  const panelW = S.panel === 'left' ? Math.round(cw * PANEL_W) : 0;
+  const contentX = panelW + MARGIN, contentW = cw - panelW - 2 * MARGIN;
+  const contentY = MARGIN, contentH = ch - 2 * MARGIN;
+
+  // x264 needs even sides, and the renderer rounds the height first then
+  // recomputes the width from it. Mirrored here so the preview does not
+  // quietly disagree with the output by a handful of pixels.
+  const even = n => Math.max(2, Math.round(n) - (Math.round(n) % 2));
+  let bandW = Math.min(contentW, contentH * bandAspect);
+  let bandH = even(bandW / bandAspect);
+  bandW = even(bandH * bandAspect);
+  if(bandW > contentW){ bandW = even(contentW); bandH = even(bandW / bandAspect); }
+
+  const boxH = contentH - bandH - GAP;
+  if(boxH < 16) return null;
+
+  const videoW = even(contentW);
+  const naturalH = even(videoW / videoAspect);
+  const videoH = Math.min(naturalH, even(boxH));
+  const surplus = Math.max(0, naturalH - videoH);
+
+  const top = S.bandPos === 'top';
+  const bandY = top ? contentY : contentY + boxH + GAP;
+  const videoY = (top ? contentY + bandH + GAP : contentY) + even((boxH - videoH) / 2);
+
+  return { cw, ch, surplus,
+    band:  { x: contentX + even((contentW - bandW) / 2), y: bandY, w: bandW, h: bandH },
+    video: { x: contentX, y: videoY, w: videoW, h: videoH } };
+}
+
+/* Put the preview's own elements where the renderer would put them. */
+function applyRealLayout(){
+  const frame = $('#frame');
+  const L = renderLayout();
+  if(!frame || !L) return;
+  const k = frame.clientWidth / L.cw;
+  if(!(k > 0)) return;
+  const px = (r, key) => (r[key] * k).toFixed(1) + 'px';
+
+  const vid = frame.querySelector('.vidzone');
+  if(vid){
+    Object.assign(vid.style, {
+      left: px(L.video,'x'), top: px(L.video,'y'),
+      width: px(L.video,'w'), height: px(L.video,'h'), right: 'auto',
+      // cover + which slice: the same crop the renderer performs
+      backgroundSize: 'cover',
+      backgroundPosition: `center ${(S.vidOffset * 100).toFixed(1)}%`,
+    });
+  }
+  const band = frame.querySelector('.band');
+  if(band){
+    Object.assign(band.style, {
+      left: px(L.band,'x'), top: px(L.band,'y'),
+      width: px(L.band,'w'), height: px(L.band,'h'), bottom: 'auto',
+    });
+  }
+}
+
+/* ── the video becomes something you can select and move ─────────────── */
+/* The design treated the video as scenery: `regionOf` returned null for it
+ * and a click opened the file picker. Now that the picture is cropped,
+ * which part of it survives is a real choice, so it gets a region like the
+ * others — and the backdrop colour lives there too, because the colour you
+ * are choosing is the one that shows around and behind the video. */
+REGION.push(['vid', '.vidzone', '.vidzone']);
+TITLES.vid = 'Your video';
+
+const baseRegionOf = regionOf;
+regionOf = function(el){
+  if(el.closest && el.closest('.vidzone')) return 'vid';
+  return baseRegionOf(el);
+};
+
+const NUDGE = 0.08;          // one press of an arrow
+function nudgeVideo(by){
+  S.vidOffset = Math.max(0, Math.min(1, (S.vidOffset ?? 0.5) + by));
+  paint();
+  if(typeof select === 'function' && sel === 'vid') select('vid');
+}
+
+const baseInspBody = inspBody;
+inspBody = function(id){
+  if(id !== 'vid') return baseInspBody(id);
+  const L = renderLayout();
+  const canMove = L && L.surplus > 1;
+  const pct = Math.round((S.vidOffset ?? 0.5) * 100);
+  return `<div class="ih"><b>${TITLES.vid}</b>`
+    + `<button class="x" data-x aria-label="Close">×</button></div>`
+    + (canMove ? `
+      <div class="irow"><span class="lab">What to keep</span>
+        <div class="slider">
+          <button class="o" data-vid="up" title="Move the video up" aria-label="Move up">▲</button>
+          <input type="range" min="0" max="100" value="${pct}" id="vidoff"/>
+          <button class="o" data-vid="down" title="Move the video down" aria-label="Move down">▼</button>
+        </div>
+        <p class="inote">The picture is wider than the space beside the score,
+        so some of its height is cut. This chooses which part stays —
+        ${pct === 0 ? 'the top' : pct === 100 ? 'the bottom' : 'the middle'} of the frame.</p>
+      </div>`
+    : `<div class="irow"><p class="inote">The whole picture fits beside the
+        score here, so nothing is cut.</p></div>`)
+    + `<div class="irow"><span class="lab">Behind and around it</span>
+        ${chipRow('bdColor',['#241a33','#0f0d13','#381C53','#f6f1e8'])}
+        <p class="inote">Also what shows through the score band when its
+        paper is made transparent.</p></div>`
+    + `<div class="irow"><span class="lab">The file</span>
+        <button class="linkbtn" data-vid="replace">Choose a different video</button></div>`;
+};
+
+/* Capture-phase, so the design's own handler — which opens the file picker
+ * on any click in the video — does not fire first. */
+document.addEventListener('click', e=>{
+  const zone = e.target.closest && e.target.closest('.vidzone');
+  if(zone && $('#frame') && $('#frame').contains(zone)){
+    e.stopPropagation();
+    select('vid');
+  }
+}, true);
+
+document.addEventListener('click', e=>{
+  const b = e.target.closest('[data-vid]');
+  if(!b) return;
+  e.stopPropagation();
+  if(b.dataset.vid === 'up')   return nudgeVideo(+NUDGE);   // reveal lower down
+  if(b.dataset.vid === 'down') return nudgeVideo(-NUDGE);
+  if(b.dataset.vid === 'replace') $('#file')?.click();
+});
+
+document.addEventListener('input', e=>{
+  if(e.target.id !== 'vidoff') return;
+  S.vidOffset = (+e.target.value) / 100;
+  paint();
+});

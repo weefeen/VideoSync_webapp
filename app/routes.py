@@ -349,6 +349,9 @@ def _style_from(body: dict) -> rnd.Style:
         band_fg=style.get("band_fg", "#1c1622"),
         band_bg_opacity=number("band_bg_opacity", 1.0),
         band_opacity=number("band_opacity", 1.0),
+        # Which slice of the video's height survives the crop, when it is
+        # taller than the space beside the band.
+        video_offset=number("video_offset", 0.5),
     )
 
 
