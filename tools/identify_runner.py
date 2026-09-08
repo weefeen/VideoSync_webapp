@@ -6,7 +6,9 @@ ID_PYTHON, because identifying needs torch and CUDA and the web app must
 not carry either. Nothing here is imported by the Flask process.
 
 music_finrgerprint is read only: this adds `<ID_ROOT>/src` to the path and
-calls its public entry points. It writes nothing into that repository.
+calls its public entry points. Importing from a checkout normally leaves
+`__pycache__` behind in it, so the parent runs this with
+PYTHONDONTWRITEBYTECODE; nothing is written into that repository.
 
     python identify_runner.py AUDIO --root R --pitch-index P --chord-index C
                               --out result.json [--pair-list L] [--top 5]

@@ -220,7 +220,12 @@ def _run(media: pathlib.Path) -> dict:
         # The child prints the transcription checkpoint path, which contains
         # the home directory; on a console codepage that cannot encode it,
         # the run dies before doing any work. Force UTF-8 both ways.
-        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+        #
+        # DONTWRITEBYTECODE because the child imports from a repository we
+        # are only ever allowed to read: without it, running this leaves
+        # __pycache__ directories behind inside music_finrgerprint.
+        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+               "PYTHONDONTWRITEBYTECODE": "1"}
         try:
             done = subprocess.run(command, capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", env=env,

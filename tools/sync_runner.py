@@ -11,8 +11,10 @@ environment and absent in the app's. That abort cannot be caught, so this
 has to be a separate process rather than an import.
 
 VideoScoreSync is read only: this adds its root to the path and calls two
-services that import nothing but `api_audio`. It writes nothing into that
-repository, and nothing into the score package either.
+services that import nothing but `api_audio`. Importing from a checkout
+normally leaves `__pycache__` behind in it — VideoScoreSync even tracks
+its own bytecode — so the parent runs this with PYTHONDONTWRITEBYTECODE.
+Nothing is written into that repository, or into the score package.
 
     python sync_runner.py --vss-root R --package P --audio A
                           --out measures.data --work DIR
@@ -105,11 +107,34 @@ def align(args: argparse.Namespace) -> dict:
     work.mkdir(parents=True, exist_ok=True)
 
     # The reference chroma and the reference measures must describe the same
-    # recording. Both live at the package root for an exported package.
-    ref_chroma = _first(package, "chroma.npy", "score/chroma.npy")
-    ref_measures_file = _first(package, "reference/measures.data", "measures.data")
+    # recording, and where each lives has moved. music_line_extractor now
+    # writes chroma only to performance/ (CHROMA_ARCNAME); the root and
+    # score/ copies are in its _ARCHIVE_STALE_ARCNAMES and are dropped on
+    # every repack. Reading the legacy copy of a package whose reference was
+    # later replaced would align against a recording that no longer exists
+    # in it — monotonic, plausible, and wrong. Current homes first.
+    ref_chroma = _first(package, "performance/chroma.npy",
+                        "reference/chroma.npy", "chroma.npy",
+                        "score/chroma.npy")
+    ref_measures_file = _first(package, "performance/measures.data",
+                               "reference/measures.data",
+                               "export/measures.data", "measures.data")
     ref_measures = read_measures(ref_measures_file)
+    ref_measures.sort(key=lambda pair: pair[1])
     last_measure = max(m for m, _ in ref_measures)
+
+    # The two must describe the same audio. Chroma frames are 0.1 s apart,
+    # so its length is checkable against the last timestamp the measures
+    # claim — a stale pairing usually disagrees by minutes.
+    import numpy as np
+    frames = np.load(ref_chroma, mmap_mode="r").shape[-1]
+    chroma_seconds = frames * 0.1
+    if chroma_seconds + 5.0 < ref_measures[-1][1]:
+        raise ConfigProblem(
+            f"{package.name}: {ref_chroma.name} covers {chroma_seconds:.0f}s "
+            f"but {ref_measures_file.name} runs to {ref_measures[-1][1]:.0f}s. "
+            f"They describe different recordings, so this package cannot be "
+            f"aligned against until it is re-exported.")
 
     # Rewritten into the two tab-separated measure-first columns the
     # service parses; anything else is silently skipped line by line and

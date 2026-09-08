@@ -124,7 +124,17 @@ def align(package_root: pathlib.Path, media: pathlib.Path,
         "--work", str(work),
         "--status", str(status),
     ]
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    # DONTWRITEBYTECODE because the child imports from a repository we are
+    # only ever allowed to read: without it, running this leaves __pycache__
+    # directories behind inside VideoScoreSync, which even tracks its own.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+           "PYTHONDONTWRITEBYTECODE": "1"}
+
+    # A previous run in this folder must not be mistaken for this one: an
+    # abort writes no status at all, and a stale success would be read as
+    # though it belonged to the recording we just handed over.
+    for leftover in (status, measures):
+        leftover.unlink(missing_ok=True)
 
     try:
         done = subprocess.run(command, capture_output=True, text=True,
