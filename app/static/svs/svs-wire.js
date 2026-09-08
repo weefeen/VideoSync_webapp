@@ -78,23 +78,18 @@ function fileBar(meta){
   $('#fbMeta').innerHTML = `${S.src.label} · ${S.src.dur} · ${meta}`;
 }
 
-/* Recognition takes about three quarters of a minute — it transcribes
- * eight passages of the recording and matches each against the library.
- * A sentence that never changes for that long reads as a hung page, so
- * the wait is counted out loud and the bar is honest about being an
- * estimate rather than progress. */
+/* Recognition takes about three quarters of a minute. The page needs to
+ * show it is alive, and nothing else: how it works is our problem, and a
+ * countdown only invites someone to watch it run late. A moving bar, one
+ * line, no explanation. */
 const LISTEN_ESTIMATE = 45;
 let listenStarted = 0, listenTimer = null;
 
 function listenTick(){
-  const bar = $('#listenbar'), num = $('#listensecs');
-  if(!bar || !num){ return; }
+  const bar = $('#listenbar');
+  if(!bar) return;
   const gone = (Date.now() - listenStarted) / 1000;
-  const share = Math.min(97, (gone / LISTEN_ESTIMATE) * 100);
-  bar.style.width = share.toFixed(1) + '%';
-  num.textContent = gone < LISTEN_ESTIMATE
-    ? `${Math.round(LISTEN_ESTIMATE - gone)}s left, about`
-    : 'nearly there';
+  bar.style.width = Math.min(97, (gone / LISTEN_ESTIMATE) * 100).toFixed(1) + '%';
 }
 
 function startListening(){
@@ -111,14 +106,10 @@ recognise = function(){
     $('#piecelab').textContent = 'Listening';
     $('#piecehint').textContent = '';
     $('#recogbody').innerHTML = `
-      <p class="heard">Listening to <b>${esc(S.file || 'your recording')}</b> and
-      comparing eight passages of it against the library.</p>
-      <div class="cands lead"><div class="cand" style="grid-template-columns:1fr 74px">
-        <span class="t">Working through the recording</span>
+      <p class="heard">Detecting the piece, <b>please wait a few seconds.</b></p>
+      <div class="cands lead"><div class="cand" style="grid-template-columns:1fr">
         <span class="bar"><i id="listenbar" style="width:0%"></i></span>
-      </div></div>
-      <p class="libnote"><span class="num" id="listensecs">about ${LISTEN_ESTIMATE}s</span>
-      &middot; nothing else is needed from you meanwhile.</p>`;
+      </div></div>`;
     listenTick();
     return;
   }
