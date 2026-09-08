@@ -103,10 +103,13 @@ function stopListening(){ clearInterval(listenTimer); listenTimer = null; }
 recognise = function(){
   if(S.recog === 'listening'){
     fileBar('<span class="lab">listening</span>');
-    $('#piecelab').textContent = 'Listening';
+    $("#piecelab").textContent = "Uploading";
     $('#piecehint').textContent = '';
+    // One message for the whole wait. From here it is a single act —
+    // the video goes up and the piece is found — and splitting it would
+    // only invite watching the parts.
     $('#recogbody').innerHTML = `
-      <p class="heard">Detecting the piece, <b>please wait a few seconds.</b></p>
+      <p class="heard">Uploading your video, <b>please wait a few seconds.</b></p>
       <div class="cands lead"><div class="cand" style="grid-template-columns:1fr">
         <span class="bar"><i id="listenbar" style="width:0%"></i></span>
       </div></div>`;
