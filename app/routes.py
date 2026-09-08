@@ -6,8 +6,9 @@ import json
 import pathlib
 import threading
 
-from flask import (Blueprint, Flask, current_app, jsonify, render_template,
-                   request, send_file, Response)
+from flask import (Blueprint, Flask, current_app, jsonify, redirect,
+                   render_template, request, send_file, send_from_directory,
+                   Response)
 from werkzeug.utils import secure_filename
 
 from . import autosync, jobs, package as pkg, panel, pipeline
@@ -37,22 +38,31 @@ def index():
     return render_template("index.html")
 
 
-@bp.get("/app")
+def _design_dir() -> pathlib.Path:
+    return pathlib.Path(current_app.static_folder) / "svs"
+
+
+# The design package ships as plain files linking to each other by relative
+# name — `svs-min.js`, `assets/…`, `Credits.html`. It is served rather than
+# templated so the markup and stylesheet stay byte for byte what was handed
+# over, which means the whole folder has to answer under one prefix: served
+# from anywhere else, the page asks for /svs-min.js and gets nothing.
+@bp.get("/app/")
 def studio():
-    """The designed interface, served as-is from its own folder.
-
-    The design package ships as plain files with relative links, so it is
-    served rather than templated: the markup and stylesheet stay byte for
-    byte what was handed over, and everything that talks to this server
-    lives in one added script beside them.
-    """
-    return send_file(pathlib.Path(current_app.static_folder) / "svs" / "index.html")
+    """The designed interface."""
+    return send_file(_design_dir() / "index.html")
 
 
-@bp.get("/Credits.html")
-def credits():
-    """The score-attribution page the footer links to (CC BY 4.0)."""
-    return send_file(pathlib.Path(current_app.static_folder) / "svs" / "Credits.html")
+@bp.get("/app/<path:filename>")
+def studio_file(filename: str):
+    """Everything the page asks for beside itself."""
+    return send_from_directory(_design_dir(), filename)
+
+
+@bp.get("/app")
+def studio_root():
+    """Without the trailing slash every relative link would miss."""
+    return redirect("/app/", code=308)
 
 
 # --------------------------------------------------------------------------
