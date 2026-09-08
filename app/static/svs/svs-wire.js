@@ -57,6 +57,7 @@ async function loadLibrary(){
 
 /* Behave exactly as the unwired design did. */
 function localOnly(name, why){
+  stopListening();
   WORKS = MOCK_WORKS;
   CANDS = MOCK_CANDS;
   named(name);
@@ -77,24 +78,59 @@ function fileBar(meta){
   $('#fbMeta').innerHTML = `${S.src.label} · ${S.src.dur} · ${meta}`;
 }
 
+/* Recognition takes about three quarters of a minute — it transcribes
+ * eight passages of the recording and matches each against the library.
+ * A sentence that never changes for that long reads as a hung page, so
+ * the wait is counted out loud and the bar is honest about being an
+ * estimate rather than progress. */
+const LISTEN_ESTIMATE = 45;
+let listenStarted = 0, listenTimer = null;
+
+function listenTick(){
+  const bar = $('#listenbar'), num = $('#listensecs');
+  if(!bar || !num){ return; }
+  const gone = (Date.now() - listenStarted) / 1000;
+  const share = Math.min(97, (gone / LISTEN_ESTIMATE) * 100);
+  bar.style.width = share.toFixed(1) + '%';
+  num.textContent = gone < LISTEN_ESTIMATE
+    ? `${Math.round(LISTEN_ESTIMATE - gone)}s left, about`
+    : 'nearly there';
+}
+
+function startListening(){
+  listenStarted = Date.now();
+  clearInterval(listenTimer);
+  listenTimer = setInterval(listenTick, 250);
+}
+
+function stopListening(){ clearInterval(listenTimer); listenTimer = null; }
+
 recognise = function(){
   if(S.recog === 'listening'){
     fileBar('<span class="lab">listening</span>');
     $('#piecelab').textContent = 'Listening';
     $('#piecehint').textContent = '';
     $('#recogbody').innerHTML = `
-      <p class="heard">Listening to your recording and comparing it with the
-      library. <b>This takes about a minute.</b><br>Nothing else is needed
-      from you meanwhile.</p>`;
+      <p class="heard">Listening to <b>${esc(S.file || 'your recording')}</b> and
+      comparing eight passages of it against the library.</p>
+      <div class="cands lead"><div class="cand" style="grid-template-columns:1fr 74px">
+        <span class="t">Working through the recording</span>
+        <span class="bar"><i id="listenbar" style="width:0%"></i></span>
+      </div></div>
+      <p class="libnote"><span class="num" id="listensecs">about ${LISTEN_ESTIMATE}s</span>
+      &middot; nothing else is needed from you meanwhile.</p>`;
+    listenTick();
     return;
   }
   if(S.recog === 'unavailable'){
-    const named = CANDS.length ? (W(CANDS[0][0])?.t || S.heardLabel) : S.heardLabel;
+    // Not `named` — that is the design's own function, and shadowing it
+    // here would be a trap for whoever edits this block next.
+    const heard = CANDS.length ? (W(CANDS[0][0])?.t || S.heardLabel) : S.heardLabel;
     fileBar('<span class="ok">recognised</span>');
     $('#piecelab').textContent = 'Recognised';
     $('#piecehint').textContent = '';
     $('#recogbody').innerHTML = `
-      <p class="heard">We heard <b>${esc(named || 'this piece')}</b>, but that
+      <p class="heard">We heard <b>${esc(heard || 'this piece')}</b>, but that
       score is not in the library yet.<br>It is being added one at a time —
       until then, pick something else below.</p>
       <div class="manual"><span class="lab">What we can do today</span>
@@ -122,6 +158,7 @@ async function uploadAndIdentify(name, blob){
   S.piece = null;
   S.manual = false;
   S.recog = 'listening';
+  startListening();
   draw();
   centerOn('#pieceblock', 240);
 
@@ -157,6 +194,7 @@ function clock(seconds){
 }
 
 function failed(message){
+  stopListening();
   S.recog = 'none';
   draw();
   const body = $('#recogbody');
@@ -184,6 +222,7 @@ async function poll(started){
 }
 
 function applyAnswer(a){
+  stopListening();
   const cands = a.candidates || [];
   // The interface keys everything by the library's own ids, and the server
   // answers with the same ones, so a recognised piece the library knows is
