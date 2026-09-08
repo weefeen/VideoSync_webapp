@@ -28,7 +28,15 @@ const API = {
 };
 
 let JOB = null;                 // the job this upload belongs to
-let SERVER = { can_identify: false, can_sync: false };
+let SERVER = { online: false, can_identify: false, can_sync: false };
+
+/* What the design shipped with. Opening the HTML on its own is a supported
+ * way to use this — the README says so — and it must keep working: with no
+ * server, the mock library and ranking come back and every screen behaves
+ * as it did before any of this was wired. Falling back is not pretending,
+ * as long as the interface says which one you are looking at. */
+const MOCK_WORKS = WORKS.slice();
+const MOCK_CANDS = CANDS.slice();
 
 /* ── the library ─────────────────────────────────────────────────────── */
 async function loadLibrary(){
@@ -36,13 +44,24 @@ async function loadLibrary(){
     const r = await fetch(API.library);
     if(!r.ok) throw new Error(r.status);
     const data = await r.json();
-    SERVER = { can_identify: data.can_identify, can_sync: data.can_sync };
-    if(Array.isArray(data.works)) WORKS = data.works;
+    SERVER = { online: true, can_identify: data.can_identify,
+               can_sync: data.can_sync };
+    if(Array.isArray(data.works) && data.works.length) WORKS = data.works;
   }catch(err){
-    // Leave the shipped library in place: the editor still works, and the
-    // person can still choose by hand.
-    console.warn('library unavailable, keeping the built-in list', err);
+    // No server: keep the shipped library so the whole interface still
+    // works locally, which is what it was built to do.
+    SERVER.online = false;
+    console.info('no server — running the interface on its built-in library');
   }
+}
+
+/* Behave exactly as the unwired design did. */
+function localOnly(name, why){
+  WORKS = MOCK_WORKS;
+  CANDS = MOCK_CANDS;
+  named(name);
+  const hint = $('#piecehint');
+  if(hint) hint.textContent = why || 'local preview — nothing was uploaded';
 }
 
 /* ── recognition states the mock did not have ────────────────────────── */
@@ -88,6 +107,17 @@ recognise = function(){
 
 /* ── upload, then listen ─────────────────────────────────────────────── */
 async function uploadAndIdentify(name, blob){
+  // Someone can choose a file before the library has answered; waiting here
+  // is the difference between "there is no server" and "we asked too soon".
+  await READY;
+
+  // Nothing to upload to: the design's own behaviour, straight away.
+  if(!SERVER.online || !SERVER.can_identify){
+    return localOnly(name, SERVER.online
+      ? 'recognition is not configured — choose the piece yourself'
+      : 'local preview — nothing was uploaded');
+  }
+
   S.file = name;
   S.piece = null;
   S.manual = false;
@@ -103,22 +133,20 @@ async function uploadAndIdentify(name, blob){
     data = await r.json();
     if(!r.ok) throw new Error(data.error || `upload failed (${r.status})`);
   }catch(err){
+    // A server that refuses this file has said something worth reading; a
+    // server that vanished mid-upload has not, and should not strand the
+    // interface on a screen with no way forward.
+    if(err instanceof TypeError) return localOnly(name, 'lost the server — local preview');
     return failed(err.message || 'The upload did not go through.');
   }
 
   JOB = data.job.id;
   if(data.probe && data.probe.duration) S.src.dur = clock(data.probe.duration);
 
-  if(!SERVER.can_identify){
-    // Without a recogniser the library is still usable by hand; say so
-    // rather than pretending nothing was heard.
-    return unheard();
-  }
-
   try{
     await fetch(API.identify(JOB), { method:'POST' });
   }catch(err){
-    return failed('Could not start listening.');
+    return localOnly(name, 'lost the server — local preview');
   }
   poll();
 }
@@ -146,7 +174,7 @@ async function poll(started){
     const r = await fetch(API.answer(JOB));
     a = await r.json();
   }catch(err){
-    return failed('Lost contact while listening.');
+    return localOnly(S.file, 'lost the server — local preview');
   }
   if(a.state === 'running' || a.state === 'idle'){
     return setTimeout(()=>poll(started), 2000);
@@ -191,9 +219,15 @@ $('#submit').onclick = async function(){
     $('#email').focus();
     return;
   }
-  if(!JOB || !S.piece){
-    emailNote('Choose a recording and a piece first.', true);
+  if(!S.piece){
+    emailNote('Choose a piece first.', true);
     return;
+  }
+  // Local preview: carry on through the screens as the design does, so the
+  // whole flow can still be walked without a server behind it.
+  if(!SERVER.online || !JOB){
+    emailNote();
+    return baseSubmit();
   }
   emailNote('Sending it to render…');
   try{
@@ -235,4 +269,4 @@ $('#rightsGo').onclick = ()=>{
   if(name && blob) uploadAndIdentify(name, blob);
 };
 
-loadLibrary().then(()=>{ if(!S.file) draw(); });
+const READY = loadLibrary().then(()=>{ if(!S.file) draw(); });
