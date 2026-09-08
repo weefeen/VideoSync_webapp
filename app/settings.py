@@ -98,6 +98,14 @@ class Settings:
     # gate stops meaning anything. Refuse such uploads rather than guess.
     identify_min_seconds: float = 20.0
     identify_timeout: float = 600.0
+    # Alignment. VideoScoreSync turns the performance into a chroma matrix
+    # and warps it against the package's reference. Its own interpreter
+    # again, and again not by preference: chroma extraction ABORTS the
+    # process under this app's environment (numba, missing Intel SVML), and
+    # an abort cannot be caught.
+    vss_root: pathlib.Path | None = None
+    sync_python: str = ""
+    sync_timeout: float = 900.0
 
     def allows(self, surname: str) -> bool:
         """Whether a score by this composer belongs in the library."""
@@ -157,6 +165,25 @@ class Settings:
         # recognition would resolve to no score at all.
         if self.pair_list and not self.pair_list.is_file():
             return f"PAIR_LIST is set but there is no file at {self.pair_list}."
+        return ""
+
+    @property
+    def can_sync(self) -> bool:
+        """Whether this install can align a performance to a score."""
+        return not self.why_cannot_sync()
+
+    def why_cannot_sync(self) -> str:
+        """A diagnostic for the operator; empty when alignment works."""
+        if not self.vss_root:
+            return "VSS_ROOT is not set."
+        if not (self.vss_root / "services").is_dir():
+            return f"No services/ under {self.vss_root}."
+        if not self.sync_python:
+            return ("SYNC_PYTHON is not set. Alignment needs an interpreter "
+                    "whose numba can run chroma extraction — not this one.")
+        if not (pathlib.Path(self.sync_python).is_file()
+                or shutil.which(self.sync_python)):
+            return f"No interpreter at {self.sync_python!r}."
         return ""
 
     @property
@@ -220,6 +247,9 @@ def load() -> Settings:
         pair_list=_one("PAIR_LIST"),
         identify_min_seconds=_number("IDENTIFY_MIN_SECONDS", 20.0),
         identify_timeout=_number("IDENTIFY_TIMEOUT", 600.0),
+        vss_root=_one("VSS_ROOT"),
+        sync_python=os.getenv("SYNC_PYTHON", "").strip().strip('"'),
+        sync_timeout=_number("SYNC_TIMEOUT", 900.0),
     )
 
 
