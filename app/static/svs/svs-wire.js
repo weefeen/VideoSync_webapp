@@ -141,6 +141,65 @@ recognise = function(){
   return baseRecognise();
 };
 
+/* ── the real score band, at its real shape ──────────────────────────── */
+/* The mock drew staves because it had no score to show. With one selected
+ * we show the actual first band the renderer will use, which also fixes
+ * the proportions: the design assumed a strip about 13:1, and Op.39's
+ * bands are 1306x244 — 5.35:1, two and a half times taller. Drawing the
+ * real image at the mock's height would misrepresent the output.
+ *
+ * The band box becomes the strip itself. The stave area is given the whole
+ * box and the caption line is dropped, because in the rendered video the
+ * band IS the notation — the caption was chrome the mock could afford. */
+const bandCSS = document.createElement('style');
+bandCSS.textContent = `
+  .frame .band.real .stv, .frame .ctr-band.real .stv{height:100%}
+  .frame .band.real{padding-bottom:0}
+  .frame .band.real .bandwk, .frame .ctr-band.real .bandwk{display:none}
+  .frame .realband{position:absolute;inset:0;width:100%;height:100%;
+    object-fit:contain;object-position:center;
+    /* white paper takes the band colour underneath; the ink stays ink */
+    mix-blend-mode:multiply;pointer-events:none}
+`;
+document.head.appendChild(bandCSS);
+
+/* The chosen work, but only when the server told us about its band. */
+function realBand(){
+  if(!S.piece) return null;
+  const w = W(S.piece);
+  return (w && w.band && w.band_w && w.band_h) ? w : null;
+}
+
+const baseGeo = geo;
+geo = function(){
+  const g = baseGeo();
+  const w = realBand();
+  if(w){
+    const [aw, ah] = S.aspect.split('/').map(Number);
+    // Height the strip needs to span the width it is given, in percent of
+    // the frame height. Capped so a very tall band cannot eat the video.
+    g.band = Math.min(55, (100 - g.pnl) * (aw / ah) / (w.band_w / w.band_h));
+  }
+  return g;
+};
+
+const baseStave = staveHTML;
+staveHTML = function(bars, k, a){
+  const w = realBand();
+  if(!w) return baseStave(bars, k, a);
+  return `<img class="realband" src="${w.band}" alt="" draggable="false"/>`;
+};
+
+/* Mark the band so the stylesheet above applies only when it is real. */
+const basePaint = paint;
+paint = function(){
+  const out = basePaint.apply(this, arguments);
+  const real = !!realBand();
+  $$('.frame .band, .frame .ctr-band').forEach(el =>
+    el.classList.toggle('real', real));
+  return out;
+};
+
 /* ── upload, then listen ─────────────────────────────────────────────── */
 async function uploadAndIdentify(name, blob){
   // Someone can choose a file before the library has answered; waiting here

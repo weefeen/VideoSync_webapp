@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import pathlib
 import threading
+from urllib.parse import quote
 
 from flask import (Blueprint, Flask, current_app, jsonify, redirect,
                    render_template, request, send_file, send_from_directory,
@@ -77,12 +78,18 @@ def api_library():
     """
     works = []
     for p in library.packages():
+        band_w, band_h = p.band_size
         works.append({
             "id": p.name,
             "t": p.title or p.display_name,
             "op": p.opus,
             "bars": p.last_measure,
             "ref": True,
+            # The real strip, so the preview shows this score at its own
+            # shape instead of a drawn approximation of one.
+            "band_w": band_w,
+            "band_h": band_h,
+            "band": f"/api/library/{quote(p.name)}/band",
             # Backdrop artwork is configured per install, not per score.
             "art": {"image": bool(settings.background_for("static")),
                     "video": bool(settings.background_for("dynamic"))},
@@ -95,6 +102,39 @@ def api_library():
     return jsonify({"works": works,
                     "can_identify": settings.can_identify,
                     "can_sync": settings.can_sync})
+
+
+@bp.get("/api/library/<path:name>/band")
+def api_band(name: str):
+    """One band image from a score, for the preview to show.
+
+    Defaults to the first, which is what step three needs: the opening of
+    the piece, at the real proportions the renderer will use. Vector is
+    preferred where the package has it — the preview is scaled to whatever
+    the frame is, and an svg survives that.
+    """
+    package = library.find(name)
+    if package is None or not package.bands:
+        return jsonify({"error": f"No score package named {name!r}."}), 404
+
+    measure = request.args.get("measure", type=int)
+    band = package.bands[0]
+    if measure is not None:
+        # The band in force at that measure: the last one that has started.
+        for candidate in package.bands:
+            if candidate.first_measure <= measure:
+                band = candidate
+            else:
+                break
+    elif not band.is_vector:
+        band = next((b for b in package.bands
+                     if b.first_measure == band.first_measure and b.is_vector), band)
+
+    response = send_file(band.path, conditional=True)
+    # The library only changes when a package is added, and the preview
+    # asks for this on every redraw.
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
 
 
 # --------------------------------------------------------------------------
