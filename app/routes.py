@@ -90,6 +90,10 @@ def api_library():
             "band_w": band_w,
             "band_h": band_h,
             "band": f"/api/library/{quote(p.name)}/band",
+            # Vector bands are ink on transparency, so the preview can
+            # recolour them the way the renderer does. A bitmap band is
+            # ink already burnt onto paper and cannot be.
+            "vector": p.has_vector,
             # Backdrop artwork is configured per install, not per score.
             "art": {"image": bool(settings.background_for("static")),
                     "video": bool(settings.background_for("dynamic"))},

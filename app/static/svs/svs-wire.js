@@ -147,10 +147,19 @@ bandCSS.textContent = `
   .frame .band.real .stv, .frame .ctr-band.real .stv{height:100%}
   .frame .band.real{padding-bottom:0}
   .frame .band.real .bandwk, .frame .ctr-band.real .bandwk{display:none}
-  .frame .realband{position:absolute;inset:0;width:100%;height:100%;
-    object-fit:contain;object-position:center;
-    /* white paper takes the band colour underneath; the ink stays ink */
-    mix-blend-mode:multiply;pointer-events:none}
+  /* Vector bands are ink on transparency, so the score is used as a mask
+     and filled with the chosen note colour — the same ink-on-paper model
+     the renderer uses, rather than a picture of someone else's ink. */
+  .frame .realband{position:absolute;inset:0;pointer-events:none}
+  .frame .realband.vector{
+    -webkit-mask-image:var(--band);mask-image:var(--band);
+    -webkit-mask-size:contain;mask-size:contain;
+    -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+    -webkit-mask-position:center;mask-position:center}
+  /* A bitmap band already has its paper burnt in: the most that can be
+     done is let the band colour show through the white. */
+  .frame .realband.raster{width:100%;height:100%;object-fit:contain;
+    mix-blend-mode:multiply}
 `;
 document.head.appendChild(bandCSS);
 
@@ -178,7 +187,13 @@ const baseStave = staveHTML;
 staveHTML = function(bars, k, a){
   const w = realBand();
   if(!w) return baseStave(bars, k, a);
-  return `<img class="realband" src="${w.band}" alt="" draggable="false"/>`;
+  if(w.vector){
+    // A block of the note colour, shaped by the score. Changing the ink
+    // changes this, exactly as it changes the rendered video.
+    return `<div class="realband vector" style="--band:url('${w.band}');`
+         + `background-color:${S.noteColor}"></div>`;
+  }
+  return `<img class="realband raster" src="${w.band}" alt="" draggable="false"/>`;
 };
 
 /* Mark the band so the stylesheet above applies only when it is real. */
