@@ -832,8 +832,11 @@ function foldScoreSources(){
   if(!foot || foot.dataset.folded) return;
   foot.dataset.folded = '1';
 
-  // The notice itself is kept, exactly as written — only put away.
-  const notice = foot.innerHTML;
+  // The notice itself is kept, exactly as written — only put away. Its
+  // own "Score sources" heading is left out: the link is now that heading,
+  // and keeping both printed it twice.
+  const notice = Array.from(foot.querySelectorAll('.srcblock, .srcmod'))
+    .map(el => el.outerHTML).join('');
   // A single auto column stretches, and a stretched button centres its own
   // label — which is why this read as centred. Pinned to the start instead.
   foot.innerHTML = `<div class="srcinner"
