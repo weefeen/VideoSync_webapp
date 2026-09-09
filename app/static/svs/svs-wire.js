@@ -98,21 +98,35 @@ function startListening(){
   listenTimer = setInterval(listenTick, 250);
 }
 
-function stopListening(){ clearInterval(listenTimer); listenTimer = null; }
+function stopListening(){
+  clearInterval(listenTimer); listenTimer = null;
+  // Give step one back the dropzone it lent us.
+  const drop = $('#drop');
+  if(drop) drop.classList.remove('busy');
+  const browse = $('#browse');
+  if(browse) browse.disabled = false;
+  if(typeof resetDrop === 'function') resetDrop();
+}
 
 recognise = function(){
   if(S.recog === 'listening'){
-    fileBar('<span class="lab">listening</span>');
-    $("#piecelab").textContent = "Uploading";
-    $('#piecehint').textContent = '';
-    // One message for the whole wait. From here it is a single act —
-    // the video goes up and the piece is found — and splitting it would
-    // only invite watching the parts.
-    $('#recogbody').innerHTML = `
-      <p class="heard">Uploading your video, <b>please wait a few seconds.</b></p>
-      <div class="cands lead"><div class="cand" style="grid-template-columns:1fr">
-        <span class="bar"><i id="listenbar" style="width:0%"></i></span>
-      </div></div>`;
+    // The wait belongs to step one, where the file was chosen. Step two
+    // stays shut until there is a piece to agree with — asking someone to
+    // confirm something that is not known yet is not a step.
+    $('#pieceblock').classList.remove('on');
+    $('#advance').classList.remove('on');
+    $('#filebar').classList.remove('on');
+    $('#uploadstate').classList.remove('hide');
+
+    const drop = $('#drop');
+    if(drop) drop.classList.add('filled', 'busy');
+    const browse = $('#browse');
+    if(browse) browse.disabled = true;
+    const copy = $('#dropcopy');
+    if(copy) copy.innerHTML = `
+      <h2>Uploading your <em>video</em></h2>
+      <span class="uprail"><i id="listenbar" style="width:0%"></i></span>
+      <span class="lab">${esc(S.file || '')} &middot; please wait a few seconds</span>`;
     listenTick();
     return;
   }
@@ -130,6 +144,53 @@ recognise = function(){
       <div class="manual"><span class="lab">What we can do today</span>
         <div class="pieces" id="pieces"></div></div>`;
     manualList();
+    return;
+  }
+  if(S.recog === 'heard' && CANDS.length){
+    // The design assumed three candidates. Recognition often returns one,
+    // because anything scoring near nothing is noise and is not offered —
+    // so the "it may also be" heading and its empty list are dropped, the
+    // sentence stops promising alternatives that are not there, and the
+    // way out of the list never counts what it cannot see.
+    const alts = CANDS.slice(1);
+    fileBar('<span class="ok">recognised</span>');
+    $('#piecelab').textContent = '';
+    $('#piecehint').textContent = '';
+
+    const candBtn = ([id, pc]) => {
+      const w = W(id), on = id === S.piece;
+      if(!w) return '';
+      return `<button class="cand${on ? ' on' : ''}" data-p="${id}" role="radio"
+        aria-checked="${on}">
+        <span class="mark"></span>
+        <span class="t">${esc(w.t)}, ${esc(w.op)}</span>
+        <span class="bar"><i style="width:${pc}%"></i></span>
+        <span class="pc">${pc}%</span>
+      </button>`;
+    };
+
+    const top = W(CANDS[0][0]);
+    $('#recogbody').innerHTML = `
+      <p class="heard">We heard <b>${esc(top ? top.t + ', ' + top.op : 'this piece')}</b>.<br>
+      It is selected &mdash; confirm it${alts.length ? ', or pick another below.'
+        : ', or choose a different piece from the library.'}</p>
+      <div role="radiogroup" aria-label="Choose the piece">
+        <div class="candhead"><span class="lab">Most likely</span>
+          <span class="lab">Confidence</span></div>
+        <div class="cands lead">${candBtn(CANDS[0])}</div>
+        ${alts.length ? `
+        <div class="candhead alt"><span class="lab">Is it wrong? It may also be</span>
+          <span class="lab">Confidence</span></div>
+        <div class="cands">${alts.map(candBtn).join('')}</div>` : ''}
+      </div>
+      <div class="manualrow"><button class="linkbtn" id="manualToggle">${
+        S.manual ? 'Hide the library' : 'Choose from the library'}</button></div>
+      ${S.manual ? `<div class="manual"><span class="lab">The full library</span>
+        <div class="pieces" id="pieces"></div></div>` : ''}`;
+
+    $$('#recogbody .cand').forEach(b => b.onclick = () => choose(b.dataset.p));
+    $('#manualToggle').onclick = () => { S.manual = !S.manual; recognise(); };
+    if(S.manual) manualList();
     return;
   }
   return baseRecognise();
@@ -163,6 +224,14 @@ bandCSS.textContent = `
      done is let the band colour show through the white. */
   .frame .realband.raster{width:100%;height:100%;object-fit:contain;
     mix-blend-mode:multiply}
+  /* Step one keeps the wait: a rail across the dropzone it started from. */
+  .dropzone.busy{cursor:default}
+  .dropzone.busy:hover{border-color:var(--hair-2);background:linear-gradient(#fdfbf7,#f9f5ee)}
+  .dropzone.busy .dropbtn{opacity:.35;pointer-events:none}
+  .uprail{display:block;position:relative;height:2px;border-radius:2px;
+    background:var(--hair);overflow:hidden;margin:14px 0 10px}
+  .uprail i{position:absolute;left:0;top:0;height:100%;border-radius:2px;
+    background:var(--mag);transition:width .25s linear}
 `;
 document.head.appendChild(bandCSS);
 
@@ -229,7 +298,7 @@ async function uploadAndIdentify(name, blob){
   S.recog = 'listening';
   startListening();
   draw();
-  centerOn('#pieceblock', 240);
+  centerOn('#uploadstate', 240);
 
   let data;
   try{
