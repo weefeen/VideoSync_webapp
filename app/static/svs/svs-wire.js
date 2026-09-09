@@ -35,7 +35,7 @@ const DEBUG = new URLSearchParams(location.search).has('debug');
 
 let JOB = null;                 // the job this upload belongs to
 let SERVER = { online: false, can_identify: false, can_sync: false,
-               can_email: false };
+               can_email: false, videosPerWeek: 0 };
 
 /* What the design shipped with. Opening the HTML on its own is a supported
  * way to use this — the README says so — and it must keep working: with no
@@ -52,7 +52,8 @@ async function loadLibrary(){
     if(!r.ok) throw new Error(r.status);
     const data = await r.json();
     SERVER = { online: true, can_identify: data.can_identify,
-               can_sync: data.can_sync, can_email: !!data.can_email };
+               can_sync: data.can_sync, can_email: !!data.can_email,
+               videosPerWeek: data.videos_per_week || 0 };
     if(Array.isArray(data.works) && data.works.length) WORKS = data.works;
   }catch(err){
     // No server: keep the shipped library so the whole interface still
@@ -116,6 +117,9 @@ function postUpload(name, blob){
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('video', blob, name);
+    // The server asserts this too: the tick is in the page, and a script
+    // never sees a page. Sent because the gate was actually accepted.
+    form.append('rights', 'true');
     const xhr = new XMLHttpRequest();
     xhr.open('POST', API.upload);
     xhr.upload.onprogress = e => {
@@ -925,15 +929,27 @@ document.addEventListener('DOMContentLoaded', () => { realSample(); nameTheSampl
 /* ── the free-tier line ──────────────────────────────────────────────── */
 /* A length cap is a promise to enforce, and there is none. Saying it here
  * would be describing a limit nothing implements. */
+const WORDS = ['zero','one','two','three','four','five','six','seven',
+               'eight','nine','ten'];
+
 function trimFreeLine(){
   const line = document.querySelector('.freeline');
   if(!line || line.dataset.trimmed) return;
-  const before = line.innerHTML;
-  const after = before.replace(/,\s*up to ten minutes each\./i, '.');
-  if(after !== before){ line.innerHTML = after; line.dataset.trimmed = '1'; }
+  let text = line.innerHTML.replace(/,\s*up to ten minutes each\./i, '.');
+
+  // Quote the allowance the server enforces. A promise nothing checks is
+  // the kind of copy that quietly becomes false.
+  const n = SERVER.videosPerWeek;
+  if(n > 0){
+    const said = WORDS[n] || String(n);
+    text = text.replace(/Three videos a month/i,
+      `${said.charAt(0).toUpperCase() + said.slice(1)} `
+      + `video${n === 1 ? '' : 's'} a week`);
+  }
+  line.innerHTML = text;
+  line.dataset.trimmed = '1';
 }
-trimFreeLine();
-document.addEventListener('DOMContentLoaded', trimFreeLine);
+READY.then(trimFreeLine);
 
 /* ── how many videos have actually been made ─────────────────────────── */
 /* The server counts finished renders and nothing else — never an estimate,

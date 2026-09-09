@@ -17,6 +17,7 @@ from werkzeug.utils import secure_filename
 from . import jobs, package as pkg, panel, pipeline
 from . import identify as ident
 from . import library
+from . import limits
 from . import render as rnd
 from . import stats
 from . import sync as syncing
@@ -116,7 +117,10 @@ def api_library():
                     "can_sync": settings.can_sync,
                     # Asked so the interface never promises a message this
                     # install cannot send.
-                    "can_email": settings.can_email})
+                    "can_email": settings.can_email,
+                    # Stated so the free-tier copy quotes the number that is
+                    # enforced, instead of drifting away from it.
+                    "videos_per_week": limits.RULES["render_ip"].limit})
 
 
 @bp.get("/api/stats")
@@ -282,6 +286,10 @@ def api_identify(job_id: str):
         return jsonify({"error": "No such job."}), 404
     if not settings.can_identify:
         return jsonify({"error": settings.why_cannot_identify()}), 503
+    try:
+        limits.guard("identify_ip", limits.client_key(request))
+    except limits.Refused as exc:
+        return jsonify({"error": str(exc)}), 429, {"Retry-After": str(exc.retry_after)}
 
     with _identify_lock:
         current = _identifications.get(job_id)
@@ -362,6 +370,19 @@ def api_scores():
 # --------------------------------------------------------------------------
 @bp.post("/api/upload")
 def api_upload():
+    try:
+        limits.guard("upload_ip", limits.client_key(request))
+    except limits.Refused as exc:
+        return jsonify({"error": str(exc)}), 429, {"Retry-After": str(exc.retry_after)}
+
+    # The rights confirmation is a checkbox in the page, which means a
+    # script never sees it. Asserted here as well, so accepting somebody
+    # else's recording takes a deliberate lie rather than a missing tick.
+    if str(request.form.get("rights", "")).lower() not in ("1", "true", "yes", "on"):
+        return jsonify({
+            "error": "The rights to this recording have not been confirmed.",
+        }), 400
+
     if "video" not in request.files:
         return jsonify({"error": "No file was sent."}), 400
     upload = request.files["video"]
@@ -443,6 +464,14 @@ def api_render(job_id: str):
         return jsonify({"error": "The uploaded video is no longer on disk."}), 410
 
     body = request.get_json(silent=True) or {}
+    address = str(body.get("email", "")).strip().lower()
+    try:
+        limits.guard("render_ip", limits.client_key(request))
+        if address:
+            limits.guard("render_email", address)
+    except limits.Refused as exc:
+        return jsonify({"error": str(exc)}), 429, {"Retry-After": str(exc.retry_after)}
+
     score = str(body.get("score", "")).strip()
     if not score:
         return jsonify({"error": "Pick a score first."}), 400

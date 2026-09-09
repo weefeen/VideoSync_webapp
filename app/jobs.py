@@ -21,6 +21,7 @@ import traceback
 import uuid
 from typing import Any, Iterator
 
+from . import limits
 from . import notify
 from . import pipeline
 from .settings import settings
@@ -198,6 +199,15 @@ class Registry:
         server having a bad day is not a reason to report a failed render.
         """
         if not job.email or not settings.can_email:
+            return
+        # Mail goes to an address somebody typed, so it is capped even
+        # after everything upstream has allowed the render.
+        address = job.email.strip().lower()
+        if not limits.allowed("mail_email", address):
+            logger.info("not mailing %s: over its allowance", address)
+            return
+        if not limits.allowed("mail_total", "all"):
+            logger.warning("daily mail cap reached; not mailing %s", address)
             return
         try:
             notify.send_ready(job.id, job.email, piece=job.score or "")
