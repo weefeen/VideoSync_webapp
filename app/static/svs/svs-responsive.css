@@ -161,8 +161,12 @@
   display: block;
   text-align: right;
   margin: 0 4px 10px 0;
+  /* Shifted, not re-spaced: relative offset moves the ink without pulling
+     the frame below it up by the same amount. */
+  position: relative;
+  top: -5px;
   font-family: Caveat, "Segoe Script", "Bradley Hand", cursive;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 600;
   line-height: 1.15;
   color: #b8860b;
@@ -172,5 +176,5 @@
   text-shadow: 0 1px 0 rgba(255, 255, 255, .6);
 }
 @media (max-width: 600px) {
-  .hero .artifact .handnote { font-size: 18px; margin-bottom: 8px; }
+  .hero .artifact .handnote { font-size: 20px; margin-bottom: 8px; }
 }
