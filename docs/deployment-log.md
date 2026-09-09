@@ -569,6 +569,72 @@ have broken, for the longest uploads only.
 
 ---
 
+## 15. Redelivery, proved by killing a worker
+
+A broker redelivers whenever it is in any doubt, and that is the mechanism
+that makes a dead worker recoverable — so redelivery is not something to
+prevent, it is something the work has to survive. Two cases, both run against
+the real broker.
+
+### A worker killed mid-encode
+
+`kill -9` on the worker, forty seconds into the encode:
+
+| | |
+|---|---|
+| The broker | saw the connection die and **requeued**: `vsw.render` went to 1 message, 0 consumers |
+| The row | stayed `running`, naming the dead worker, 573 s of lease left — correct, nothing had reported anything |
+| On disk | `…_synced.**part**.mp4`, 6 MB. Without the rename that would look exactly like a finished video |
+| A fresh worker | took the redelivered message and **re-ran from the start** — right, because the attempt record said `started`, not `done` |
+| The record | two `stage_runs`: the first closed `error / Interrupted`, the second `running` |
+
+    error   23:13:34 -> 23:15:01   elapsed  86 s   Interrupted
+    done    23:15:01 -> 23:31:11   elapsed 970 s
+
+### The retry took 970 s against a normal 547 s
+
+**Killing the worker orphans its ffmpeg.** `pkill -9` ends the Python
+process; its ffmpeg child is not in the signal's scope and carries on
+encoding — to a file the retry has already unlinked, so it writes to a dead
+inode and nothing is corrupted, but it holds a core for its remaining eight
+minutes. On two cores that is why the retry took nearly twice as long, and
+`uptime` still showed a 15-minute load average of 4.86 afterwards.
+
+A process killed with SIGKILL cannot clean up after itself, so this cannot be
+fixed inside the worker. **The supervisor has to do it**, and systemd does by
+default: `KillMode=control-group` kills the whole cgroup, ffmpeg included.
+That turns the systemd units from tidiness into a measured requirement.
+
+`preexec_fn` with `PR_SET_PDEATHSIG` would also work and is deliberately not
+used: the worker is multi-threaded and `preexec_fn` is documented as unsafe
+in a process with threads.
+
+### A duplicate delivery of finished work
+
+Re-publishing the same task — the same job, the same attempt — is what a
+redelivery of an already-finished render looks like:
+
+    attempt 1 of 1e5e4c5b3bbc already done here;
+    reporting it again, not rendering again
+
+Nothing was rendered: no new `.part` file appeared, and the job folder still
+held only the finished video, its record, `measures.data` and `sync`. On the
+web side the repeated `done` changed nothing — **2 stage_runs, not 3, and the
+delivered-video count stayed at 4 rather than going to 5.** That count is the
+same guard that stops a second email going out about one video.
+
+Both queues drained, nothing dead-lettered.
+
+### What this leaves
+
+A worker that dies mid-render still re-renders from scratch. That is correct
+and it is not free: a 25-minute upload costs another half hour. Resuming a
+render from the middle is not possible, so the only improvement available is
+to lose less by staging the work — which is the per-stage queue split of
+`queue-design.md`, not this slice.
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;

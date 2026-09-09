@@ -2,11 +2,16 @@
 
 Design for review. Nothing here is implemented yet.
 
-**Status: steps 1 and 2 of §14 are done and proved (`deployment-log.md` §12
-and §13). §12's contradictions are settled — the development page is retired
-and there is no files transport. Step 3 is next and needs two things the
-owner has not yet given: a RabbitMQ server on the dev node, and `pika` as a
-dependency. §13's unknown still stands: the production broker's version.**
+**Status: all four steps of §14 are done and proved on the dev node
+(`deployment-log.md` §12 to §15). §12's contradictions are settled and §13's
+unknown is answered for the dev node — RabbitMQ 3.12.1 accepts a per-queue
+`x-consumer-timeout`, so no shared broker's configuration has to change. The
+production broker's version is still unchecked.**
+
+**What this slice does NOT give you:** a second host, scale-to-zero, Docker,
+or gunicorn. It gives one machine running the two halves as separate
+processes with a broker between them, which is the arrangement the second
+host becomes a configuration change from.
 
 Scope of this slice: split the worker out of the Flask process **on a single
 node**, with RabbitMQ between them. One host, same storage, same code paths.
@@ -514,16 +519,21 @@ points is enough.
    runs the whole seam with the render stubbed; and a real render on the node
    came out **byte for byte identical** to step 1's, at 547.9 s against
    550.8 s — see `deployment-log.md` §13.
-3. ~~**AMQP.**~~ **MOSTLY DONE** — `AmqpTransport`, `python -m app.queue.worker`,
-   `tools/brokercheck.py` and `pika` are in, and a real render went through
-   RabbitMQ on the dev node in 546.7 s against 547.9 s without it, producing
-   a byte-identical output (`deployment-log.md` §14). **Still owed:** the
-   attempt record and the `.part` rename of §5, and the kill-the-worker and
-   stop-the-broker checks of §9 — that is, everything that makes a
-   *redelivery* safe. Until those land, a worker that dies mid-render will
-   have its job redelivered and rendered again from the start, which is
-   correct but wasteful, and a job that finished just before the worker died
-   would be rendered twice.
+3. ~~**AMQP.**~~ **DONE.** `AmqpTransport`, `python -m app.queue.worker`,
+   `tools/brokercheck.py`, `pika`, the per-attempt record and the `.part`
+   rename. A real render went through RabbitMQ in 546.7 s against 547.9 s
+   without it, byte-identical. Redelivery proved by killing a worker
+   mid-encode — requeued, re-run, the abandoned stage row closed
+   `Interrupted` — and by re-publishing finished work, which reported the
+   outcome again without rendering and without double-counting the video.
+   `deployment-log.md` §14 and §15.
+
+   One thing the kill test found that is **not** fixed here: SIGKILL on the
+   worker orphans its ffmpeg, which holds a core until it finishes and
+   halved the retry's speed on two cores. A process killed with SIGKILL
+   cannot clean up after itself, so the supervisor must — systemd's default
+   `KillMode=control-group` does exactly that, which makes the units a
+   measured requirement rather than tidiness.
 
    Superseded, for the record: **AMQP.** `AmqpTransport`, `python -m app.queue.worker`,
    `tools/brokercheck.py`, `pika` in requirements. *Proof:* the seven live
