@@ -1191,13 +1191,13 @@ function creditCliburn(){
   a.rel = 'noopener noreferrer';        // the opened tab gets no handle on ours
   a.dataset.cliburn = '1';
   a.setAttribute('aria-label',
-    'System used during the Cliburn competition, 2025');
+    'Cliburn 2025 — same tech used during the competition');
   a.innerHTML =
     '<img class="fbav" src="assets/cliburn-mark.png" alt="" ' +
          'width="38" height="38"/>' +
     '<span class="fbmeta">' +
       '<span class="fbname">Cliburn 2025</span>' +
-      '<span class="fbsub">Used during the competition</span>' +
+      '<span class="fbsub">Same tech used during the competition</span>' +
     '</span>';
   bands.appendChild(a);
 }
