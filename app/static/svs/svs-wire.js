@@ -1273,3 +1273,22 @@ function foldPrivacy(){
   inner.appendChild(button);
   inner.appendChild(slot);
 }
+
+/* Put Privacy in the footer, beside Credits.
+ *
+ * Added here because svs-min.js rebuilds that row itself, so an edit to
+ * index.html alone would be overwritten on the screens where it redraws. */
+function linkPrivacy(){
+  document.querySelectorAll('.footlinks').forEach(row => {
+    if(row.querySelector('[data-privacy]')) return;
+    const a = document.createElement('a');
+    a.href = 'Privacy.html';
+    a.textContent = 'Privacy';
+    a.dataset.privacy = '1';
+    const credits = row.querySelector('a[href="Credits.html"]');
+    row.insertBefore(a, credits || null);
+  });
+}
+linkPrivacy();
+/* svs-min redraws the footer on some screens, so put it back afterwards. */
+document.addEventListener('click', () => setTimeout(linkPrivacy, 0), true);
