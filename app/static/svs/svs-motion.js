@@ -12,7 +12,6 @@
  *
  *     /app/                      all five, which is deliberately too many
  *     /app/?motion=drift         just the engraving behind the headline
- *     /app/?motion=scrub         scrolling plays the piece
  *     /app/?motion=rubato        the headline arrives in musical time
  *     /app/?motion=count         the tally counts up
  *     /app/?motion=settle        notes land on a staff
@@ -37,80 +36,41 @@
   const $ = sel => document.querySelector(sel);
   const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-  /* ── 1. the engraving drifting behind the headline ─────────────────── */
-  /* The quietest of the five, and the one that suits this design best: it
-   * is the subject matter used as texture. A real band from the library,
-   * held at low opacity, moving slowly enough that you notice it only if
-   * you look. Nothing to read, nothing to chase. */
+  /* ── 1. engraved pages behind the whole page ───────────────────────── */
+  /* Not a band any more: the plates as they were engraved, standing behind
+   * everything from the headline to the footer, drifting upward slowly
+   * enough that you would have to watch to see it move.
+   *
+   * A band is a strip cut for a video, and it looked like one — a stripe
+   * behind a headline. A page looks like sheet music on a desk, which is
+   * what this is about.
+   *
+   * It is fixed rather than scrolled, so the reader moves down the page and
+   * the music stays behind them, and it holds six percent opacity so it can
+   * never compete with anything anyone is trying to read. Vector, so the
+   * whole backdrop is a few tens of kilobytes.
+   */
   async function drift() {
-    const hero = $('.hero');
-    if (!hero || hero.querySelector('.driftband')) return;
+    if (document.querySelector('.driftpages')) return;
 
-    let href = null;
+    let name = null;
     try {
       const works = (await (await fetch('/api/library')).json()).works || [];
-      if (works.length && works[0].band) href = works[0].band;
-    } catch (err) { /* offline: the effect simply does not appear */ }
-    if (!href) return;
+      if (!works.length) return;
+      name = works[0].id;
+    } catch (err) { return; }        // offline: no backdrop, no complaint
+    if (!name) return;
 
+    // One plate, fetched once, tiled by the browser and scrolled by moving
+    // the background rather than the element. Six image elements pointing
+    // at three URLs was three requests and three decodes of a third of a
+    // megabyte each, to draw the same thing this draws with one.
     const layer = document.createElement('div');
-    layer.className = 'driftband';
+    layer.className = 'driftpages';
     layer.setAttribute('aria-hidden', 'true');
-    layer.innerHTML =
-      `<div class="driftrun"><img src="${href}" alt=""><img src="${href}" alt=""></div>`;
-    hero.insertBefore(layer, hero.firstChild);
-  }
-
-  /* ── 2. scrolling plays the piece ───────────────────────────────────── */
-  /* The visitor does not watch a demonstration, they drive one: the sample
-   * is scrubbed by scroll position, so moving down the page advances the
-   * music and the score band moves with it. The gesture they were making
-   * anyway becomes the playhead.
-   *
-   * The video is paused for this — letting it play as well would fight the
-   * scrubbing — and the position is only touched inside an animation frame,
-   * because seeking on every scroll event stutters. */
-  function scrub() {
-    const video = $('.samplevid');
-    const hero = $('.hero');
-    if (!video || !hero) return;
-
-    // Only while the hero is on screen. Past it the video goes back to
-    // playing on its own: a scrubbed video left behind is a video frozen
-    // on its last frame, which reads as broken rather than as finished.
-    let owned = false, target = 0, queued = false;
-    const apply = () => {
-      queued = false;
-      if (!video.duration || Number.isNaN(video.duration)) return;
-      try { video.currentTime = target * video.duration; } catch (err) { }
-    };
-
-    const onScroll = () => {
-      const box = hero.getBoundingClientRect();
-      const past = -box.top;
-      // Spread the piece over twice the hero's height, so sixteen seconds
-      // of music take a comfortable amount of scrolling rather than
-      // flashing past in a flick of the wheel.
-      const span = Math.max(1, box.height * 2);
-      const inside = past > -innerHeight * 0.2 && past < span;
-
-      if (inside && !owned) { owned = true; video.pause(); }
-      if (!inside && owned) {
-        owned = false;
-        // Handed back where the scrubbing left it, still playing.
-        video.play().catch(() => { });
-      }
-      if (!owned) return;
-      target = Math.max(0, Math.min(1, past / span));
-      if (!queued) { queued = true; requestAnimationFrame(apply); }
-    };
-
-    const begin = () => {
-      addEventListener('scroll', onScroll, { passive: true });
-      onScroll();
-    };
-    if (video.readyState >= 1) begin();
-    else video.addEventListener('loadedmetadata', begin, { once: true });
+    layer.style.backgroundImage =
+      `url("/api/library/${encodeURIComponent(name)}/page?n=1")`;
+    document.body.insertBefore(layer, document.body.firstChild);
   }
 
   /* ── 3. the headline in musical time ────────────────────────────────── */
@@ -226,7 +186,7 @@
     host.appendChild(figure);
   }
 
-  const MOTION = { drift, scrub, rubato, count, settle };
+  const MOTION = { drift, rubato, count, settle };
 
   function start() {
     Object.entries(MOTION).forEach(([name, run]) => {

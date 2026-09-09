@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -150,6 +151,67 @@ def api_library():
 def api_stats():
     """What this install has actually done. Counts, never estimates."""
     return jsonify({"videos": stats.videos()})
+
+
+@bp.get("/api/library/<path:name>/page")
+def api_page(name: str):
+    """One full engraved page from a score, for use as page furniture.
+
+    The bands are strips cut for the video; these are the whole plate as it
+    was engraved, which is what you want behind a page of text. They are
+    already beside the package — music_line_extractor writes them next to
+    the bands — so nothing has to be opened or extracted.
+
+    Vector only, deliberately: a bitmap of an A4 plate is a megabyte and
+    cannot be recoloured, and this is decoration that must never cost more
+    than the content it sits behind.
+    """
+    package = library.find(name)
+    if package is None:
+        return jsonify({"error": f"No score package named {name!r}."}), 404
+
+    pages = sorted(package.root.glob("pages/page_*.svg"))
+    if not pages:
+        return jsonify({"error": "That score has no engraved pages."}), 404
+
+    wanted = request.args.get("n", type=int) or 1
+    chosen = pages[max(0, min(len(pages) - 1, wanted - 1))]
+
+    ink = _hex_colour(request.args.get("ink", ""))
+    body = _tint(chosen, ink) if ink else chosen.read_text(encoding="utf-8")
+    return _svg_response(body, f"{chosen}|{chosen.stat().st_mtime_ns}|{ink}")
+
+
+def _svg_response(body: str, tag: str):
+    """An SVG, compressed when the client will take it.
+
+    These plates are a third of a megabyte of markup each and compress
+    about tenfold. Uncompressed, using them as page furniture would cost
+    more than everything else on the page put together, which is not a
+    trade decoration is allowed to make. Flask does not compress anything
+    by itself, so it is done here.
+    """
+    raw = body.encode("utf-8")
+    accepts = "gzip" in request.headers.get("Accept-Encoding", "").lower()
+    payload = gzip.compress(raw, 6) if accepts else raw
+
+    response = Response(payload, mimetype="image/svg+xml")
+    if accepts:
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Vary"] = "Accept-Encoding"
+    response.headers["Content-Length"] = str(len(payload))
+    response.set_etag(hashlib.sha1(f"{tag}|{_TINT_RULE}".encode()).hexdigest())
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response.make_conditional(request)
+
+
+@bp.get("/api/library/<path:name>/pages")
+def api_pages(name: str):
+    """How many engraved pages this score has."""
+    package = library.find(name)
+    if package is None:
+        return jsonify({"error": f"No score package named {name!r}."}), 404
+    return jsonify({"pages": len(sorted(package.root.glob("pages/page_*.svg")))})
 
 
 @bp.get("/api/library/<path:name>/band")

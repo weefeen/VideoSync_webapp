@@ -187,6 +187,26 @@
   transform-origin: right center;
   text-shadow: 0 1px 0 rgba(255, 255, 255, .6);
 }
+
+/* A slow lift from yellow toward a deeper gold and back — the look of ink
+ * catching the light rather than a thing demanding attention. Seven
+ * seconds, so it is never in step with anything and never twice in the
+ * same glance; and both ends are darker than the paper by at least the
+ * contrast the plain gold had, so the shine never costs legibility.
+ *
+ * Stopped for anyone who has asked for less movement: a pulsing colour is
+ * exactly what that setting is for, and the note still reads in the gold
+ * it settles on. */
+@media (prefers-reduced-motion: no-preference) {
+  .hero .artifact .handnote {
+    animation: handshine 7s ease-in-out infinite;
+  }
+}
+@keyframes handshine {
+  0%, 100% { color: #b8860b; }        /* 2.9:1 on this paper */
+  38%      { color: #cf9c12; }        /* the yellow end, still 2.4:1 */
+  70%      { color: #a4780a; }        /* the deep end,   3.5:1 */
+}
 @media (max-width: 600px) {
   .hero .artifact .handnote { font-size: 20px; margin-bottom: 8px; }
 }

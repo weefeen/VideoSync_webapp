@@ -10,29 +10,44 @@
 
 @media (prefers-reduced-motion: no-preference) {
 
-/* ── 1. the engraving drifting behind the headline ────────────────────── */
-.driftband {
-  position: absolute;
+/* ── 1. an engraved page behind the whole page ────────────────────────── */
+/* One plate, fetched once and tiled down the screen by the browser. The
+ * drift is the background moving, not the element — so the loop is endless
+ * and seamless by construction, with nothing to stack, duplicate or line up.
+ *
+ * Fixed rather than scrolled, so the reader moves and the music stays put:
+ * the page reads as laid over sheet music rather than dragging a picture
+ * behind it. Six percent opacity, which is enough to see when you look for
+ * it and not enough to notice while reading. */
+.driftpages {
+  position: fixed;
   inset: 0;
-  z-index: 0;                 /* .hero > * is z-index 1, so this sits under */
-  overflow: hidden;
+  z-index: 0;
   pointer-events: none;
-  /* Fades out at both ends so it reads as texture rather than as a strip
-     someone forgot to finish. */
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
-          mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  opacity: .06;
+  background-repeat: repeat-y;
+  background-position: center 0;
+  /* The HEIGHT is fixed and the width follows from A4, not the other way
+     round. It matters: the animation below travels one tile height, so if
+     that height varied with the viewport — as it does when the width is
+     what is pinned — the loop would land mid-plate and show a seam on
+     every screen except one. */
+  background-size: auto 1020px;
+  /* Faded at top and bottom so the plates never end on a hard edge. */
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 12%, #000 88%, transparent);
+          mask-image: linear-gradient(180deg, transparent, #000 12%, #000 88%, transparent);
+  animation: driftpages 200s linear infinite;
 }
-.driftband .driftrun {
-  display: flex;
-  width: 200%;
-  height: 100%;
-  align-items: center;
-  opacity: .06;               /* barely there: it must never compete with type */
-  animation: driftrun 90s linear infinite;
+/* Exactly one tile height, so the last frame shows what the first did. */
+@keyframes driftpages {
+  from { background-position: center 0; }
+    to { background-position: center -1020px; }
 }
-.driftband img { width: 50%; height: auto; object-fit: contain; }
-@keyframes driftrun { from { transform: translateX(0); }
-                        to { transform: translateX(-50%); } }
+/* The page's own content has to sit above it. `main` and the rest are not
+   positioned by the design, so without this they share a stacking context
+   with the backdrop and depend on document order. */
+body > .top, body > main, body > footer, body > .foot,
+body > .srcfoot, body > .confirm { position: relative; z-index: 1; }
 
 /* ── 3. the headline in musical time ──────────────────────────────────── */
 .rubatoword {

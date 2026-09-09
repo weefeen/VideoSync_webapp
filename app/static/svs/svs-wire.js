@@ -1291,7 +1291,7 @@ function handNote(){
   const note = document.createElement('span');
   note.className = 'handnote';
   note.dataset.hand = '1';
-  note.textContent = 'Full HD video compatible, high quality score';
+  note.textContent = 'Full HD video compatible, high quality score, free, no login!';
   figure.insertBefore(note, figure.firstElementChild);
 }
 handNote();
