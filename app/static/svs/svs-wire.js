@@ -924,44 +924,39 @@ trimFreeLine();
 document.addEventListener('DOMContentLoaded', trimFreeLine);
 
 /* ── how many videos have actually been made ─────────────────────────── */
-/* The server counts finished renders and nothing else — never an
- * estimate, and never a flattering guess. It is shown from zero upwards,
- * so what is on the page is always the real number. */
+/* The server counts finished renders and nothing else — never an estimate,
+ * never a flattering guess. Given the display face the design reserves for
+ * numbers that matter, under the standfirst where the eye already is,
+ * rather than whispered in the caption. */
+const countCSS = document.createElement('style');
+countCSS.textContent = `
+  .madecount{display:flex;align-items:baseline;gap:12px;margin:26px 0 0;
+    padding-top:18px;border-top:1px solid var(--hair-2)}
+  .madecount b{font-family:Fraunces,Georgia,serif;font-weight:300;
+    font-size:clamp(30px,3.6vw,42px);letter-spacing:-.03em;line-height:1;
+    color:var(--b2);font-variant-numeric:tabular-nums}
+  .madecount span{font-family:"JetBrains Mono",monospace;font-size:9.5px;
+    font-weight:500;letter-spacing:.19em;text-transform:uppercase;
+    color:var(--soft);max-width:16ch;line-height:1.5}
+`;
+document.head.appendChild(countCSS);
+
 async function showCount(){
-  const badge = document.querySelector('.artifact .badge');
-  if(!badge) return;
+  const standfirst = document.querySelector('section[data-s="pick"] .standfirst');
+  if(!standfirst || standfirst.parentNode.querySelector('.madecount')) return;
   let made = 0;
   try{
     const r = await fetch('/api/stats');
     made = (await r.json()).videos | 0;
   }catch(err){ return; }
-  const caption = document.querySelector('.artifact figcaption');
-  if(!caption || caption.dataset.counted) return;
-  caption.dataset.counted = '1';
-  const line = document.createElement('span');
-  line.className = 'lab';
-  line.style.color = 'var(--soft)';
-  line.textContent = made === 1 ? '1 video made' : `${made} videos made`;
+
+  const line = document.createElement('p');
+  line.className = 'madecount';
   line.title = 'Finished videos, counted — not an estimate';
-  caption.insertBefore(line, caption.firstChild);
+  line.innerHTML = `<b>${made.toLocaleString()}</b>`
+    + `<span>${made === 1 ? 'video made<br>with Weefeen'
+                          : 'videos made<br>with Weefeen'}</span>`;
+  standfirst.insertAdjacentElement('afterend', line);
 }
 showCount();
-
-/* ── the design's own screen switcher ────────────────────────────────── */
-/* Upload / Recognised / Unrecognised / How it looks / Inspector open /
- * Almost there / Sent — the jump list that let the mock be reviewed
- * without a server. With a server there is nothing to jump to: every one
- * of those states is reached by using the thing. It also fakes a piece
- * being chosen when none was uploaded, which is exactly the sort of lie
- * this wiring exists to remove.
- *
- * Kept under ?debug, where it is a way to see a screen without waiting
- * forty-five seconds for it. */
-function removeScreenSwitcher(){
-  const sw = document.querySelector('#sw');
-  if(!sw) return;
-  if(DEBUG){ sw.style.opacity = '.5'; return; }
-  sw.remove();
-}
-removeScreenSwitcher();
-document.addEventListener('DOMContentLoaded', removeScreenSwitcher);
+document.addEventListener('DOMContentLoaded', showCount);
