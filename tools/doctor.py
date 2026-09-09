@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from app import package as pkg          # noqa: E402
+from app import svg               # noqa: E402
 from app.settings import settings       # noqa: E402
 
 OK, BAD, WARN = "  OK  ", " FAIL ", " WARN "
@@ -40,12 +41,16 @@ def main() -> int:
             ver = subprocess.run([exe, "-version"], capture_output=True, text=True)
             print(f"         {ver.stdout.splitlines()[0][:76]}")
 
-    try:
-        import cairosvg  # noqa: F401
+    # Asked through app.svg rather than by importing cairosvg here: on
+    # Windows the native library only loads after the conda environment's
+    # Libraryin is put on the path, which app.svg does — and it fails
+    # with OSError rather than ImportError, so a narrower except let the
+    # doctor die on the exact machine it exists to diagnose.
+    if svg.available():
         print(f"[{OK}] cairosvg  present — .svg bands render at target resolution")
-    except ImportError:
-        print(f"[{WARN}] cairosvg  missing — .svg bands unsupported, "
-              f"raster only (pip install cairosvg)")
+    else:
+        print(f"[{WARN}] cairosvg  unavailable — .svg bands cannot be rasterised")
+        print(f"         {svg.why_unavailable()}")
 
     print("\n=== score packages ===")
     usable: dict[str, tuple] = {}
