@@ -932,16 +932,19 @@ const countCSS = document.createElement('style');
 countCSS.textContent = `
   /* Beside the standfirst, not a band across the page. Read easily,
      said once, and not shouted. */
-  .madecount{display:inline-flex;align-items:baseline;gap:10px;
-    margin:22px 0 0;padding:9px 14px 9px 12px;
+  /* Centred on each other: a 23px numeral sitting on the same baseline as
+     9.5px small caps reads as though the text has slipped. */
+  .madecount{display:inline-flex;align-items:center;gap:11px;
+    margin:22px 0 0;padding:10px 15px 10px 13px;
     border-left:2px solid var(--mag);background:var(--surface);
     border-radius:2px}
   .madecount b{font-family:Fraunces,Georgia,serif;font-weight:400;
     font-size:23px;letter-spacing:-.02em;line-height:1;color:var(--b1);
-    font-variant-numeric:tabular-nums}
+    font-variant-numeric:tabular-nums;display:flex;align-items:center}
   .madecount span{font-family:"JetBrains Mono",monospace;font-size:9.5px;
     font-weight:500;letter-spacing:.16em;text-transform:uppercase;
-    color:var(--ink);line-height:1.5}
+    color:var(--ink);line-height:1;display:flex;align-items:center;
+    padding-top:1px}
 `;
 document.head.appendChild(countCSS);
 
