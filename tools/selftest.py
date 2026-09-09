@@ -203,6 +203,10 @@ def check_pair_list_is_read_without_the_dependency() -> str:
     Kept as a check rather than a comment because the tempting cleanup — "we
     already have a class for this, import it" — reintroduces the bug, and on
     Windows nothing would show it.
+
+    Narrow on purpose. Whether the parsing is *correct* is settled by
+    `check_piece_ids_resolve` actually resolving one; this only guards the
+    one edit that would quietly hand the job back to the broken parser.
     """
     text = (ROOT / "tools" / "identify_runner.py").read_text(encoding="utf-8")
     # An import, not a mention: the docstrings there name the class on
@@ -213,10 +217,7 @@ def check_pair_list_is_read_without_the_dependency() -> str:
         raise Failed(f"identify_runner imports ScoreLabels again "
                      f"({imported.group(0).strip()}); it builds its lookup "
                      f"with pathlib.Path, which is wrong on Linux")
-    if "PureWindowsPath" not in text:
-        raise Failed("identify_runner no longer parses the pair list with "
-                     "PureWindowsPath, so Windows paths will not split on Linux")
-    return "parsed locally, with the Windows flavour"
+    return "no import of the unportable parser"
 
 
 # --------------------------------------------------------------------------
