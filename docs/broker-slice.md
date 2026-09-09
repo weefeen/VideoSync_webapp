@@ -2,10 +2,11 @@
 
 Design for review. Nothing here is implemented yet.
 
-**Status: step 1 of §14 is done and proved (see `deployment-log.md` §12).
-§12's contradictions are settled — the development page is retired and there
-is no files transport. §13 still holds one unknown: the production broker's
-RabbitMQ version, which only matters at step 3.**
+**Status: steps 1 and 2 of §14 are done and proved (`deployment-log.md` §12
+and §13). §12's contradictions are settled — the development page is retired
+and there is no files transport. Step 3 is next and needs two things the
+owner has not yet given: a RabbitMQ server on the dev node, and `pika` as a
+dependency. §13's unknown still stands: the production broker's version.**
 
 Scope of this slice: split the worker out of the Flask process **on a single
 node**, with RabbitMQ between them. One host, same storage, same code paths.
@@ -506,10 +507,13 @@ points is enough.
    written, because §12's open question was settled the other way — the
    development page is retired, `/` redirects to `/app/`, and `/events`,
    `stream()`, `subscribe`/`_emit` and the in-memory queues are all gone.
-2. **The transport seam.** `transport.py` with `LocalTransport` only,
-   `worker.handle_task`, `webside.py`, `Registry` shrunk, `resume()`'s
-   statement gone. *Proof:* the end-to-end selftest check; restart mid-queue on
-   Windows recovered by the janitor, not by a special case.
+2. ~~**The transport seam.**~~ **DONE.** `transport.py` with
+   `LocalTransport` only, `worker.handle_task`, `webside.py`, `Registry`
+   shrunk from 455 lines to about 250, `claim_next` deleted, `resume()`'s
+   statement gone. *Proved:* 14 checks green on both platforms, one of which
+   runs the whole seam with the render stubbed; and a real render on the node
+   came out **byte for byte identical** to step 1's, at 547.9 s against
+   550.8 s — see `deployment-log.md` §13.
 3. **AMQP.** `AmqpTransport`, `python -m app.queue.worker`,
    `tools/brokercheck.py`, `pika` in requirements. *Proof:* the seven live
    checks on the dev node, written into the deployment log.

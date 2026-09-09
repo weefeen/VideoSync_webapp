@@ -409,6 +409,57 @@ API the designed interface calls, and nothing more.
 
 ---
 
+## 13. The queue slice, step 2 — the transport seam, proven
+
+`docs/broker-slice.md` step 2: the work leaves `Registry` for
+`app/queue/worker.py`, the applier and janitor threads arrive in
+`app/queue/webside.py`, and everything travels through a `Transport`. There
+is one implementation and it is two in-memory queues, so nothing is
+distributed yet — but the whole path is now the one a broker will carry:
+
+    routes -> publish -> transport -> worker -> events -> transport
+           -> applier -> ledger -> row
+
+Same probe as §12, on the node:
+
+     elapsed  state     stage
+          0s  running   align
+         20s  running   strip
+         45s  running   encode
+        550s  done      done
+
+    output       131,321,451 bytes — byte for byte what §12 produced
+    stage record render, attempt 1, done, elapsed 547.9 s   (§12: 550.8 s)
+
+Two structural changes worth knowing about, both of which would have been
+bugs later:
+
+- **`store.claim_next` is gone.** The queue is the claim now. Keeping a
+  second way to take a job would let two workers reach one render by two
+  different routes.
+- **`resume()`'s `running -> queued` statement is gone from startup.** It
+  was harmless while the worker was a thread in the same process. Once the
+  worker is a separate process it is actively wrong: restarting the web side
+  during a render would re-queue work that is still going, and hand out a
+  second copy of it. Recovery now asks the transport whether it survives a
+  restart — only the in-process one says no.
+
+`MAX_CONCURRENT_RENDERS` now counts consumers rather than threads, and
+anything but 1 is refused at startup with the reason, because nothing yet
+stops two consumers rendering the same task. The guard for that is the
+per-attempt record, and it arrives with the broker.
+
+### Checks
+
+Fourteen, both platforms. The new one runs the entire seam with the render
+stubbed — publish, consume, report, apply — so the shapes, the ordering and
+the ledger's rules are exercised on every push without a broker anywhere.
+
+    win32  python 3.12.7  all 14 passed
+    linux  python 3.12.3  all 14 passed
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;
