@@ -1,0 +1,75 @@
+/* Styles for the five motion ideas in svs-motion.js.
+ *
+ * A proposal, not a decision. Delete this file and its script together.
+ *
+ * Everything here is inside a reduced-motion guard, so a visitor who has
+ * asked their system for less movement gets a still page — the effects do
+ * not run, and nothing is left half-animated with opacity at zero. That
+ * last part matters more than it sounds: an entrance animation that never
+ * fires is a page with invisible text on it. */
+
+@media (prefers-reduced-motion: no-preference) {
+
+/* ── 1. the engraving drifting behind the headline ────────────────────── */
+.driftband {
+  position: absolute;
+  inset: 0;
+  z-index: 0;                 /* .hero > * is z-index 1, so this sits under */
+  overflow: hidden;
+  pointer-events: none;
+  /* Fades out at both ends so it reads as texture rather than as a strip
+     someone forgot to finish. */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+.driftband .driftrun {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  align-items: center;
+  opacity: .06;               /* barely there: it must never compete with type */
+  animation: driftrun 90s linear infinite;
+}
+.driftband img { width: 50%; height: auto; object-fit: contain; }
+@keyframes driftrun { from { transform: translateX(0); }
+                        to { transform: translateX(-50%); } }
+
+/* ── 3. the headline in musical time ──────────────────────────────────── */
+.rubatoword {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(.14em);
+  animation: rubatoword .62s cubic-bezier(.22, .68, .28, 1) forwards;
+}
+@keyframes rubatoword { to { opacity: 1; transform: none; } }
+
+/* ── 5. notes landing on a staff ──────────────────────────────────────── */
+.settlestaff { margin-top: 14px; }
+.settlestaff svg { display: block; width: 100%; max-width: 460px; height: auto; }
+.settlestaff .sline {
+  stroke: var(--ink);
+  stroke-width: .8;
+  opacity: .30;
+  stroke-dasharray: 460;
+  stroke-dashoffset: 460;
+  animation: drawline .9s cubic-bezier(.2, .7, .3, 1) forwards;
+}
+.settlestaff .snote {
+  fill: var(--b2);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: landnote .34s cubic-bezier(.2, .8, .3, 1) forwards;
+}
+@keyframes drawline { to { stroke-dashoffset: 0; } }
+@keyframes landnote {
+  from { opacity: 0; transform: translateY(-9px) scale(.7); }
+    to { opacity: .85; transform: none; }
+}
+
+}  /* end reduced-motion guard */
+
+/* Scroll-scrubbing (2) and the counter (4) need no styling: one moves a
+   video's playhead, the other rewrites a number. Both check the same
+   preference in script, since neither can be expressed as a CSS animation
+   that a media query could simply switch off. */

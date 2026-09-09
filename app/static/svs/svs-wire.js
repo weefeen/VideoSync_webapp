@@ -1031,6 +1031,21 @@ responsive.rel = 'stylesheet';
 responsive.href = 'svs-responsive.css';
 document.head.appendChild(responsive);
 
+/* ── motion, on trial ─────────────────────────────────────────────────── */
+/* Five ideas for movement on the landing page, so they can be judged by
+ * looking rather than by description. Try one at a time with ?motion=drift,
+ * scrub, rubato, count or settle; ?motion=none turns them all off.
+ *
+ * These four lines and the two files they name are the whole of it — remove
+ * them together and the page is exactly as it was. */
+const motionCss = document.createElement('link');
+motionCss.rel = 'stylesheet';
+motionCss.href = 'svs-motion.css';
+document.head.appendChild(motionCss);
+const motionJs = document.createElement('script');
+motionJs.src = 'svs-motion.js';
+document.head.appendChild(motionJs);
+
 /* ── the design's own screen switcher ────────────────────────────────── */
 /* Upload / Recognised / Unrecognised / How it looks / Inspector open /
  * Almost there / Sent — the jump list that let the mock be reviewed
