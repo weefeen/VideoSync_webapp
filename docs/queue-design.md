@@ -12,7 +12,9 @@ always-on Linode for the page; **at most one** CPU-only compute Linode,
 **created** when work exists and **destroyed** after a grace period;
 **libx264**; **no GPU anywhere** (CPU recognition measured at 130 s cold
 against 78 s on the RTX, same verdict); object storage between the
-hosts; limits on **two axes**, file size and duration;
+hosts; limits on **three axes** — file size, duration, and memory,
+which grows with the square of duration (§1.2) — with **25 minutes and
+an 8 GB instance** decided by the owner on seeing the memory table;
 **debuggability as a requirement**: for any failure, which stage, what
 it read, what it wrote, what it said — from a machine that may no
 longer exist; **observability designed fresh** — Prometheus and Grafana
@@ -36,19 +38,22 @@ machine), §7 (failure and diagnostics), §9 (the singleton's life), §14
 
 ---
 
-## 1. The cost model: two axes, measured where possible
+## 1. The cost model: three axes, measured where possible
 
 The owner sizes the compute box on two parameters — **file size**
 (attributed to the embed, ~7 min/GB on CPU) and **duration** (chroma and
-alignment). Both axes bound what a visitor may submit and both are
-budgeted (§11.4); nothing structural depends on which dominates. The job
+alignment). A third, found by measurement after those two were written,
+is **memory**: the alignment's DTW is quadratic in duration (§1.2), and
+it — not cores — is what the duration cap actually buys. All three bound
+what a visitor may submit; the first two are budgeted (§11.4); nothing
+structural depends on which dominates the *time*. The job
 table records elapsed, bytes and duration per stage so the constants
 are measured, not believed. Where the evidence stands today:
 
 | Stage | Depends on | Measured | Source |
 |---|---|---|---|
 | identify | neither (`MAX_WINDOWS=8`) | **78 s cold on the RTX, 130 s cold on CPU** — process start + 165 MB checkpoint + 8 windows; 27–44 s warm on the RTX | coordinator, n=1, workstation CPU |
-| chroma + sync | duration | ~1.7 s per minute of music (13 s + 0.5 s for 7.5 min) | coordinator |
+| chroma + sync | duration — and **memory, quadratic in duration** | ~1.7 s per minute of music (13 s + 0.5 s for 7.5 min); **24 bytes per DTW cell** (§1.2) | coordinator |
 | fetch | bytes | intra-region transfer, ~0.15 min/GB assumed | unmeasured |
 | embed | duration **and** bytes | one job on disk: 16 MB, 640×360, 7.25 min in → 105 MB 1080p out, **356 s** wall from `sync/` creation to the mp4 (10:35:41 → 10:41:37). 7 min/GB would predict 7 s. The encoder makes a 1080p frame per performance frame whatever the input, so the duration term (~0.8 min/min here) dominates the decode/size term; the owner's 7 min/GB is that same rule seen through competition footage at ~1.4 GB per 10 min | on disk today |
 
@@ -66,51 +71,132 @@ constant that has not been re-measured on the actual instance type**.
 ### 1.1 The caps — settled
 
 ```ini
-MAX_DURATION_MINUTES=40         # "all Chopin pieces are less than 40 min" — the owner. Nothing equivalent exists today.
+MAX_DURATION_MINUTES=25         # the owner, on seeing §1.2: "let's start with 25 minutes and 8 GB". Nothing equivalent exists today.
 MAX_UPLOAD_GB=4                 # 0.5 today (routes.py:28). See below.
 ```
 
-**Duration = 40 min** puts a ceiling on every job. From the one measured
-render (0.82 s of processing per second of music — **n = 1, a
-workstation, a 640×360 source; x264 scales with cores, so the Linode
-plan sets this ratio and the whole ETA rests on it; it must be
-re-measured on the actual instance before any minute figure is shown
-to a visitor, and `stage_runs` replaces it from the first ten jobs**):
+**Duration = 25 min** puts a ceiling on every job — and, through §1.2,
+on the instance's memory. From the one measured render (0.82 s of
+processing per second of music — **n = 1, a workstation, a 640×360
+source; x264 scales with cores, so the Linode plan sets this ratio and
+the whole ETA rests on it; it must be re-measured on the actual instance
+before any minute figure is shown to a visitor, and `stage_runs`
+replaces it from the first ten jobs**):
 
-| Stage | 40-minute job (worst case) | Typical Chopin piece, 8–15 min |
+| Stage | 25-minute job (worst case) | Typical Chopin piece, 8–15 min |
 |---|---|---|
 | extract audio | < 1 min | seconds |
 | identify | ~2 min (duration-independent, `MAX_WINDOWS=8`) | ~2 min |
-| chroma + sync | ~1 min (1.7 s per minute of music) | ~20 s |
+| chroma + sync | ~0.7 min (1.7 s per minute of music) | ~20 s |
 | fetch | ~0.5 min at 4 GB | seconds |
-| encode | ~33 min | 7–12 min |
-| **whole job** | **~36 min** | **~10–16 min** |
+| encode | ~20.5 min | 7–12 min |
+| **whole job** | **~24 min** | **~10–16 min** |
 
-**Size = 4 GB.** The pipeline renders to a fixed 1080p canvas whatever
-comes in (`render.py:52`, `ASPECTS`; the source is scaled and cropped
-into it at `:509-514`), so a 4K upload spends the visitor's upload time
-and our transfer on pixels that are thrown away. Forty minutes of 1080p
-at a generous 13 Mbit/s is 3.9 GB; 4 GB therefore accepts anything
-sensibly encoded and refuses 4K, and the refusal message can say
-"export at 1080p". I agree with the figure. Two consequences: the
-decode/size term of the encode is bounded to a few minutes at most, and
-the design sits at the **small end** — uploads can keep going through
-Apache and Flask (§10.2 says what Apache needs for a 4 GB body), and
-direct-to-bucket upload with resume (step 7) becomes an optimisation
-for when the web host's bandwidth or staging disk is the constraint,
-not a requirement.
+**Size = 4 GB, unchanged.** The pipeline renders to a fixed 1080p canvas
+whatever comes in (`render.py:52`, `ASPECTS`; the source is scaled and
+cropped into it at `:509-514`), so a 4K upload spends the visitor's
+upload time and our transfer on pixels that are thrown away.
+Twenty-five minutes of 1080p at a generous 13 Mbit/s is 2.4 GB; 4 GB
+therefore accepts anything sensibly encoded — even a 21 Mbit/s camera —
+and refuses 4K (25 min at 50 Mbit/s is 9 GB), and the refusal message
+can say "export at 1080p". I agree with the figure. Two consequences:
+the decode/size term of the encode is bounded to a couple of minutes,
+and the design sits at the **small end** — uploads can keep going
+through Apache and Flask (§10.2 says what Apache needs for a 4 GB body),
+and direct-to-bucket upload with resume (step 7) becomes an
+optimisation for when the web host's bandwidth or staging disk is the
+constraint, not a requirement.
 
-**Is the on-demand singleton still justified with 36-minute jobs?** Not
-by job length; by price. The alternative is *one always-on box big
-enough to encode* — an 8-core dedicated Linode, ~$144/month — against
-compute billed only while it exists: $3–35/month at "a handful a day"
-(§11.3). What the split costs is engineering (steps 4–6) and a
-~2-minute creation at the start of each idle gap; a session of three
-typical jobs then lives ~45 min plus the grace. Because Linode bills an
-instance whether busy or idle, create/destroy is cheaper at every
-utilisation below ~90 %; job length never decides it. **Ship steps 1–3
-on one box, measure, then build the split.** Nothing in steps 1–3 is
-discarded by it.
+**Is the on-demand singleton still justified with 24-minute jobs?** Not
+by job length; by price. The alternative is *one always-on box with the
+memory of §1.2 and the cores to encode* — an 8 GB dedicated Linode,
+~$72/month — against compute billed only while it exists: $2–12/month
+at "a handful a day" (§11.3). What the split costs is engineering
+(steps 4–6) and a ~2-minute creation at the start of each idle gap; a
+session of three typical jobs then lives ~45 min plus the grace.
+Because Linode bills an instance whether busy or idle, create/destroy
+is cheaper at every utilisation below ~90 %; job length never decides
+it. **Ship steps 1–3 on one box, measure, then build the split.**
+Nothing in steps 1–3 is discarded by it.
+
+### 1.2 The third axis: memory, quadratic in duration — what sizes the box
+
+`api_audio/sync.py`'s `dtw_between_chromas` calls
+`librosa.sequence.dtw(x1, x2, subseq=False)` — the full cost matrix, no
+band, no global constraint. `services/audio_to_chroma.py` sets
+`HOP_SIZE = 2205` at 22050 Hz, i.e. **10 frames per second**, and
+`sync_dtw` pads 5 s of silence at each end (+100 frames). Measured by
+the coordinator with `tracemalloc`, three consistent runs at 60, 120
+and 240 s (a first 30 s run read 512 B/cell and was discarded — it had
+caught librosa's import allocations): **24.0 bytes per DTW cell**, i.e.
+three 8-byte arrays over the matrix.
+
+```
+cells = (minutes × 600 + 100)²        peak ≈ cells × 24 bytes
+```
+
+| cap | DTW peak | smallest plan that holds it |
+|---|---|---|
+| 10 min | 0.89 GB | 2 GB |
+| 15 min | 1.99 GB | 4 GB |
+| 20 min | 3.51 GB | 8 GB |
+| **25 min** | **5.47 GB** | **8 GB** |
+| 31 min | 8.39 GB | 16 GB — the longest recording in the corpus |
+| 40 min | 13.94 GB | 16 GB — what this document specified before the measurement |
+| 60 min | 31.28 GB | 32 GB |
+
+The corpus (249 recordings, measured): median 3.5 min = 0.12 GB, p95
+12.8 min = 1.45 GB. **The owner's decision: 25 minutes and 8 GB.** It
+covers every identified piece in the corpus including the longest
+concerto movement (`mov_op_11_mvt1`, 23.4 min) and excludes one
+unlabelled 31-minute outlier out of 249 — at half the memory of a
+40-minute cap. This section previously said the worst overlap "fits an
+8-core/16 GB plan" on the strength of ffmpeg and torch alone; that
+figure was wrong because it did not count the DTW.
+
+**What the plan buys, kept separate.** Linode names dedicated plans by
+RAM: `g6-dedicated-8` is 8 GB with **4** dedicated cores (~$0.108/h,
+$72/month). Memory decides the plan; cores decide the encode ratio.
+The 0.82 s/s figure came from a workstation with more cores than four,
+so the encode on this plan may run nearer 1.2–1.6 s/s — a 25-minute
+piece then takes 30–40 min rather than 20. That is a throughput
+question answered by measurement in step 6 (`COMPUTE_TYPE` is a knob;
+the 16 GB plan has 8 cores at double the rate), not a memory one.
+
+**Fitting 5.5 GB into 8 GB on a box that runs other things.** The
+resident identify program holds torch and the checkpoint (~1.5–2 GB),
+the OS and the other programs ~0.5 GB, an encode ~1 GB; with the DTW at
+its peak the sum is ~9 GB. So on this plan:
+
+- a **`heavy` lock** on the singleton (`fcntl.flock` on
+  `/run/vsw/heavy.lock`), held by `embed` for the duration of the
+  encode and by `sync` for the DTW. They never coincide. It costs no
+  throughput: B's sync only has to finish before B's embed, which waits
+  for A's embed anyway. Recognition does not take the lock — its 2 GB is
+  in the baseline;
+- `sync` **pre-checks before allocating**: `cells × 24 > MEMORY_BUDGET_BYTES`
+  (from `duration_s` in the task) fails permanently with the honest
+  message, without touching memory (§7.1);
+- a **4 GB swap file** on the image as the last net — a DTW that spills a
+  little into swap is slow, not dead;
+- `oom_score_adj` per program in the supervisord confs: `sync` highest,
+  `embed` lowest, so if the kernel must kill something it kills the
+  cheap stage, not the encode;
+- step 6 measures the real baseline RSS on the plan; if baseline + 5.47 GB
+  leaves less than ~0.5 GB, the identify program becomes non-resident on
+  this plan (20 s more per recognition) or the plan goes to 16 GB.
+
+**The lever, for the owner — a note, not a proposal.** A banded DTW
+(Sakoe-Chiba) that stores only the band makes memory *linear* in
+duration and removes the cap as a constraint. It lives in the read-only
+VideoScoreSync repository, so it is his change, not ours. Note that
+librosa's `global_constraints=True, band_rad=…` masks the full matrix
+and saves **no** memory; the implementation has to allocate the band
+only (~`N × 2w` cells). Roughly: with a ±5-minute band (generous for
+tempo differences between a visitor and the reference) at the same
+24 B/cell, a 25-minute piece needs ~2.2 GB and an 8 GB box could take
+about 80 minutes; with float32 and a single array, several times that.
+Until then, 25 minutes.
 
 ---
 
@@ -150,7 +236,7 @@ discarded by it.
    │  ═══ Linode VLAN 10.0.0.0/24 (account-isolated L2) ═══  web 10.0.0.2 ◀──▶ compute 10.0.0.3 (fixed at create) ═══
    │      Cloud Firewall on both: public inbound = 22 (admin) + 80/443 (web) only. NEVER Linode's shared "private IP".
 
- COMPUTE LINODE — at most one; SAME REGION as www (VLANs do not cross regions); CPU only (8 dedicated cores); custom image; no secrets baked in
+ COMPUTE LINODE — at most one; SAME REGION as www (VLANs do not cross regions); CPU only, 8 GB / 4 dedicated cores (§1.2); custom image; no secrets baked in
    supervisord: ONE PROGRAM PER STAGE — one log, one restart domain, one queue each; the stage's library imported directly
    identify   engine env  torch CPU + indexes resident   vsw.identify   audio.wav → verdict.json → S            → event identified
    chroma     engine env  audio2chroma imported          vsw.chroma     audio.wav → chroma.npy → S               → vsw.sync
@@ -183,11 +269,15 @@ not by a single batch consumer:
   torch) overlapping an encode slows both for that minute, which is
   nothing against an hour — and if it is measured to hurt the
   interactive step, the identify program sends `SIGSTOP` to the running
-  ffmpeg for its minute and `SIGCONT` after (Linux, ten lines). Memory
-  at the worst overlap — ffmpeg 1–2 GB, torch ~2 GB, a 90-minute chroma
-  ~0.5 GB — fits an 8-core/16 GB plan. Strict global serialisation
-  would only add latency for the second visitor of an evening; I do
-  not think it is needed and do not propose it.
+  ffmpeg for its minute and `SIGCONT` after (Linux, ten lines).
+  **Memory is the one overlap that is forbidden:** a 25-minute
+  alignment peaks at 5.5 GB (§1.2) and cannot share an 8 GB box with an
+  encode, so `sync` and `embed` take the `heavy` lock and never run
+  together — at no cost to throughput, since B's sync only has to
+  precede B's embed, which waits for A's anyway. Everything else
+  overlaps freely. Strict global serialisation would only add latency
+  for the second visitor of an evening; I do not think it is needed and
+  do not propose it.
 - *Each stage runs under the interpreter that owns its library*, so
   `tools/identify_runner.py` and `tools/sync_runner.py` — which exist
   only because Flask's interpreter cannot import torch or numba — go
@@ -530,7 +620,8 @@ that produced it (§7.7).
 |---|---|---|
 | **permanent** | no audio (`identify.py:163`), too short (`:175`), partial recording (`sync.py:168-180`), no measures (`sync_runner.py:159`), "the alignment doesn't cover this video" (`render.py:426`), unknown package, ffmpeg rejecting the input | dead record + event `failed(permanent)`; ack; the visitor is **mailed why** (§13.2) |
 | **config** | an import that fails at program start, a missing index, the SVML abort (`sync.py:210-214`) — now caught by the startup self-test (§8.1), so it never reaches a job | program exits non-zero at start; supervisord shows `FATAL` after its retries; `tools/queue.py compute` shows it; nothing is consumed, nothing is lost |
-| **transient** | bucket GET/PUT errors, broker publish errors, ffmpeg killed by signal / exit 137 / "Cannot allocate memory", `RENDER_TIMEOUT` | `sleep(RETRY_DELAY_SECONDS)`, republish with `attempt+1`, ack the original; at the cap → `exhausted` |
+| **permanent — memory, deterministic** | the alignment's DTW needs `(D×600+100)² × 24` bytes (§1.2). Caught **before allocation** by `sync`'s pre-check against `MEMORY_BUDGET_BYTES`; if the estimate was wrong and it still fails, `MemoryError` in the program, or the OOM-killer taking it (seen by the next attempt as `interrupted`, on `sync`, with `dmesg`'s line in the shipped log) | permanent on the first `MemoryError`; on an OOM-kill of `sync` the next attempt re-runs the pre-check with a 20 % tighter budget and fails permanently rather than dying again. Retrying identically cannot succeed. Message to the visitor: "This recording is N minutes long, and aligning it needs more memory than our machine has; the limit is 25 minutes." Also mailed. |
+| **transient** | bucket GET/PUT errors, broker publish errors, `RENDER_TIMEOUT`, **ffmpeg killed by signal / exit 137 / "Cannot allocate memory"** — ffmpeg's own need is bounded (~1 GB at 1080p) and constant per resolution, so an OOM there is memory pressure from something *else* on the box, which a retry after the lock is released will not see | `sleep(RETRY_DELAY_SECONDS)`, republish with `attempt+1`, ack the original; at the cap → `exhausted` |
 | **interrupted** | the previous attempt's program died without reporting (kill, OOM, native abort, instance destroyed) — detected by the next attempt from the attempt markers | recorded against the dead attempt with a pointer to the shipped instance log; counted toward the cap like any attempt |
 
 ```ini
@@ -1070,7 +1161,10 @@ COMPUTE_MODE=auto                  # auto | always | never   (never = single-mac
 COMPUTE_POLL_SECONDS=10
 COMPUTE_GRACE_SECONDS=1800         # §9.5
 COMPUTE_CREATE_SECONDS=120         # what the UI and the ETA quote while creating; calibrated from the compute table
-COMPUTE_TYPE=g6-dedicated-8  COMPUTE_REGION=  COMPUTE_IMAGE=private/…  COMPUTE_VLAN=vsw  COMPUTE_FIREWALL_ID=
+COMPUTE_TYPE=g6-dedicated-8        # Linode names plans by RAM: 8 GB, 4 dedicated cores (§1.2). g6-dedicated-16 doubles both and the rate.
+COMPUTE_REGION=                    # MUST equal www's region
+COMPUTE_IMAGE=private/…  COMPUTE_VLAN=vsw  COMPUTE_FIREWALL_ID=
+MEMORY_BUDGET_BYTES=5900000000     # what sync may allocate for its DTW on this plan: 8 GB minus the measured baseline (§1.2)
 LINODE_TOKEN=                      # scoped: linodes read/write, images read, firewalls read, object-storage keys read/write
 ```
 
@@ -1083,23 +1177,24 @@ The cold start is paid **once per idle gap**, not once per job:
 arrivals cluster (someone shares the link, several people try it the
 same evening), and a visitor who arrives while the instance is up gets
 a warm recognition (no create, no 20 s import) and an embed that starts
-at once. The grace period buys that warmth with idle minutes. At an
-8-core dedicated Linode's ~$0.216/h ($0.0036/min), an idle gap that ends
-in a destroy costs `G × $0.0036`:
+at once. The grace period buys that warmth with idle minutes. At the
+8 GB dedicated plan's ~$0.108/h ($0.0018/min), an idle gap that ends in
+a destroy costs `G × $0.0018`:
 
 | grace → / sessions per day ↓ | 5 min | 10 min | 30 min | 60 min |
 |---|---|---|---|---|
-| **1** (one cluster a day) | $0.54/mo | $1.08 | $3.24 | $6.48 |
-| **3** | $1.62 | $3.24 | $9.72 | $19.44 |
-| **10** | $5.40 | $10.80 | $32.40 | $64.80 |
+| **1** (one cluster a day) | $0.27/mo | $0.54 | $1.62 | $3.24 |
+| **3** | $0.81 | $1.62 | $4.86 | $9.72 |
+| **10** | $2.70 | $5.40 | $16.20 | $32.40 |
 
 What each avoided cold start is worth: ~2 min of instance creation plus
 ~20 s of model load for the visitor (a warm recognition instead of a
 cold one), and the visitor who identified a piece and is choosing a
 style — typically a few minutes — never sees the instance vanish under
-them. **Recommend `COMPUTE_GRACE_SECONDS=1800` (30 min):** under $10/month
+them. **Recommend `COMPUTE_GRACE_SECONDS=1800` (30 min):** under $5/month
 at three sessions a day, and it covers both the "same evening" cluster
-and the identify-then-submit pause. If Linode bills any started hour in
+and the identify-then-submit pause. A session then lives for its jobs
+(≤ 24 min each, typically 10–16) plus 30 minutes. If Linode bills any started hour in
 full (**verify**), replace the fixed grace with "destroy at the end of
 the hour already paid for, but not sooner than 30 minutes idle"
 (`COMPUTE_ALIGN_TO_BILLING_HOUR=true`).
@@ -1176,8 +1271,8 @@ Every stage's output reaches the bucket before its flag, and every
 attempt's log before its final event, so a destroyed instance loses
 exactly the stage that was running and at most the last minute of its
 program log. Its disk is a cache. Storage at the caps of §1.1: a
-40-minute result at today's output bitrate (1.9 Mbit/s) is ~0.57 GB,
-ten a day for 30 days ≈ 170 GB; uploads at ≤ 4 GB × 7 days, ten a day
+25-minute result at today's output bitrate (1.9 Mbit/s) is ~0.36 GB,
+ten a day for 30 days ≈ 110 GB; uploads at ≤ 4 GB × 7 days, ten a day
 ≤ 280 GB and typically a tenth of that — inside Linode Object Storage's
 250 GB base plan or cents of overage; logs are kilobytes; egress is the
 visitors' downloads, cents.
@@ -1226,32 +1321,34 @@ consumer). ~20 lines; skip in step 1, add with the rank in step 3.
 
 ### 11.3 Capacity, and where create/destroy pays
 
-With the 40-minute ceiling every job costs `≈ 3 + 0.82·D` minutes of
+With the 25-minute ceiling every job costs `≈ 3 + 0.82·D` minutes of
 compute (identify 2, chroma/sync/extract ~1, encode 0.82 per minute of
-music, fetch seconds at ≤ 4 GB) plus the cold start and grace **once per
-session** — assumed here at one session per five jobs (2 min create +
-30 min grace ≈ 6.4 min per job). Rows are real Chopin lengths; the last
-is the ceiling.
+music — **on four cores this may be 1.2–1.6; measure**, §1.2 — fetch
+seconds at ≤ 4 GB) plus the cold start and grace **once per session** —
+assumed here at one session per five jobs (2 min create + 30 min grace
+≈ 6.4 min per job). Rows are real Chopin lengths; the last is the
+ceiling.
 
 | min/job ↓ · jobs/week → | 5 | 20 | 50 | 100 | 200 |
 |---|---|---|---|---|---|
-| **8** (a nocturne) | 1.3 h | 5.4 h | 14 h | 27 h | 54 h |
-| **15** (a ballade) | 1.8 h | 7.3 h | 18 h | 37 h | 73 h |
-| **25** (a sonata's half) | 2.5 h | 10 h | 25 h | 50 h | 100 h |
-| **40** (the ceiling) | 3.5 h | 14 h | 35 h | 71 h | 141 h |
+| **8** (a nocturne) | 1.3 h | 5.3 h | 13 h | 27 h | 53 h |
+| **15** (a ballade) | 1.8 h | 7.2 h | 18 h | 36 h | 72 h |
+| **20** (a scherzo pair) | 2.2 h | 8.6 h | 22 h | 43 h | 86 h |
+| **25** (the ceiling; the longest concerto movement) | 2.5 h | 10 h | 25 h | 50 h | 100 h |
 
-Dollars: ~$0.216/h → **$/month ≈ h/week × 0.94**; always-on the same
-plan is $144/month ≈ 150 h/week, which no cell reaches. The owner's
-"handful a day" (≤ 50/week, typically 8–15 min) is **$5–17/month** of
-compute; the page itself now costs nothing extra (§15.1). Prices are
-placeholders for the current list.
+Dollars: ~$0.108/h → **$/month ≈ h/week × 0.47**; always-on the same
+plan is $72/month ≈ 150 h/week, which no cell reaches. The owner's
+"handful a day" (≤ 50/week, typically 8–15 min) is **$2–9/month** of
+compute; the page itself now costs nothing extra (§15.1). If the
+four-core encode ratio measures at 1.5 rather than 0.82, multiply the
+hours by up to 1.6. Prices are placeholders for the current list.
 
-Saturation: at the worst case, 3 renders × 36 min = 108 compute-minutes
-per visitor per week, so **93 visitors** all at the ceiling fill the
+Saturation: at the worst case, 3 renders × 24 min = 72 compute-minutes
+per visitor per week, so **140 visitors** all at the ceiling fill the
 singleton 24/7; at typical 12-minute pieces (~13 compute-minutes each),
 ~260. Under create/destroy "saturation" means a growing queue and bill,
 which §11.5 caps. A session of three typical jobs keeps the singleton
-alive ~45 min plus the 30-min grace; one full-length job, ~36 + 30.
+alive ~45 min plus the 30-min grace; one full-length job, ~24 + 30.
 
 ### 11.4 Budgets on both axes — replacing the job count
 
@@ -1260,19 +1357,19 @@ or 4½ hours, 50 MB or 30 GB; the count bounds neither axis. Replace it:
 
 ```ini
 # Per visitor (by address, and by email), sliding week, as limits.py already counts.
-LIMIT_DURATION_MINUTES_PER_WEEK=120   # three full-length pieces, or ten nocturnes
+LIMIT_DURATION_MINUTES_PER_WEEK=75    # three full-length pieces, or nine nocturnes
 LIMIT_UPLOAD_GB_PER_WEEK=12           # 3 × MAX_UPLOAD_GB
 LIMIT_RENDERS_PER_WEEK=10             # kept only as a floor: every job pays a fixed ~3 min that neither axis
                                       # captures; 10 never binds for a person
-# Per job (§1.1)
+# Per job (§1.1, §1.2)
 MAX_UPLOAD_GB=4
-MAX_DURATION_MINUTES=40
+MAX_DURATION_MINUTES=25
 ```
 
-Arithmetic, worst case: 120 video-minutes ≈ 3 × (3 + 0.82 × 40) ≈ 108
-compute-minutes ≈ **$0.39 per visitor per week**, plus ≤ 12 GB × 7 days
+Arithmetic, worst case: 75 video-minutes ≈ 3 × (3 + 0.82 × 25) ≈ 71
+compute-minutes ≈ **$0.13 per visitor per week**, plus ≤ 12 GB × 7 days
 in the bucket. Typical case, three 12-minute pieces: ~39 compute-minutes
-≈ $0.14. Ten visitors a week at the worst case: under $17/month. The
+≈ $0.07. Ten visitors a week at the worst case: under $6/month. The
 duration budget is checked at `POST /render` against `duration_s`
 (exact) and both budgets provisionally at `POST /api/uploads`. A
 permanent failure still spends the budget — refunding it would make
@@ -1288,8 +1385,8 @@ MAX_QUEUE_MINUTES=240     # accepted-but-unfinished processing minutes, all visi
 At submit, if `cold + remaining(R) + Σ est(ahead) + est(new) > MAX_QUEUE_MINUTES`,
 refuse with `503` + `Retry-After`: "The queue is about N hours long
 right now. Your upload is kept for 7 days — try again after HH:MM." Four
-hours is six full-length jobs or about twenty typical ones ahead — an
-evening's burst — and with the 36-minute ceiling no honest ETA inside
+hours is ten full-length jobs or about eighteen typical ones ahead — an
+evening's burst — and with the 24-minute ceiling no honest ETA inside
 it is "tomorrow". Delivery is by mail (§13.2), so the cap bounds the
 bill and the bucket, not the visitor's patience; it is easy to raise.
 
@@ -1307,15 +1404,15 @@ promise; the copy changes regardless.
 
 | Option | First visitor of an idle gap | Visitor while the singleton is up | Money | Side effects |
 |---|---|---|---|---|
-| **(a) on the singleton** (default) | ~2 min create + warm recognition on 8 dedicated cores (est. 60–110 s; the 130 s cold figure minus ~20 s of import/load, on a stronger CPU — **measure**) ≈ **3–4 min** | warm recognition only ≈ **1–2 min** | none extra | Recognition and an in-flight encode share the cores (§2's `SIGSTOP` if it matters). The singleton is created at `…/complete`, so an abandoned upload costs one create + grace ≈ $0.12. |
+| **(a) on the singleton** (default) | ~2 min create + warm recognition on 4 dedicated cores (est. 90–150 s; the 130 s cold figure minus ~20 s of import/load, on a CPU with fewer cores than the workstation — **measure**) ≈ **3.5–4.5 min** | warm recognition only ≈ **1.5–2.5 min** | none extra | Recognition and an in-flight encode share the cores (§2's `SIGSTOP` if it matters). The singleton is created at `…/complete`, so an abandoned upload costs one create + grace ≈ $0.12. |
 | **(b) on the web box** | recognition on the small plan's CPU, no create: est. **2–5 min** on 2 shared vCPUs, less on a dedicated plan — **measure** | same | web plan 2 GB → 4 GB, +$12/month shared or +$24 dedicated (torch CPU + checkpoint need ~2 GB resident) | **www is the live Symfony host (§15.1)**: torch's 2 GB resident and minutes of multi-threaded CPU per recognition would land beside their site. If tried anyway: serialise with the existing `identify.py:43` semaphore (kept, on the web box), a queue depth of one or two, refusing beyond with "busy, try in a minute", `nice -n 10`. The singleton becomes purely batch, created at submit rather than at upload. The identify program is the same file either way; only its supervisor host changes. |
 | (d) non-blocking: accept, recognise with everything else, mail "we think it is X — confirm or choose" | never waits | never waits | cheapest | A product change: the visitor returns once. **Decision E, the owner's.** |
 | (e) a torch-free first guess on the web box | seconds | seconds | nothing | music_finrgerprint's librosa-only pipelines (`pipeline.py`, `pipeline_v4.py`; indexes `data/index.pkl`, `chord_index.pkl`, `pitch_index.pkl` present). **I do not know why AMT superseded them; the owner does.** If their accuracy was acceptable, this alone keeps "a few seconds" literally true, with AMT confirming later on the singleton. A day's experiment. |
 
 **Recommendation: (a) by default, with a 30-minute grace (§9.5), and a
 measurement gate for (b).** Reasoning: with the grace, every visitor
-but the first of an evening finds the instance up and waits one to two
-minutes; the first waits three to four. (b) makes *every* visitor wait
+but the first of an evening finds the instance up and waits about two
+minutes; the first waits about four. (b) makes *every* visitor wait
 whatever the small plan's CPU takes, which on shared vCPUs is likely
 longer than (a)'s warm case, for $12–24/month more and with the site's
 responsiveness at stake. (b) wins **only if** a resident recognition on
@@ -1334,8 +1431,8 @@ state and the calibrated identify estimate, must be:
   the piece yourself below."** — the manual picker (`api_library`,
   already the fallback when `can_identify` is false) shown from the
   first second, so nobody is *waiting* for the answer, only *offered* it;
-- recognising: **"Listening — about a minute and a half."** with the
-  number from calibration;
+- recognising: **"Listening — about two minutes."** with the number
+  from calibration;
 - overrun of twice the estimate: **"Still listening — this is taking
   longer than usual."**, picker still there;
 - never "a few seconds", never a spinner without a number.
@@ -1488,7 +1585,7 @@ multiprocess mode unnecessary and removes that class of failure.
 | `vsw_process_rss_bytes`, `vsw_process_cpu_seconds_total`, `vsw_process_io_read_bytes_total`, `vsw_process_io_write_bytes_total` | Gauge / Counter `{stage}` | a 5-second sampler thread in each program — **this process plus its children** (§14.5) | `max_over_time(vsw_process_rss_bytes{stage="embed"}[1h])` → > 500 MB while an encode runs (ffmpeg is a child); `rate(vsw_process_io_write_bytes_total{stage="embed"}[5m])` → non-zero during an encode |
 | `vsw_jobs_waiting`, `vsw_eta_seconds_max` | Gauge | `events` (owns the table) | `vsw_jobs_waiting` → equals `tools/queue.py list --state queued` |
 | `vsw_calibration_k` | Gauge `{stage, axis=k0|k_d|k_g}` | `events` | `vsw_calibration_k{stage="embed", axis="k_d"}` → 0.8 until ten jobs, then the measured value — the drift the owner asked to see |
-| `vsw_compute_up`, `vsw_compute_seconds_total`, `vsw_compute_creates_total` | Gauge / Counter | `scaler` | `increase(vsw_compute_seconds_total[30d]) / 3600 * 0.216` → the month's compute bill; `vsw_compute_up` → 1 while the singleton exists |
+| `vsw_compute_up`, `vsw_compute_seconds_total`, `vsw_compute_creates_total` | Gauge / Counter | `scaler` | `increase(vsw_compute_seconds_total[30d]) / 3600 * 0.108` → the month's compute bill at the 8 GB plan's rate; `vsw_compute_up` → 1 while the singleton exists |
 | queue depth per queue | — | **RabbitMQ's own plugin** (§14.6), nothing to emit | `rabbitmq_detailed_queue_messages_ready{vhost="vsw"}` and `…_unacked{vhost="vsw"}` → one series per `vsw.*` queue |
 | host CPU, memory, disk I/O, filesystem | — | `node_exporter` on both hosts | `node_cpu_seconds_total`, `node_memory_MemAvailable_bytes`, `node_disk_io_time_seconds_total`, `node_filesystem_avail_bytes` |
 
@@ -1839,13 +1936,17 @@ from the bucket, not recomputed.
 script).** VLAN in www's region, Cloud Firewalls, the TLS listener on
 the VLAN address of the existing broker; per-instance credentials via
 user_data; `deploy/compute-image.sh` with the full build-time checks of
-§9.1 and node_exporter on the image; `app/scaler.py` with the lease
-row, the label guard, **shutdown-before-delete**, and
+§9.1, node_exporter, the 4 GB swap file and per-program `oom_score_adj`
+on the image; the `heavy` lock in `sync` and `embed` and the DTW
+pre-check against `MEMORY_BUDGET_BYTES` (§1.2); `app/scaler.py` with
+the lease row, the label guard, **shutdown-before-delete**, and
 `targets/compute.json` for file_sd (§14.4); `logship`; `instance_id` on
 every event; `vsw_compute_*` metrics and panels 9 and 12;
-`COMPUTE_MODE=auto`; **measure recognition on the compute plan and
-settle decision D** (option (b) is now a production-box question,
-§15.1); the copy of §12.
+`COMPUTE_MODE=auto`; **measure on the plan: the encode ratio on four
+cores, recognition warm and cold, and the resident baseline RSS against
+the 5.47 GB DTW peak** — settle decision D (option (b) is now a
+production-box question, §15.1) and confirm 8 GB holds, or move to 16;
+the copy of §12.
 *Verify:* destroy the singleton by hand mid-embed → a new one within
 ~3 minutes and the job resumes at the encode, and **`show` names the
 dead instance and `logs/instances/<id>/embed_err.log` holds its last
@@ -1856,7 +1957,10 @@ destroyed instance's broker user and storage key are gone; two uploads
 completing in the same second → exactly one instance; `doctor
 --monitoring` lists the compute targets `up` while `vsw_compute_up == 1`
 and skips them after the destroy; panel 9 shows the session's hours and
-dollars.
+dollars; a 25-minute recording aligns while an encode is queued behind
+the `heavy` lock and `show` prints its peak RSS near 5.5 GB; a
+26-minute recording is refused at upload, and one smuggled past the
+cap fails in `sync` with the memory message and no retry.
 
 **Step 7 — optional at 4 GB: direct-to-bucket upload with resume (~300
 lines, mostly browser JS).** §10.2 endpoints; `UPLOAD_DIRECT=true`;
@@ -1944,6 +2048,13 @@ recur (§8.1).
   (`a2enmod` is a minute; the VLAN is not negotiable).
 - **RabbitMQ's version on www** — decides `/metrics/detailed` (3.9+)
   and the per-queue `x-consumer-timeout` (3.12+).
+- **The 8 GB fit** (§1.2) assumes the resident programs' baseline stays
+  near 2.5 GB beside a 5.47 GB DTW; the 24 B/cell figure is three runs
+  with `tracemalloc` on a workstation. Step 6 measures both on the plan
+  before the cap is shown to anyone; the fallbacks (non-resident
+  identify, the 16 GB plan) are ready.
+- **The encode ratio on four cores** — 0.82 was a workstation; the
+  capacity and ETA tables scale with whatever step 6 measures.
 - **`Job.save()` / `rehydrate()`** (`jobs.py:66-79, 250-284`) landed in
   `c718193` at 10:43 today and the only job on disk finished at 10:41
   without a manifest; step 1 replaces both with the table.
