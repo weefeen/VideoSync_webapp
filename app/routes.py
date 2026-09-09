@@ -62,8 +62,13 @@ def studio_file(filename: str):
 
 @bp.get("/app")
 def studio_root():
-    """Without the trailing slash every relative link would miss."""
-    return redirect("/app/", code=308)
+    """Without the trailing slash every relative link would miss.
+
+    The query survives the hop: `/app?debug` is the shape people type, and
+    dropping it here would make the flag look broken rather than absent.
+    """
+    query = request.query_string.decode()
+    return redirect("/app/" + (f"?{query}" if query else ""), code=308)
 
 
 # --------------------------------------------------------------------------

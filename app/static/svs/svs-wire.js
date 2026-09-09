@@ -27,6 +27,12 @@ const API = {
   render:   id => `/api/jobs/${id}/render`,
 };
 
+/* Confidence figures are for us, not for the person uploading: a number
+ * beside a piece invites arguing with it, and the honest answer to "is it
+ * 98 or 72" is that either way it is the one we heard. Add ?debug to the
+ * address to see them while working on recognition. */
+const DEBUG = new URLSearchParams(location.search).has('debug');
+
 let JOB = null;                 // the job this upload belongs to
 let SERVER = { online: false, can_identify: false, can_sync: false };
 
@@ -198,11 +204,11 @@ recognise = function(){
       const w = W(id), on = id === S.piece;
       if(!w) return '';
       return `<button class="cand${on ? ' on' : ''}" data-p="${id}" role="radio"
-        aria-checked="${on}">
+        aria-checked="${on}"${DEBUG ? '' : ' style="grid-template-columns:18px 1fr"'}>
         <span class="mark"></span>
         <span class="t">${esc(w.t)}, ${esc(w.op)}</span>
-        <span class="bar"><i style="width:${pc}%"></i></span>
-        <span class="pc">${pc}%</span>
+        ${DEBUG ? `<span class="bar"><i style="width:${pc}%"></i></span>
+        <span class="pc">${pc}%</span>` : ''}
       </button>`;
     };
 
@@ -213,11 +219,11 @@ recognise = function(){
         : ', or choose a different piece from the library.'}</p>
       <div role="radiogroup" aria-label="Choose the piece">
         <div class="candhead"><span class="lab">Most likely</span>
-          <span class="lab">Confidence</span></div>
+          ${DEBUG ? '<span class="lab">Confidence</span>' : ''}</div>
         <div class="cands lead">${candBtn(CANDS[0])}</div>
         ${alts.length ? `
         <div class="candhead alt"><span class="lab">Is it wrong? It may also be</span>
-          <span class="lab">Confidence</span></div>
+          ${DEBUG ? '<span class="lab">Confidence</span>' : ''}</div>
         <div class="cands">${alts.map(candBtn).join('')}</div>` : ''}
       </div>
       <div class="manualrow"><button class="linkbtn" id="manualToggle">${
@@ -246,7 +252,7 @@ recognise = function(){
 const bandCSS = document.createElement('style');
 bandCSS.textContent = `
   .frame .band.real .stv, .frame .ctr-band.real .stv{height:100%}
-  .frame .band.real{padding-bottom:0}
+  .frame .band.real{padding:0}
   .frame .band.real .bandwk, .frame .ctr-band.real .bandwk{display:none}
   /* Vector bands are ink on transparency, so the score is used as a mask
      and filled with the chosen note colour — the same ink-on-paper model
@@ -500,7 +506,7 @@ const READY = loadLibrary().then(()=>{ if(!S.file) draw(); });
  * shows the background colour through it exactly as the render will.
  */
 const CANVAS = { '16/9':[1920,1080], '1/1':[1080,1080], '9/16':[1080,1920] };
-const MARGIN = 36, GAP = 27, PANEL_W = 0.301;
+const MARGIN = 0, GAP = 27, PANEL_W = 0.301;
 
 if(S.vidOffset === undefined) S.vidOffset = 0.5;
 
@@ -519,6 +525,9 @@ function renderLayout(){
   // recomputes the width from it. Mirrored here so the preview does not
   // quietly disagree with the output by a handful of pixels.
   const even = n => Math.max(2, Math.round(n) - (Math.round(n) % 2));
+  // A position is not a size: zero is a real answer for one and not the
+  // other, and rounding it up to two puts a gap along the edge.
+  const evenAt = n => { const w = Math.round(Math.max(0, n)); return w - (w % 2); };
   let bandW = Math.min(contentW, contentH * bandAspect);
   let bandH = even(bandW / bandAspect);
   bandW = even(bandH * bandAspect);
@@ -534,10 +543,10 @@ function renderLayout(){
 
   const top = S.bandPos === 'top';
   const bandY = top ? contentY : contentY + boxH + GAP;
-  const videoY = (top ? contentY + bandH + GAP : contentY) + even((boxH - videoH) / 2);
+  const videoY = (top ? contentY + bandH + GAP : contentY) + evenAt((boxH - videoH) / 2);
 
   return { cw, ch, surplus,
-    band:  { x: contentX + even((contentW - bandW) / 2), y: bandY, w: bandW, h: bandH },
+    band:  { x: contentX + evenAt((contentW - bandW) / 2), y: bandY, w: bandW, h: bandH },
     video: { x: contentX, y: videoY, w: videoW, h: videoH } };
 }
 

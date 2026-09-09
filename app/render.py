@@ -79,7 +79,8 @@ class Style:
     panel: bool = False
     # 578/1920 — the column width the original title panel used.
     panel_width: float = 0.301
-    margin: int = 36
+    # No inset by default: the band spans the frame edge to edge.
+    margin: int = 0
     gap: int = 27
     canvas_bg: str = "#141019"
     band_bg: str = "#ffffff"          # the band's paper
@@ -150,8 +151,19 @@ class Layout:
 
 
 def _even(n: float) -> int:
-    """x264 needs even dimensions in yuv420p."""
+    """x264 needs even dimensions in yuv420p, and at least two pixels."""
     return max(2, int(round(n)) - (int(round(n)) % 2))
+
+
+def _even_at(n: float) -> int:
+    """The same rounding for a position, where zero is a real answer.
+
+    A coordinate is not a size: pushing it to two pixels because nothing
+    can be one pixel wide puts a gap along the top and left of anything
+    that should sit flush against the edge.
+    """
+    whole = int(round(max(0.0, n)))
+    return whole - (whole % 2)
 
 
 def _fit(max_w: float, max_h: float, aspect: float) -> tuple[int, int]:
@@ -216,16 +228,16 @@ def compute_layout(style: Style, band_aspect: float,
     # keeps the bottom, and the default keeps the middle — the same part a
     # centred fit would have shown.
     surplus = max(0, natural_h - video_h)
-    video_crop_y = _even(surplus * _clamp01(style.video_offset))
+    video_crop_y = _even_at(surplus * _clamp01(style.video_offset))
 
     video_x = content_x
-    band_x = content_x + _even((content_w - band_w) / 2)
+    band_x = content_x + _even_at((content_w - band_w) / 2)
 
     if style.band_position == TOP:
         band_y = content_y
-        video_y = content_y + band_h + style.gap + _even((video_box_h - video_h) / 2)
+        video_y = content_y + band_h + style.gap + _even_at((video_box_h - video_h) / 2)
     else:
-        video_y = content_y + _even((video_box_h - video_h) / 2)
+        video_y = content_y + _even_at((video_box_h - video_h) / 2)
         band_y = content_y + video_box_h + style.gap
 
     return Layout(canvas=(width, height),
