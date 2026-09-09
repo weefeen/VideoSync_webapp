@@ -224,13 +224,146 @@ is a starting point and the median of real runs replaces it.
 
 ---
 
+## 9. Recognition on Linux, and the bug it exposed
+
+Identification itself worked here on the first attempt:
+
+    indexes    0.7 s
+    identify 129.0 s      8 windows, consensus 1.00
+    RESULT   3ème Scherzo pour le Piano, Op. 39
+
+and then said **"recognised, but no installed score to render it"** — with
+full confidence, and no error anywhere.
+
+The recogniser was right. What failed was the step after it, which turns a
+piece id into a score package, and it failed for a reason that exists only
+on this side:
+
+    weefeen_id/labels.py:48    stem = Path(row["video"]).stem
+
+Every `video` in `pair_list.json` is an absolute **Windows** path. On Linux
+`pathlib.Path` is a `PosixPath`, and to a PosixPath a backslash is an
+ordinary character — so the "stem" of
+
+    C:\ZZ_perso\...\work_op_39__troisieme_scherzo,_..._dyZmzXMHItI.mp4
+
+is that entire string. It matches no piece id. Measured on the two
+platforms against the same file:
+
+| | piece ids resolved |
+|---|---|
+| Windows | 186 of 186 |
+| this node | **0 of 186** |
+
+Not some pieces. All of them, silently, while reporting consensus 1.00.
+
+**Fixed in `tools/identify_runner.py`, not in `music_finrgerprint`.** That
+file already describes itself as the web app's side of the boundary, so it
+now reads the pair list itself — eight lines, three fields — with
+`PureWindowsPath`, which splits both separators on every platform. Checked
+row by row against the dependency's own output on Windows: zero
+disagreements, so nothing changed there.
+
+`music_finrgerprint` still has the bug for its own scripts on Linux
+(`identify_v6.py`, `run_aggregate_experiment.py`,
+`drill_clean_failures.py`). That is the owner's to fix; it does not block
+this. The one-line change is `PureWindowsPath` in place of `Path`.
+
+---
+
+## 10. Both platforms are checked on every push
+
+The bug above reached this machine because **nothing ever ran on both**.
+CI was `ubuntu-latest` only and development is Windows only, so a
+difference between them could only be found by deploying and noticing that
+the answer was wrong — and this whole class of difference produces an empty
+result rather than an error.
+
+`tools/selftest.py` is the part of the app that can be checked anywhere: no
+ffmpeg, cairo, torch, score package or network. `.github/workflows/ci.yml`
+runs it on `ubuntu-latest` and `windows-latest`, and it is the same script
+to run by hand, so a red build is reproducible with one command.
+
+    python tools/selftest.py
+
+Seven checks, each from something that has actually gone wrong here. Both
+platforms, same commit:
+
+    win32  python 3.12.7  os.pathsep ';'    all 7 passed   sqlite 3.53.4
+    linux  python 3.12.3  os.pathsep ':'    all 7 passed   sqlite 3.45.1
+
+The differing SQLite builds are the reason the job store is exercised
+rather than assumed: claiming uses `UPDATE ... RETURNING`, which is not in
+older SQLite.
+
+**The regression check was verified by putting the bug back**, not by
+trusting that it would have caught it. With `PureWindowsPath` reverted to
+`Path` on this node, `piece ids resolve` failed with the expected editions
+against `got []`; restored, it passed again. A second, text-based check
+went green throughout — it searched the file for "PureWindowsPath" and the
+docstring explaining the fix contains it — so it was removed. A check that
+passes on broken code is read as evidence and is worse than none.
+
+### On Windows, run it under the app's interpreter
+
+The three-interpreter split still applies here. `2026liszt` has torch and
+no Flask, so the checks fail there on `app.routes`; the check says so
+rather than leaving it to be guessed:
+
+    C:\Users\msmabq\.conda\envs\VideoScoreSync\python.exe tools/selftest.py
+
+Two smaller things the writing of it found and fixed: `app/store.py` had no
+`close()`, so a temporary `WORK_DIR` could not be cleaned up on Windows,
+where an open file cannot be deleted; and `.env.example` was not setting
+`MAX_UPLOAD_GB`, `MAX_DURATION_MINUTES` or `MAX_CONCURRENT_RENDERS`, so a
+local install and the server could not be compared line by line. Both
+templates now carry the same 41 variables, and the check enforces it.
+
+---
+
+## 11. Operating this node
+
+Two things cost time and are written down so they do not again:
+
+- **`github-webapp` is an SSH host alias, not a git remote.** The remote is
+  `origin`; `git fetch github-webapp` fails with a message about access
+  rights that reads exactly like a broken deploy key. The key is fine:
+  `ssh -T git@github-webapp` answers `Hi weefeen/VideoSync_webapp!`.
+- **The deploy keys are root's and the checkout is `vsw`'s.** git as `vsw`
+  cannot fetch; git as root leaves root-owned files behind. So it is
+  `git fetch && git merge --ff-only` as root, then
+  `chown -R vsw:vsw /srv/vsw/app`. Root also needs
+  `git config --global --add safe.directory /srv/vsw/app`, once, or every
+  git command refuses with "dubious ownership".
+
+`deploy/deploy.sh` does not apply here — it is written for the production
+host's rsynced release directories under `/mnt/volume_1/vsw`, not a git
+checkout.
+
+`.env` on this node has **no `SMTP_PASSWORD`**, so it cannot send mail. That
+is deliberate for a disposable box and means the delivery step has not been
+exercised here; it was proven on the workstation instead.
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;
   2 shared cores gave 1.292 and a dedicated 4-core box will differ
-- Run recognition on Linux — the pipeline has been proven, identification
-  has not, and its model checkpoint has yet to be downloaded here
-- gunicorn in place of the Flask development server
+- gunicorn in place of the Flask development server — and with it the
+  first real proof that the app *serves* on Linux, which "every module
+  imports" is not
 - A bot check before anything faces the public
 - Apache vhost, certbot and DNS for `chopin.weefeen.com` — on the
   production Linode, not this one, and only once the above is proven
+
+### Known, not yet addressed
+
+**Score package layout is looked up case-exactly.** `app/package.py` probes
+fixed names — `score/lines`, `measures.data`, `export.json`, `chroma.npy`.
+Windows matches those whatever the case on disk; Linux does not. Every
+package built so far is lowercase and the one installed here loads, so this
+is a latent risk rather than a fault: a package that works on the
+workstation could arrive here and simply not be found, which is the same
+silent shape as the bug in section 9. Worth a check in `tools/doctor.py`,
+which needs real packages and so cannot live in the CI self-test.
