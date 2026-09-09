@@ -202,6 +202,18 @@ class Settings:
         if not self.public_base_url:
             return ("PUBLIC_BASE_URL is not set, so a link in the mail would "
                     "point nowhere.")
+        # A message whose only link is http://127.0.0.1 is useless to whoever
+        # receives it, and worse than useless to the domain that sent it:
+        # Gmail reads an unreachable private address as close to conclusive
+        # evidence of spam, and every such message spends reputation that
+        # real messages will need later. Better not to send at all.
+        host = self.public_base_url.split("//", 1)[-1].split("/", 1)[0]
+        host = host.split(":", 1)[0].lower()
+        if host in ("127.0.0.1", "localhost", "0.0.0.0", "::1", "[::1]"):
+            return (f"PUBLIC_BASE_URL is {self.public_base_url!r}. A link to "
+                    f"this machine means nothing to whoever gets the mail, "
+                    f"and being seen to send one costs the domain its "
+                    f"standing. Set a real address before sending.")
         return ""
 
     @property
