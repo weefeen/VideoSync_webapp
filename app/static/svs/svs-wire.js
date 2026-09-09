@@ -964,8 +964,8 @@ async function showCount(){
   line.className = 'madecount';
   line.title = 'Finished videos, counted — not an estimate';
   line.innerHTML = `<b>${made.toLocaleString()}</b>`
-    + `<span>${made === 1 ? 'performance scored so far'
-                          : 'performances scored so far'}</span>`;
+    + `<span>${made === 1 ? 'video generated so far'
+                          : 'videos generated so far'}</span>`;
   standfirst.insertAdjacentElement('afterend', line);
 }
 showCount();
