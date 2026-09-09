@@ -925,19 +925,22 @@ document.addEventListener('DOMContentLoaded', trimFreeLine);
 
 /* ── how many videos have actually been made ─────────────────────────── */
 /* The server counts finished renders and nothing else — never an estimate,
- * never a flattering guess. Given the display face the design reserves for
- * numbers that matter, under the standfirst where the eye already is,
- * rather than whispered in the caption. */
+ * never a flattering guess. Sat on its own panel under the standfirst,
+ * with the magenta accent down its edge, the number in the darkest
+ * aubergine and the label in full ink: a figure worth stating should not
+ * be set in the grey reserved for things nobody needs to read. */
 const countCSS = document.createElement('style');
 countCSS.textContent = `
-  .madecount{display:flex;align-items:baseline;gap:12px;margin:26px 0 0;
-    padding-top:18px;border-top:1px solid var(--hair-2)}
-  .madecount b{font-family:Fraunces,Georgia,serif;font-weight:300;
-    font-size:clamp(30px,3.6vw,42px);letter-spacing:-.03em;line-height:1;
-    color:var(--b2);font-variant-numeric:tabular-nums}
-  .madecount span{font-family:"JetBrains Mono",monospace;font-size:9.5px;
-    font-weight:500;letter-spacing:.19em;text-transform:uppercase;
-    color:var(--soft);max-width:16ch;line-height:1.5}
+  .madecount{display:flex;align-items:center;gap:14px;margin:26px 0 0;
+    padding:14px 18px;background:var(--surface);
+    border:1px solid var(--hair);border-left:3px solid var(--mag);
+    border-radius:3px;width:fit-content}
+  .madecount b{font-family:Fraunces,Georgia,serif;font-weight:400;
+    font-size:clamp(32px,3.8vw,44px);letter-spacing:-.03em;line-height:1;
+    color:var(--b1);font-variant-numeric:tabular-nums}
+  .madecount span{font-family:"JetBrains Mono",monospace;font-size:10.5px;
+    font-weight:500;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink);max-width:18ch;line-height:1.6}
 `;
 document.head.appendChild(countCSS);
 
