@@ -81,7 +81,8 @@ class Style:
     panel_width: float = 0.301
     # No inset by default: the band spans the frame edge to edge.
     margin: int = 0
-    gap: int = 27
+    # Nothing between the video and the score: they meet.
+    gap: int = 0
     canvas_bg: str = "#141019"
     band_bg: str = "#ffffff"          # the band's paper
     band_fg: str = "#1c1622"          # the notes
@@ -233,12 +234,16 @@ def compute_layout(style: Style, band_aspect: float,
     video_x = content_x
     band_x = content_x + _even_at((content_w - band_w) / 2)
 
+    # The video is pushed against the band rather than centred in what is
+    # left, so the two always meet. Where the picture is shorter than its
+    # box — a narrower column beside a panel — the slack goes to the far
+    # edge instead of opening a seam down the middle.
     if style.band_position == TOP:
         band_y = content_y
-        video_y = content_y + band_h + style.gap + _even_at((video_box_h - video_h) / 2)
+        video_y = content_y + band_h + style.gap
     else:
-        video_y = content_y + _even_at((video_box_h - video_h) / 2)
         band_y = content_y + video_box_h + style.gap
+        video_y = band_y - style.gap - video_h
 
     return Layout(canvas=(width, height),
                   band=Rect(band_x, band_y, band_w, band_h),

@@ -215,20 +215,18 @@ recognise = function(){
     const top = W(CANDS[0][0]);
     $('#recogbody').innerHTML = `
       <p class="heard">We heard <b>${esc(top ? top.t + ', ' + top.op : 'this piece')}</b>.<br>
-      It is selected &mdash; confirm it${alts.length ? ', or pick another below.'
-        : ', or choose a different piece from the library.'}</p>
+      It is selected${alts.length ? ' &mdash; confirm it, or pick another below.' : '.'}</p>
       <div role="radiogroup" aria-label="Choose the piece">
         <div class="candhead"><span class="lab">Most likely</span>
-          ${DEBUG ? '<span class="lab">Confidence</span>' : ''}</div>
+          <span>${DEBUG ? '<span class="lab">Confidence</span> ' : ''}<button
+            class="linkbtn" id="manualToggle">${S.manual ? 'close' : 'change'}</button></span></div>
         <div class="cands lead">${candBtn(CANDS[0])}</div>
         ${alts.length ? `
         <div class="candhead alt"><span class="lab">Is it wrong? It may also be</span>
           ${DEBUG ? '<span class="lab">Confidence</span>' : ''}</div>
         <div class="cands">${alts.map(candBtn).join('')}</div>` : ''}
       </div>
-      <div class="manualrow"><button class="linkbtn" id="manualToggle">${
-        S.manual ? 'Hide the library' : 'Choose from the library'}</button></div>
-      ${S.manual ? `<div class="manual"><span class="lab">The full library</span>
+      ${S.manual ? `<div class="manual"><span class="lab">Choose it yourself</span>
         <div class="pieces" id="pieces"></div></div>` : ''}`;
 
     $$('#recogbody .cand').forEach(b => b.onclick = () => choose(b.dataset.p));
@@ -505,7 +503,7 @@ const READY = loadLibrary().then(()=>{ if(!S.file) draw(); });
  * shows the background colour through it exactly as the render will.
  */
 const CANVAS = { '16/9':[1920,1080], '1/1':[1080,1080], '9/16':[1080,1920] };
-const MARGIN = 0, GAP = 27, PANEL_W = 0.301;
+const MARGIN = 0, GAP = 0, PANEL_W = 0.301;
 
 if(S.vidOffset === undefined) S.vidOffset = 0.5;
 
@@ -542,7 +540,9 @@ function renderLayout(){
 
   const top = S.bandPos === 'top';
   const bandY = top ? contentY : contentY + boxH + GAP;
-  const videoY = (top ? contentY + bandH + GAP : contentY) + evenAt((boxH - videoH) / 2);
+  // Against the band, not centred: they meet, and any slack goes to the
+  // far edge rather than opening a seam between them.
+  const videoY = top ? contentY + bandH + GAP : bandY - GAP - videoH;
 
   return { cw, ch, surplus,
     band:  { x: contentX + evenAt((contentW - bandW) / 2), y: bandY, w: bandW, h: bandH },
