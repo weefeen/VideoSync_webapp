@@ -24,6 +24,7 @@ from . import notify
 from . import render as rnd
 from . import retention
 from . import stats
+from . import svg
 from . import store
 from . import sync as syncing
 from .settings import settings
@@ -153,6 +154,76 @@ def api_stats():
     return jsonify({"videos": stats.videos()})
 
 
+# Where the engraving actually sits on a plate, as fractions of it.
+# Measured once per file and remembered: a page has wide blank margins —
+# sixteen percent of this one is empty at the bottom — and tiling the whole
+# plate puts two margins between every block of music, which reads as a gap
+# rather than as continuous paper.
+_INK: dict[tuple[str, int], tuple[float, float]] = {}
+
+
+def _ink_band(path: pathlib.Path) -> tuple[float, float]:
+    """(top, bottom) of the engraving, 0..1 down the plate."""
+    key = (str(path), path.stat().st_mtime_ns)
+    if key in _INK:
+        return _INK[key]
+    band = (0.0, 1.0)
+    try:
+        import io
+        from PIL import Image
+        renderer = svg._cairosvg()
+        if renderer is not None:
+            png = renderer.svg2png(bytestring=path.read_bytes(), output_width=300)
+            shot = Image.open(io.BytesIO(png)).convert("RGBA")
+            # Transparent renders as black in greyscale, which would read as
+            # ink everywhere; composite onto white first.
+            flat = Image.new("RGB", shot.size, "white")
+            flat.paste(shot, mask=shot.split()[3])
+            grey = flat.convert("L")
+            w, h = grey.size
+            px = grey.load()
+            rows = [y for y in range(h)
+                    if any(px[x, y] < 200 for x in range(0, w, 2))]
+            if rows:
+                band = (rows[0] / h, (rows[-1] + 1) / h)
+    except Exception as exc:                     # noqa: BLE001
+        logger.info("could not measure the engraving in %s: %s", path.name, exc)
+    _INK[key] = band
+    return band
+
+
+def _trimmed(path: pathlib.Path) -> str:
+    """The plate with its blank margins cropped away.
+
+    A viewBox is added rather than the content moved: it is a viewport
+    change, so nothing inside has to be understood or rewritten.
+    """
+    text = path.read_text(encoding="utf-8")
+    top, bottom = _ink_band(path)
+    if bottom - top > 0.98:
+        return text
+    height = _svg_px(text, "height") or 2970.0
+    width = _svg_px(text, "width") or 2100.0
+    y = top * height
+    tall = (bottom - top) * height
+    opening = re.search(r"<svg\b[^>]*>", text)
+    if not opening:
+        return text
+    tag = opening.group(0)
+    tag = re.sub(r'\sheight="[^"]*"', f' height="{tall:.0f}px"', tag)
+    if "viewBox" in tag:
+        tag = re.sub(r'viewBox="[^"]*"',
+                     f'viewBox="0 {y:.0f} {width:.0f} {tall:.0f}"', tag)
+    else:
+        tag = tag[:-1] + f' viewBox="0 {y:.0f} {width:.0f} {tall:.0f}">'
+    return text[:opening.start()] + tag + text[opening.end():]
+
+
+def _svg_px(text: str, attr: str) -> float | None:
+    m = re.search(rf'<svg\b[^>]*\s{attr}="([\d.]+)', text)
+    return float(m.group(1)) if m else None
+
+
 @bp.get("/api/library/<path:name>/page")
 def api_page(name: str):
     """One full engraved page from a score, for use as page furniture.
@@ -178,8 +249,14 @@ def api_page(name: str):
     chosen = pages[max(0, min(len(pages) - 1, wanted - 1))]
 
     ink = _hex_colour(request.args.get("ink", ""))
-    body = _tint(chosen, ink) if ink else chosen.read_text(encoding="utf-8")
-    return _svg_response(body, f"{chosen}|{chosen.stat().st_mtime_ns}|{ink}")
+    # Trimmed by default: as page furniture the blank margins are
+    # only a gap between one block of music and the next.
+    trim = request.args.get("trim", "1") not in ("0", "false", "no")
+    body = _trimmed(chosen) if trim else chosen.read_text(encoding="utf-8")
+    if ink:
+        body = _tint_text(body, ink)
+    return _svg_response(
+        body, f"{chosen}|{chosen.stat().st_mtime_ns}|{ink}|trim={trim}")
 
 
 def _svg_response(body: str, tag: str):
@@ -296,14 +373,19 @@ def _tint(path: pathlib.Path, ink: str) -> str:
     `fill="none"` is left alone: those paths are drawn by their stroke, and
     filling them would blot the score.
     """
-    svg = path.read_text(encoding="utf-8", errors="replace")
-    svg = svg.replace("<svg ", f'<svg style="color:{ink};fill:{ink}" ', 1)
-    svg = svg.replace('color="black"', f'color="{ink}"')
+    return _tint_text(path.read_text(encoding="utf-8", errors="replace"), ink)
+
+
+def _tint_text(markup: str, ink: str) -> str:
+    """The same, on markup already in hand — a plate that has been trimmed
+    has no file to re-read."""
+    out = markup.replace("<svg ", f'<svg style="color:{ink};fill:{ink}" ', 1)
+    out = out.replace('color="black"', f'color="{ink}"')
     # Editorial marks are engraved in red. They are part of the score, so
     # they take the chosen colour along with everything else.
-    svg = svg.replace('color="red"', f'color="{ink}"')
-    svg = svg.replace('fill="red"', f'fill="{ink}"')
-    return svg
+    out = out.replace('color="red"', f'color="{ink}"')
+    out = out.replace('fill="red"', f'fill="{ink}"')
+    return out
 
 
 # --------------------------------------------------------------------------

@@ -42,17 +42,18 @@
   opacity: .12;
   /* Two masks, unioned: show the score where EITHER says show.
    *
-   *   across  a full-width strip down the top of the page, so the header
-   *           band and both top corners carry the engraving. Masking by
-   *           column alone left them bare — the header is centred, which
-   *           is exactly where a column mask hides things.
+   *   across  a full-width strip over the header only — down to 96px,
+   *           gone by 150. It stops above the title: masking by column
+   *           alone left the header bare, because the header is centred
+   *           and that is exactly what a column mask hides, but the strip
+   *           must not carry on past it into the headline.
    *   margins the space outside the 1040px reading column, everywhere else.
    *
    * The crossing is 30px rather than 60. On a 1440 laptop the margin is
    * only about 130px wide, so a 60px fade was half of it: most of the
    * space was dissolving rather than showing anything. */
   -webkit-mask-image:
-      linear-gradient(180deg, #000 0, #000 210px, transparent 330px),
+      linear-gradient(180deg, #000 0, #000 96px, transparent 150px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),
@@ -60,7 +61,7 @@
         #000 100%);
   -webkit-mask-composite: source-over;
           mask-image:
-      linear-gradient(180deg, #000 0, #000 210px, transparent 330px),
+      linear-gradient(180deg, #000 0, #000 96px, transparent 150px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),
@@ -73,7 +74,15 @@
    covers the box it came from, and the bare wedges would land in view. */
 .drifttilt {
   position: absolute;
-  inset: -25%;
+  /* Far more room above than anywhere else, and it is not symmetry for its
+     own sake. Turning the layer anticlockwise drops its left edge, so the
+     top-left corner is the first place to run out of picture — and that is
+     the corner the header sits in. Reaching a whole viewport height above
+     the top puts the shortfall off screen at any width or angle. */
+  top: -100%;
+  right: -40%;
+  bottom: -20%;
+  left: -40%;
   transform: rotate(-7deg);
 }
 
