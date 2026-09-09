@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gzip
 import hashlib
-import json
 import os
 import pathlib
 import re
@@ -12,11 +11,11 @@ import threading
 from urllib.parse import quote
 
 from flask import (Blueprint, Flask, current_app, jsonify, redirect,
-                   render_template, request, send_file, send_from_directory,
+                   request, send_file, send_from_directory,
                    Response)
 from werkzeug.utils import secure_filename
 
-from . import jobs, package as pkg, panel, pipeline
+from . import jobs, package as pkg, pipeline
 from . import identify as ident
 from . import library
 from . import limits
@@ -59,7 +58,13 @@ def _uploads() -> pathlib.Path:
 # --------------------------------------------------------------------------
 @bp.get("/")
 def index():
-    return render_template("index.html")
+    """The site root is the designed interface.
+
+    A development page used to live here, with its own controls and an SSE
+    stream. It is gone; this redirects rather than 404s because the bare
+    domain is what people type and what the mail links resolve against.
+    """
+    return redirect("/app/", code=302)
 
 
 def _design_dir() -> pathlib.Path:
@@ -552,50 +557,9 @@ def api_identification(job_id: str):
 # --------------------------------------------------------------------------
 # what this install can do
 # --------------------------------------------------------------------------
-@bp.get("/api/options")
-def api_options():
-    """Everything the UI needs to build its controls."""
-    return jsonify({
-        "aspects": sorted(rnd.ASPECTS),
-        "backgrounds": [
-            {"value": kind,
-             "available": kind == rnd.NONE or bool(settings.background_for(kind))}
-            for kind in rnd.BACKGROUNDS
-        ],
-        "positions": [rnd.TOP, rnd.BOTTOM],
-        "modes": [{"value": m, "label": pipeline.MODE_LABELS[m]}
-                  for m in pipeline.MODES],
-        "panel_fields": [f[0] for f in panel.FIELDS],
-        "can_align": settings.can_sync,
-        "can_rasterize_svg": pkg.can_rasterize_svg(),
-        "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
-        "composer_filter": settings.composer_filter,
-    })
-
-
-@bp.get("/api/scores")
-def api_scores():
-    """Usable score packages, and what each one supports."""
-    out = []
-    for p in pipeline.usable_packages():
-        vector = sum(1 for b in p.bands if b.is_vector)
-        has_ref = (p.root / 'reference').is_dir()
-        out.append({
-            "name": p.name,
-            "label": p.display_name,
-            "composer": p.composer,
-            "title": p.title,
-            "opus": p.opus,
-            "bands": len(p.bands),
-            "vector_bands": vector,
-            "band_size": list(p.band_size),
-            "measures": p.last_measure,
-            "modes": pipeline.MODES if has_ref else [pipeline.AUTO],
-            "has_reference": has_ref,
-            "has_score_source": (p.root / "source.krn").is_file()
-                               or (p.root / "score" / "source.krn").is_file(),
-        })
-    return jsonify({"scores": sorted(out, key=lambda s: s["name"])})
+# `/api/options` and `/api/scores` were here. They existed only for the
+# development page, and went with it: the designed interface builds its
+# controls from `/api/library`, which carries the same facts per work.
 
 
 # --------------------------------------------------------------------------
@@ -760,21 +724,6 @@ def api_status(job_id: str):
     job = jobs.registry.get(job_id)
     return (jsonify({"job": job.public()}) if job
             else (jsonify({"error": "Unknown job."}), 404))
-
-
-@bp.get("/api/jobs/<job_id>/events")
-def api_events(job_id: str):
-    if jobs.registry.get(job_id) is None:
-        return jsonify({"error": "Unknown job."}), 404
-
-    def stream():
-        for event in jobs.registry.stream(job_id):
-            yield f"data: {json.dumps(event)}\n\n"
-
-    return Response(stream(), mimetype="text/event-stream", headers={
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",          # don't let a proxy buffer SSE
-    })
 
 
 @bp.get("/api/jobs/<job_id>/download")

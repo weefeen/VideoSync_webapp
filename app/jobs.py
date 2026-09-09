@@ -31,13 +31,12 @@ import json
 import logging
 import os
 import pathlib
-import queue
 import shlex
 import threading
 import time
 import traceback
 import uuid
-from typing import Any, Iterator
+from typing import Any
 
 from . import limits
 from . import notify
@@ -199,7 +198,6 @@ class Registry:
     """The queue, and the workers that drain it."""
 
     def __init__(self) -> None:
-        self._subscribers: dict[str, list[queue.Queue]] = {}
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._live: dict[str, Job] = {}     # uploaded, not yet submitted
@@ -209,7 +207,6 @@ class Registry:
     def add(self, job: Job) -> Job:
         with self._lock:
             self._live[job.id] = job
-            self._subscribers[job.id] = []
         job.save()
         return job
 
@@ -229,24 +226,6 @@ class Registry:
         return [Job.from_row(r) for r in store.query(
             "SELECT * FROM jobs ORDER BY created DESC LIMIT 200")]
 
-    # -- events ----------------------------------------------------------
-    def subscribe(self, job_id: str) -> queue.Queue:
-        q: queue.Queue = queue.Queue()
-        with self._lock:
-            self._subscribers.setdefault(job_id, []).append(q)
-        return q
-
-    def unsubscribe(self, job_id: str, q: queue.Queue) -> None:
-        with self._lock:
-            if q in self._subscribers.get(job_id, []):
-                self._subscribers[job_id].remove(q)
-
-    def _emit(self, job_id: str, payload: dict) -> None:
-        with self._lock:
-            subscribers = list(self._subscribers.get(job_id, []))
-        for q in subscribers:
-            q.put(payload)
-
     # -- submitting ------------------------------------------------------
     def start(self, job: Job, score: str, mode: str | None,
               style: rnd.Style, meta: dict) -> None:
@@ -258,7 +237,6 @@ class Registry:
         job.save(style, meta)
         with self._lock:
             self._live.pop(job.id, None)
-        self._emit(job.id, {"type": "queued", "job": job.public()})
         self.ensure_workers()
         self._wake.set()
 
@@ -310,8 +288,6 @@ class Registry:
             # Say we are still here, so nothing reclaims a job that is only
             # slow rather than abandoned.
             store.renew(job.id, lease)
-            self._emit(job.id, {"type": "progress", "stage": stage,
-                                "detail": detail, "job": job.public()})
 
         run = store.stage_begin(job.id, "render",
                                 inputs=[str(job.upload_path)],
@@ -337,7 +313,6 @@ class Registry:
             # delivered and not attempted.
             stats.record_video()
             self._tell_them(job)
-            self._emit(job.id, {"type": "done", "job": job.public()})
 
         except pipeline.PipelineError as exc:
             # A tool failure carries the command that produced it; anything
@@ -387,36 +362,6 @@ class Registry:
                 job.stages[name] = "failed"
         store.update_job(job.id, state=store.ERROR, error=message,
                          finished=job.finished, worker=None, lease_until=None)
-        self._emit(job.id, {"type": "error", "job": job.public()})
-
-    def stream(self, job_id: str) -> Iterator[dict]:
-        """Yield events for a job until it finishes. Replays state first."""
-        job = self.get(job_id)
-        if job is None:
-            return
-        q = self.subscribe(job_id)
-        try:
-            yield {"type": "state", "job": job.public()}
-            if job.state in (store.DONE, store.ERROR):
-                return
-            while True:
-                try:
-                    event = q.get(timeout=15)
-                except queue.Empty:
-                    # A worker in another thread may have finished it, and
-                    # the queue position moves while nothing else happens.
-                    current = self.get(job_id)
-                    if current and current.state in (store.DONE, store.ERROR):
-                        yield {"type": current.state, "job": current.public()}
-                        return
-                    yield {"type": "waiting",
-                           "job": current.public() if current else None}
-                    continue
-                yield event
-                if event["type"] in ("done", "error"):
-                    return
-        finally:
-            self.unsubscribe(job_id, q)
 
     def resume(self) -> int:
         """Pick the queue up again after a restart.
