@@ -170,11 +170,63 @@ all 374 pieces in SVG, any of the three works.
 
 ---
 
+## 7. Library versions — pinned to what the engines expect
+
+The first run failed here, and it was not configuration:
+
+    TypeError: get_duration() got an unexpected keyword argument 'filename'
+      VideoScoreSync/api_audio/chroma.py:364
+
+`librosa.get_duration(filename=...)` was deprecated in 0.10 and **removed
+in 1.0**. pip had resolved librosa 1.0.0 and numpy 2.5.3, because
+VideoScoreSync's requirements pin numpy but leave librosa open.
+
+Pinned to the pair already proven on the developer's machine — the same
+combination its recognition environment runs torch and librosa on together:
+
+    librosa==0.11.0    numpy==1.26.4
+
+Worth stating as a rule rather than a fix: **the engine repositories are
+read-only, so the environment bends to them.** Whatever pip resolves today
+is not the question; what those repositories were written against is.
+
+---
+
+## 8. First full run on Linux
+
+    align     17s   649 measures placed
+    bands     29s   70 bands rasterised at 1916x358
+    strip     23s
+    encode   479s   1920x1080, band bottom
+    ----------------
+    total    548s   131 MB output, from 424s of music
+
+    RATE  1.292 seconds per second of music
+
+**This is 1.54x slower than the Windows workstation**, which measured
+0.838. Every estimate in the design was built on the workstation figure,
+so every one of them was optimistic by half:
+
+| | assumed 0.82 | measured 1.292 |
+|---|---|---|
+| median 3.5-min piece | 2.9 min | **4.5 min** |
+| a 10-minute upload | 8.2 min | **12.9 min** |
+| the 25-minute cap | 20.5 min | **32 min** |
+
+Measured on 2 shared cores. A dedicated 4-core plan will fall between the
+two, and that measurement is still owed. The job table records elapsed time
+against media length for exactly this reason: the constant in `app/jobs.py`
+is a starting point and the median of real runs replaces it.
+
+
+---
+
 ## Still to do
 
-- Configure `.env` on the node and run the pipeline end to end on Linux
-- Measure seconds-per-second here; every estimate in the design currently
-  rests on a Windows workstation figure of 0.82
+- Measure seconds-per-second on the plan production will actually use;
+  2 shared cores gave 1.292 and a dedicated 4-core box will differ
+- Run recognition on Linux — the pipeline has been proven, identification
+  has not, and its model checkpoint has yet to be downloaded here
 - gunicorn in place of the Flask development server
 - A bot check before anything faces the public
 - Apache vhost, certbot and DNS for `chopin.weefeen.com` — on the
