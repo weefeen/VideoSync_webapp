@@ -752,3 +752,40 @@ function applyBandMark(){
     });
   });
 }
+
+/* ── the rights line is a warning, not a reassurance ─────────────────── */
+/* It sat in pale grey with a green tick, which reads as "all good". What
+ * it actually says is that publishing this is the uploader's
+ * responsibility, so it takes the amber the design already uses for the
+ * free-tier note and the dialog's liability line — the same vocabulary,
+ * given to the thing that most needs it. */
+const rightsCSS = document.createElement('style');
+rightsCSS.textContent = `
+  .rightsdone{
+    color:#4a3212;
+    background:#f9f0df;
+    border-top:0;
+    border-left:2px solid #b8813a;
+    border-radius:2px;
+    padding:11px 14px;
+    margin-top:14px;
+    align-items:center}
+  .rightsdone b{color:#4a3212}
+  .rightsdone svg{color:#b8813a;width:15px;height:15px;flex:0 0 15px;margin-top:0}
+`;
+document.head.appendChild(rightsCSS);
+
+/* A tick says "done"; this is a caution. Same box, honest glyph. */
+function markRightsAsCaution(){
+  const svg = document.querySelector('.rightsdone svg');
+  if(!svg || svg.dataset.caution) return;
+  svg.dataset.caution = '1';
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.innerHTML = `<path d="M8 1.6 15 14H1z" fill="none" stroke="currentColor"
+      stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M8 6.2v3.4" stroke="currentColor" stroke-width="1.6"
+      stroke-linecap="round"/>
+    <circle cx="8" cy="11.7" r=".85" fill="currentColor"/>`;
+}
+markRightsAsCaution();
+document.addEventListener('DOMContentLoaded', markRightsAsCaution);
