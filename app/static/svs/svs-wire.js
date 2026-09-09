@@ -951,6 +951,20 @@ countCSS.textContent = `
 `;
 document.head.appendChild(countCSS);
 
+/* Short enough that the line never has to grow: 947, 1.1K, 5.2M. Rounding
+ * happens before the unit is settled, and a value that rounds to a
+ * thousand moves UP a unit rather than being skipped — 999,999 is 1M, not
+ * "1000K" and not the raw figure. The exact number stays in the tooltip. */
+function compact(n){
+  if(n < 1e3) return String(n);
+  const units = [[1e3, 'K'], [1e6, 'M'], [1e9, 'B']];
+  for(let i = 0; i < units.length; i++){
+    const [size, suffix] = units[i];
+    const value = Math.round(n / size * 10) / 10;
+    if(value < 1000 || i === units.length - 1) return String(value) + suffix;
+  }
+}
+
 let countShown = false;
 async function showCount(){
   // Claim the slot before awaiting: this runs at load and again on
@@ -968,8 +982,8 @@ async function showCount(){
 
   const line = document.createElement('p');
   line.className = 'madecount';
-  line.title = 'Finished videos, counted — not an estimate';
-  line.innerHTML = `<b>${made.toLocaleString()}</b>`
+  line.title = `${made.toLocaleString()} finished videos, counted — not an estimate`;
+  line.innerHTML = `<b>${compact(made)}</b>`
     + `<span>${made === 1 ? 'video generated so far'
                           : 'videos generated so far'}</span>`;
   standfirst.insertAdjacentElement('afterend', line);
