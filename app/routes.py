@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import threading
 from urllib.parse import quote
 
@@ -139,11 +140,36 @@ def api_band(name: str):
         band = next((b for b in package.bands
                      if b.first_measure == band.first_measure and b.is_vector), band)
 
-    response = send_file(band.path, conditional=True)
+    # Tint the engraving, when asked and when it is vector. Verovio's own
+    # stylesheet inside the file sets `stroke: currentColor` and leaves
+    # fills to inherit, so colouring the root element is enough and no path
+    # is touched: `fill="none"` stays none, and the red marker stays red.
+    #
+    # This is done here rather than with a CSS mask in the page because the
+    # engraving carries `width="100%"` and no height — it has no intrinsic
+    # size, which makes it an unreliable mask and paints a solid block over
+    # the band's paper instead of ink on it.
+    ink = _hex_colour(request.args.get("ink", ""))
+    if ink and band.is_vector:
+        svg_text = band.path.read_text(encoding="utf-8", errors="replace")
+        svg_text = svg_text.replace(
+            "<svg ", f'<svg style="color:{ink};fill:{ink}" ', 1)
+        response = Response(svg_text, mimetype="image/svg+xml")
+    else:
+        response = send_file(band.path, conditional=True)
+
     # The library only changes when a package is added, and the preview
     # asks for this on every redraw.
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
+
+
+def _hex_colour(raw: str) -> str:
+    """`#rgb` or `#rrggbb`, or nothing — this ends up inside an attribute."""
+    value = (raw or "").strip()
+    if re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value):
+        return value
+    return ""
 
 
 # --------------------------------------------------------------------------
