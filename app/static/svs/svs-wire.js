@@ -931,22 +931,26 @@ document.addEventListener('DOMContentLoaded', trimFreeLine);
  * be set in the grey reserved for things nobody needs to read. */
 const countCSS = document.createElement('style');
 countCSS.textContent = `
-  .madecount{display:flex;align-items:center;gap:14px;margin:26px 0 0;
-    padding:14px 18px;background:var(--surface);
-    border:1px solid var(--hair);border-left:3px solid var(--mag);
-    border-radius:3px;width:fit-content}
+  /* Its own row across the page: a claim, not a caption. */
+  .madecount{display:flex;align-items:baseline;justify-content:center;
+    gap:16px;margin:46px 0 0;padding:26px 20px;
+    background:var(--surface);border-top:1px solid var(--hair);
+    border-bottom:1px solid var(--hair);text-align:center}
   .madecount b{font-family:Fraunces,Georgia,serif;font-weight:400;
-    font-size:clamp(32px,3.8vw,44px);letter-spacing:-.03em;line-height:1;
+    font-size:clamp(40px,5.4vw,62px);letter-spacing:-.035em;line-height:1;
     color:var(--b1);font-variant-numeric:tabular-nums}
-  .madecount span{font-family:"JetBrains Mono",monospace;font-size:10.5px;
-    font-weight:500;letter-spacing:.16em;text-transform:uppercase;
-    color:var(--ink);max-width:18ch;line-height:1.6}
+  .madecount span{font-family:"JetBrains Mono",monospace;font-size:11px;
+    font-weight:500;letter-spacing:.19em;text-transform:uppercase;
+    color:var(--ink);line-height:1.6}
+  .madecount i{display:block;width:38px;height:1px;background:var(--mag);
+    margin:0}
+  @media(max-width:640px){.madecount{flex-direction:column;gap:8px}}
 `;
 document.head.appendChild(countCSS);
 
 async function showCount(){
-  const standfirst = document.querySelector('section[data-s="pick"] .standfirst');
-  if(!standfirst || standfirst.parentNode.querySelector('.madecount')) return;
+  const hero = document.querySelector('section[data-s="pick"] .hero');
+  if(!hero || document.querySelector('.madecount')) return;
   let made = 0;
   try{
     const r = await fetch('/api/stats');
@@ -957,9 +961,11 @@ async function showCount(){
   line.className = 'madecount';
   line.title = 'Finished videos, counted — not an estimate';
   line.innerHTML = `<b>${made.toLocaleString()}</b>`
-    + `<span>${made === 1 ? 'video made<br>with Weefeen'
-                          : 'videos made<br>with Weefeen'}</span>`;
-  standfirst.insertAdjacentElement('afterend', line);
+    + `<span>${made === 1 ? 'performance scored so far'
+                          : 'performances scored so far'}</span>`;
+  // Its own row after the hero, before the upload begins — standing on
+  // its own rather than reading as another line of the introduction.
+  hero.insertAdjacentElement('afterend', line);
 }
 showCount();
 document.addEventListener('DOMContentLoaded', showCount);
