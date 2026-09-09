@@ -779,3 +779,32 @@ document.head.appendChild(rightsCSS);
 
 /* The tick stays: they did confirm it, and this is not an error. The
  * amber rule is what carries the weight. */
+
+/* ── score attribution: a link, not a wall ───────────────────────────── */
+/* CC BY 4.0 has to be satisfied and still is: the notice is kept word for
+ * word, and opens on the page when asked for. What it does not have to be
+ * is four lines of copyright standing under the upload box by default. */
+function foldScoreSources(){
+  const foot = document.querySelector('.srcfoot');
+  if(!foot || foot.dataset.folded) return;
+  foot.dataset.folded = '1';
+
+  // The notice itself is kept, exactly as written — only put away.
+  const notice = foot.innerHTML;
+  foot.innerHTML = `<div class="srcinner" style="grid-template-columns:auto">
+      <button class="linkbtn" id="srctoggle" aria-expanded="false"
+        aria-controls="srcnotice">Score sources</button>
+      <div id="srcnotice" hidden></div>
+    </div>`;
+
+  const button = foot.querySelector('#srctoggle');
+  const slot = foot.querySelector('#srcnotice');
+  button.onclick = () => {
+    const showing = !slot.hidden;
+    slot.hidden = showing;
+    slot.innerHTML = showing ? '' : notice;
+    button.setAttribute('aria-expanded', String(!showing));
+  };
+}
+foldScoreSources();
+document.addEventListener('DOMContentLoaded', foldScoreSources);
