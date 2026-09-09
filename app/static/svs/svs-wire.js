@@ -316,6 +316,7 @@ paint = function(){
   $$('.frame .band, .frame .ctr-band').forEach(el =>
     el.classList.toggle('real', real));
   applyRealLayout();
+  applyBandMark();
   return out;
 };
 
@@ -691,3 +692,63 @@ document.addEventListener('click', e=>{
   const chip = e.target.closest && e.target.closest('.chip.clash');
   if(chip){ e.stopPropagation(); e.preventDefault(); }
 }, true);
+
+/* ── the mark ────────────────────────────────────────────────────────── */
+/* Two declinations, each for the place it belongs:
+ *
+ *   FULL    the circle with "weefeen" beside it — used in the title panel,
+ *           where a wordmark has the width to be read.
+ *   CIRCLE  the circle alone — used when there is no panel, sitting on the
+ *           score band, where a wordmark would crowd the notation.
+ *
+ * The colour is chosen, not recoloured: these are the brand's own files,
+ * and picking white or purple by the luminance of whatever it sits on
+ * keeps it legible without inventing a shade nobody signed off.
+ */
+const LOGO = '/app/assets/logo';
+
+function luminance(hex){
+  const h = String(hex || '#000').replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  if(!isFinite(n)) return 0;
+  return (0.299 * (n >> 16 & 255) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) / 255;
+}
+
+/* Light surfaces take the purple mark, dark ones the white — and the two
+ * sets name that differently: FULL has a PURPLE, CIRCLE has no plain
+ * purple at all, its light-surface version being the white disc with the
+ * purple glyph. Asking for the name that does not exist would have served
+ * a 404 into the frame. */
+const LIGHT_MARK = { FULL: 'PURPLE', CIRCLE: 'WHITE_PURPLE' };
+const markFor = (kind, surface) =>
+  `${LOGO}/${kind}/${luminance(surface) > 0.55 ? LIGHT_MARK[kind] : 'WHITE'}.svg`;
+
+/* In the panel the mark sits on the backdrop; on the band it sits on the
+ * band's own paper, so each asks the surface it is actually on. */
+const panelMark = () => markFor('FULL', S.bd === 'colour' ? S.bdColor : '#241a33');
+const bandMark  = () => markFor('CIRCLE', S.bandColor);
+
+const baseLogoSlot = logoSlot;
+logoSlot = function(size, mb, round){
+  if(S.logo !== 'weefeen') return baseLogoSlot(size, mb, round);
+  return `<span class="logo" style="display:block;width:${size}px;
+    height:${(size / 3.534).toFixed(1)}px;margin-bottom:${mb}px;
+    background:url('${panelMark()}') left center/contain no-repeat"></span>`;
+};
+
+/* The band carries the circle only when nothing else carries the mark. */
+function applyBandMark(){
+  const frame = $('#frame');
+  if(!frame) return;
+  frame.querySelectorAll('.wmk').forEach(el => {
+    const alone = S.panel === 'off' && S.logo === 'weefeen';
+    if(!alone){ el.style.display = S.logo === 'weefeen' ? 'none' : ''; return; }
+    const side = Math.max(10, (frame.clientHeight || 0) * 0.055);
+    el.textContent = '';
+    Object.assign(el.style, {
+      display: 'block', width: side + 'px', height: side + 'px',
+      background: `url('${bandMark()}') center/contain no-repeat`,
+    });
+  });
+}

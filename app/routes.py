@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 import re
@@ -150,15 +151,28 @@ def api_band(name: str):
     # size, which makes it an unreliable mask and paints a solid block over
     # the band's paper instead of ink on it.
     ink = _hex_colour(request.args.get("ink", ""))
-    if ink and band.is_vector:
-        response = Response(_tint(band.path, ink), mimetype="image/svg+xml")
-    else:
+    if not (ink and band.is_vector):
         response = send_file(band.path, conditional=True)
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
 
-    # The library only changes when a package is added, and the preview
-    # asks for this on every redraw.
-    response.headers["Cache-Control"] = "public, max-age=3600"
-    return response
+    response = Response(_tint(band.path, ink), mimetype="image/svg+xml")
+    # The preview asks for this on every repaint, so it must be cacheable —
+    # but a plain max-age pinned the browser to whatever tinting produced
+    # the first time it saw a colour, which survived changes to how the
+    # tinting works. Revalidating against a tag that covers the file, the
+    # ink AND the rule keeps repaints cheap and never serves a stale idea
+    # of what "in this colour" means.
+    response.set_etag(hashlib.sha1(
+        f"{band.path}|{band.path.stat().st_mtime_ns}|{ink}|{_TINT_RULE}"
+        .encode()).hexdigest())
+    response.headers["Cache-Control"] = "no-cache"
+    return response.make_conditional(request)
+
+
+# Bumped whenever _tint changes what it does, so caches let go of the old
+# answer instead of showing a half-coloured score.
+_TINT_RULE = 2
 
 
 def _hex_colour(raw: str) -> str:
