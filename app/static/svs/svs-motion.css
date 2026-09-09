@@ -40,35 +40,37 @@
   /* Ten percent. It sits in the margin, where nothing competes with it,
      so it can be seen rather than merely sensed. */
   opacity: .10;
-  /* Two masks, unioned: show the score where EITHER says show.
+  /* Three masks: two say WHERE the score may show, the third says how it
+   * meets the edges of the window.
    *
-   *   across  a full-width strip over the header only. It fades IN over
-   *           the first 26px so the engraving does not begin hard against
-   *           the top edge of the window, holds to 74, and is gone by 148
-   *           — above the title, never behind it. Masking by column alone
-   *           left the header bare, because the header is centred and that
-   *           is exactly what a column mask hides.
-   *   margins the space outside the 1040px reading column, everywhere else.
-   *
-   * The crossing is 30px rather than 60. On a 1440 laptop the margin is
-   * only about 130px wide, so a 60px fade was half of it: most of the
-   * space was dissolving rather than showing anything. */
+   *   edge     a soft border all the way round, so the engraving is never
+   *            cut off against the top of the window or the sides. This is
+   *            the margin that was asked for twice and did not appear —
+   *            because with `add` the region masks simply overrode it.
+   *            Union says "opaque if EITHER says opaque", so a fade can
+   *            never take anything away. It has to intersect: opaque only
+   *            where the regions allow AND the fade permits.
+   *   across   a full-width strip over the header, above the title.
+   *   margins  the space outside the 1040px reading column, below it.
+   */
   -webkit-mask-image:
-      linear-gradient(180deg, transparent 0, #000 26px, #000 74px, transparent 148px),
+      linear-gradient(180deg, transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%),
+      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),
         transparent calc(50% + 520px), #000 calc(50% + 550px),
         #000 100%);
-  -webkit-mask-composite: source-over;
+  -webkit-mask-composite: source-in, source-over;
           mask-image:
-      linear-gradient(180deg, transparent 0, #000 26px, #000 74px, transparent 148px),
+      linear-gradient(180deg, transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%),
+      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),
         transparent calc(50% + 520px), #000 calc(50% + 550px),
         #000 100%);
-          mask-composite: add;
+          mask-composite: intersect, add, add;
 }
 
 /* The tilt. Oversized because a rectangle turned seven degrees no longer
