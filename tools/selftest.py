@@ -522,6 +522,42 @@ def check_linux_configuration_leaves_no_gaps() -> str:
     return f"{len(prod)} variables, covering all {len(example)} in .env.example"
 
 
+def check_the_queue_topology_is_stable() -> str:
+    """The queue arguments must not change by accident.
+
+    RabbitMQ refuses to redeclare an existing queue with different arguments
+    (`PRECONDITION_FAILED`) and will not change them in place. So altering
+    any value below means deleting that queue on every broker it exists on,
+    losing whatever it holds — which is a deployment step somebody has to
+    plan, not a line to edit and push. This check makes that visible at the
+    moment of the edit rather than on the next deploy.
+
+    `x-consumer-timeout` is the load-bearing one. RabbitMQ's default is 30
+    minutes and our worst case is about 32, so without it the longest
+    uploads — and only those — would have their delivery pulled back
+    mid-encode, every single time.
+    """
+    from app.queue import transport
+
+    expected = {
+        "vsw.render": {"x-dead-letter-exchange": "vsw.dlx",
+                       "x-consumer-timeout": 10_800_000,
+                       "x-max-priority": 10},
+        "vsw.events": {"x-dead-letter-exchange": "vsw.dlx"},
+        "vsw.render.dead": {},
+        "vsw.events.dead": {},
+    }
+    if transport.TOPOLOGY != expected:
+        raise Failed(
+            "the queue topology changed. Every broker that already has these "
+            "queues must have them DELETED before this can be deployed.\n"
+            f"  now      {transport.TOPOLOGY}\n"
+            f"  expected {expected}\n"
+            "  If the change is intended, update this check in the same "
+            "commit and say so in the message.")
+    return f"{len(expected)} queues, arguments unchanged"
+
+
 def check_the_readme_layout_is_real() -> str:
     """Every path in the README's layout block must exist.
 
@@ -577,6 +613,7 @@ def main() -> int:
         check_limits_are_sane,
         check_job_store_round_trips,
         check_a_task_reaches_a_worker_and_comes_back,
+        check_the_queue_topology_is_stable,
         check_old_databases_gain_the_new_columns,
         check_messages_round_trip,
         check_ledger_applies_a_run_in_order,

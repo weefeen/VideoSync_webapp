@@ -94,6 +94,10 @@ class Settings:
     # Below this the recogniser plans a single window, and a single window
     # always agrees with itself: consensus comes out at 1.0 and the open-set
     # gate stops meaning anything. Refuse such uploads rather than guess.
+    # Empty means the in-process queue, which is what a developer machine
+    # and CI both use — no broker to install anywhere. Set it and the same
+    # messages travel through RabbitMQ instead.
+    rabbitmq_url: str = ""
     identify_min_seconds: float = 20.0
     identify_timeout: float = 600.0
     # Alignment. VideoScoreSync turns the performance into a chroma matrix
@@ -285,6 +289,7 @@ def load() -> Settings:
         id_index_dir=_one("ID_INDEX_DIR"),
         pair_list=_one("PAIR_LIST"),
         identify_min_seconds=_number("IDENTIFY_MIN_SECONDS", 20.0),
+        rabbitmq_url=os.getenv("RABBITMQ_URL", "").strip().strip('"'),
         identify_timeout=_number("IDENTIFY_TIMEOUT", 600.0),
         vss_root=_one("VSS_ROOT"),
         sync_python=os.getenv("SYNC_PYTHON", "").strip().strip('"'),

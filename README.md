@@ -48,7 +48,7 @@ app/
 
   queue/                the seam between taking an order and doing the work
     messages.py           RenderTask and Event — the two shapes, versioned
-    transport.py          how they travel; in-process today, a broker next
+    transport.py          how they travel: in-process, or RabbitMQ
     worker.py             does the work, reports; never opens the database
     ledger.py             the ONLY writer of a worker's report into the table
     webside.py            applier and janitor threads; owns the table
@@ -153,6 +153,7 @@ sets **every** variable, deliberately: `settings.py` falls back to
 | `tools/try_identify.py` | recognition only, on a real recording |
 | `tools/try_render.py` | the whole slice with no browser: recognise, align, render |
 | `tools/compare_alignments.py` | two `measures.data` for one recording, measure by measure |
+| `tools/brokercheck.py` | against a real RabbitMQ: `ping`, `topology`, `submit`, `watch` |
 
 CI runs on `ubuntu-latest` **and** `windows-latest`, and that matters more
 than it looks. Development is Windows and the servers are Linux, and the

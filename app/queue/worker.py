@@ -91,3 +91,48 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
         say("failed", error=f"Unexpected failure: {exc}",
             error_class=type(exc).__name__)
         return False
+
+
+def main() -> int:
+    """Run as a worker process: `python -m app.queue.worker`.
+
+    This is the compute host's whole program. It consumes tasks and reports;
+    it serves nothing, and it never opens the job table. Without
+    RABBITMQ_URL there is nothing to consume from another process, so it
+    says so rather than sitting silently on an in-memory queue nobody else
+    can reach.
+    """
+    import logging
+    import signal
+    import sys
+
+    from ..settings import settings
+    from .transport import transport
+    from . import webside
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if not settings.rabbitmq_url:
+        print("RABBITMQ_URL is not set. A separate worker process needs a "
+              "broker to take work from; with the in-process queue the web "
+              "process is already the worker.", file=sys.stderr)
+        return 2
+
+    bus = transport()
+    logger.info("worker %s consuming tasks", name())
+
+    def stop(signum, _frame):
+        logger.info("signal %s; finishing the current task then exiting", signum)
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        bus.consume_tasks(webside._handle)
+    except SystemExit:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -23,6 +23,7 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     python3 python3-venv python3-dev python3-pip \
     ffmpeg \
+    rabbitmq-server \
     libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 \
     libffi-dev shared-mime-info \
     git curl ca-certificates build-essential

@@ -30,7 +30,7 @@ import time
 
 from .. import store
 from . import ledger, worker
-from .messages import RenderTask
+from .messages import Event, RenderTask
 from .transport import Transport, transport
 
 logger = logging.getLogger(__name__)
@@ -75,10 +75,25 @@ def start_threads() -> int:
 
     threading.Thread(target=bus.consume_events, args=(_apply,),
                      name="applier", daemon=True).start()
-    threading.Thread(target=bus.consume_tasks, args=(_handle,),
-                     name="render", daemon=True).start()
     threading.Thread(target=_sweep_forever, args=(bus,),
                      name="janitor", daemon=True).start()
+
+    # Who renders depends on the transport, and this is the whole difference
+    # between the two arrangements:
+    #
+    #   in-process queue — nobody else can reach it, so this process must be
+    #     the worker too. One command, no broker, which is what a developer
+    #     machine and CI need.
+    #   a broker — the worker is `python -m app.queue.worker`, its own
+    #     process and later its own host. Consuming here as well would put
+    #     two consumers on one queue, and nothing yet stops both of them
+    #     rendering the same task.
+    if not bus.survives_restart:
+        threading.Thread(target=bus.consume_tasks, args=(_handle,),
+                         name="render", daemon=True).start()
+    else:
+        logger.info("not rendering here: start a worker with "
+                    "`python -m app.queue.worker`")
 
     waiting = len(store.waiting())
     if waiting:
@@ -122,9 +137,38 @@ def _apply(event) -> None:
     ledger.apply(event)
 
 
+# How often the worker says it is still alive while nothing else is happening.
+HEARTBEAT_SECONDS = 60.0
+
+
 def _handle(task: RenderTask, ack) -> None:
-    worker.handle_task(task, transport().publish_event)
-    ack()
+    """Run one task, saying so periodically for as long as it takes.
+
+    The encode is silent for up to about twenty-eight minutes — ffmpeg
+    reports nothing a stage boundary would notice — so without this the lease
+    would expire mid-render and the janitor would queue the job again while
+    it was still being rendered. The lease has to measure "is a worker there",
+    not "has a stage finished".
+    """
+    bus = transport()
+    stop = threading.Event()
+
+    def beat() -> None:
+        while not stop.wait(HEARTBEAT_SECONDS):
+            try:
+                bus.publish_event(Event(job_id=task.job_id, type="heartbeat",
+                                        attempt=task.attempt,
+                                        worker=worker.name()))
+            except Exception:                         # noqa: BLE001
+                logger.warning("could not send a heartbeat for %s", task.job_id)
+
+    threading.Thread(target=beat, name=f"beat-{task.job_id}",
+                     daemon=True).start()
+    try:
+        worker.handle_task(task, bus.publish_event)
+    finally:
+        stop.set()
+        ack()
 
 
 def _recover(bus: Transport) -> None:
