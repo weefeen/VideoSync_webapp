@@ -69,50 +69,47 @@ def cmd_topology(_args) -> int:
 
 
 def cmd_ping(args) -> int:
-    """Publish a ping and wait for the worker's pong."""
+    """Publish a ping and watch a worker take it.
+
+    Deliberately measured by the queue draining, not by catching the pong.
+    The pong goes to `vsw.events`, which the web process's applier consumes
+    — so listening there means competing with it for deliveries, and
+    RabbitMQ would hand roughly half of them to the wrong one. Worse, a
+    listener that acks what it takes would swallow a real `done` from a live
+    render. The pong is left to the applier, which logs it.
+
+    What this proves: the URL, the vhost, the credentials and the queue
+    arguments are all right, and something is consuming. All of it in about
+    a second, without touching ffmpeg.
+    """
     bus = need_broker()
-    seen: list = []
-
-    import threading
-    stop = threading.Event()
-
-    def listen() -> None:
-        import pika
-        connection = bus._open()
-        channel = connection.channel()
-        tr.declare(channel)
-        for method, _props, body in channel.consume(tr.EVENTS_QUEUE,
-                                                    inactivity_timeout=1.0):
-            if stop.is_set():
-                break
-            if method is None:
-                continue
-            from app.queue.messages import Event
-            event = Event.from_json(body)
-            channel.basic_ack(method.delivery_tag)
-            if event.type == "pong":
-                seen.append(event)
-                break
-        with __import__("contextlib").suppress(Exception):
-            connection.close()
-
-    thread = threading.Thread(target=listen, daemon=True)
-    thread.start()
-    time.sleep(0.5)
 
     began = time.time()
     bus.publish_task(RenderTask(job_id="ping", upload="", package="",
                                 kind="ping"))
     print(f"  published a ping to {tr.RENDER_QUEUE}")
-    thread.join(timeout=args.timeout)
-    stop.set()
 
-    if not seen:
-        print(f"  NO ANSWER in {args.timeout:.0f}s.")
-        print("  Is a worker running?  python -m app.queue.worker")
-        return 1
-    print(f"  pong from {seen[0].worker} in {time.time() - began:.2f}s")
-    return 0
+    while time.time() - began < args.timeout:
+        depth = bus.render_depth()
+        if depth is None:
+            print("  could not measure the queue")
+            return 1
+        ready, consumers = depth
+        if consumers == 0:
+            print(f"  NO CONSUMER on {tr.RENDER_QUEUE}.")
+            print("  Start one:  python -m app.queue.worker")
+            return 1
+        if ready == 0:
+            print(f"  a worker took it in {time.time() - began:.2f}s "
+                  f"({consumers} consumer(s))")
+            return 0
+        time.sleep(0.5)
+
+    print(f"  STILL QUEUED after {args.timeout:.0f}s — a consumer is "
+          f"registered but is not taking work.")
+    print("  A worker busy with a render will not answer until it finishes; "
+          "that is correct, and prefetch=1 is why.")
+    return 1
 
 
 def cmd_submit(args) -> int:
