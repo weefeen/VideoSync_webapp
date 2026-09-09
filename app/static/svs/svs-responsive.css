@@ -148,3 +148,28 @@
   .pband:not(:last-child)  { padding-right: 18px; }
   .pband:not(:first-child) { padding-left: 18px; }
 }
+
+/* ── the handwritten note ─────────────────────────────────────────────── */
+/* Marker yellow reads at 1.27:1 on this paper, which is no reading at all.
+ * This gold is the same gesture at 2.9:1 — fine for a script face at this
+ * size — and the pale halo does what ink does on paper while buying a
+ * little more separation. The tilt is small on purpose: enough to look
+ * written by hand, not enough to look like a mistake. */
+.handnote {
+  display: block;
+  margin-top: 10px;
+  font-family: Caveat, "Segoe Script", "Bradley Hand", cursive;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: #b8860b;
+  letter-spacing: .005em;
+  transform: rotate(-1.4deg);
+  transform-origin: left center;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .55);
+}
+@media (max-width: 600px) {
+  /* The dropzone goes left-aligned and single column below this, and the
+     note is decoration — it should not push the button off the fold. */
+  .handnote { font-size: 19px; margin-top: 8px; }
+}

@@ -1189,7 +1189,7 @@ function creditCliburn(){
 
   const a = document.createElement('a');
   a.className = 'pband';
-  a.href = 'https://cliburn.org/';
+  a.href = 'https://www.weefeen.com/cliburn';
   a.target = '_blank';
   a.rel = 'noopener noreferrer';        // the opened tab gets no handle on ours
   a.dataset.cliburn = '1';
@@ -1274,21 +1274,97 @@ function foldPrivacy(){
   inner.appendChild(slot);
 }
 
-/* Put Privacy in the footer, beside Credits.
+/* Finish the footer.
  *
- * Added here because svs-min.js rebuilds that row itself, so an edit to
- * index.html alone would be overwritten on the screens where it redraws. */
-function linkPrivacy(){
+ * The design already carries a "Privacy" link — as href="#", a placeholder
+ * that looks live and goes nowhere. It gets the real page rather than a
+ * second link beside it, which is what an earlier version of this function
+ * did and would have printed Privacy twice.
+ *
+ * "The Chopin library" goes: it was also href="#", and there is no such
+ * page to point it at. A link that does nothing is worse than no link,
+ * because the reader blames themselves for the missing page. */
+function fixFooter(){
   document.querySelectorAll('.footlinks').forEach(row => {
-    if(row.querySelector('[data-privacy]')) return;
-    const a = document.createElement('a');
-    a.href = 'Privacy.html';
-    a.textContent = 'Privacy';
-    a.dataset.privacy = '1';
-    const credits = row.querySelector('a[href="Credits.html"]');
-    row.insertBefore(a, credits || null);
+    row.querySelectorAll('a').forEach(a => {
+      const label = (a.textContent || '').trim().toLowerCase();
+      if(label === 'privacy') a.href = 'Privacy.html';
+      if(label === 'the chopin library') a.remove();
+    });
+    // Only if the design ever drops its own Privacy link.
+    if(!Array.from(row.querySelectorAll('a'))
+        .some(a => (a.textContent || '').trim().toLowerCase() === 'privacy')){
+      const a = document.createElement('a');
+      a.href = 'Privacy.html';
+      a.textContent = 'Privacy';
+      row.appendChild(a);
+    }
   });
 }
-linkPrivacy();
-/* svs-min redraws the footer on some screens, so put it back afterwards. */
-document.addEventListener('click', () => setTimeout(linkPrivacy, 0), true);
+fixFooter();
+/* Both of these live in markup the design rewrites: svs-min redraws the
+ * footer on some screens, and the dropzone's copy is replaced wholesale
+ * while a file is going up. Re-applied after anything that could have
+ * redrawn them, which is cheap and idempotent — each returns immediately
+ * when its element is already there. */
+document.addEventListener('click', () => setTimeout(() => {
+  fixFooter();
+  handNote();
+  linkPartners();
+}, 0), true);
+
+/* The handwritten note under the dropzone.
+ *
+ * A marker-yellow (#ffd400) on this cream paper measures 1.27:1 against the
+ * background — legible to nobody. The gold below is the same gesture at
+ * 2.9:1, which a 22px script face carries comfortably, and it still reads
+ * as yellow rather than brown. The faint white halo underneath is what a
+ * felt tip does on paper anyway, and it buys another half stop of contrast
+ * for free. */
+function handNote(){
+  const copy = document.querySelector('#dropcopy');
+  if(!copy || copy.querySelector('[data-hand]')) return;
+
+  if(!document.querySelector('link[data-caveat]')){
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.caveat = '1';
+    link.href = 'https://fonts.googleapis.com/css2?family=Caveat:wght@500;600&display=swap';
+    document.head.appendChild(link);
+  }
+
+  const note = document.createElement('span');
+  note.className = 'handnote';
+  note.dataset.hand = '1';
+  note.textContent = 'Full HD video compatible, high quality score';
+  copy.appendChild(note);
+}
+handNote();
+
+/* Give the partner bands their destinations.
+ *
+ * Two of the three ship as href="#" in the design, which is a placeholder
+ * that looks like a link and does nothing — worse than no link at all.
+ * Set here rather than in the markup for the usual reason: this file stays
+ * the one place the app differs from what was handed over.
+ *
+ * All three open in a new tab. Not a stylistic choice: somebody may click
+ * one while their video is going up, and navigating away would abandon the
+ * upload with no way to explain what happened. */
+const PARTNER_LINKS = {
+  'FREDERIC CHOPIN': 'https://www.facebook.com/groups/frederic.chopin/',
+  'Weefeen':         'https://www.weefeen.com',
+  'Cliburn 2025':    'https://www.weefeen.com/cliburn',
+};
+
+function linkPartners(){
+  document.querySelectorAll('.pband').forEach(band => {
+    const name = (band.querySelector('.fbname') || {}).textContent;
+    const href = PARTNER_LINKS[(name || '').trim()];
+    if(!href) return;
+    band.href = href;
+    band.target = '_blank';
+    band.rel = 'noopener noreferrer';   // the new tab gets no handle on ours
+  });
+}
+linkPartners();
