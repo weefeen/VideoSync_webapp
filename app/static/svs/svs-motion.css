@@ -32,17 +32,7 @@
  * stops short of the reading column at the sides. */
 .driftpages {
   position: fixed;
-  /* The margin at the top is this line, and nothing else.
-   *
-   * It was tried three times as a gradient and once as a composited mask
-   * and never appeared. This cannot fail to: the element begins 60px down
-   * and clips its children, so there is no way for the engraving to be
-   * drawn above it. The fade below softens the edge; the margin does not
-   * depend on the fade working. */
-  top: 60px;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
@@ -50,26 +40,14 @@
      so it can be seen rather than merely sensed. */
   opacity: .10;
   -webkit-mask-image: linear-gradient(180deg,
-      transparent 0, #000 30px, #000 calc(100% - 30px), transparent 100%);
+      transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%);
           mask-image: linear-gradient(180deg,
-      transparent 0, #000 30px, #000 calc(100% - 30px), transparent 100%);
+      transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%);
 }
 
 /* Where the score may show. One zone per region, each with a single
-   gradient, so their areas add up without any compositing.
-   
-   Pulled 60px back UP, exactly as far as the window above was pushed down.
-   Otherwise the whole engraving slides down with the clip and the top-left
-   corner goes bare again: the window has to start lower while the score
-   stays where it was, and only the overlap is cut off. */
-.driftzone {
-  position: absolute;
-  top: -60px;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  overflow: hidden;
-}
+   gradient, so their areas add up without any compositing. */
+.driftzone { position: absolute; inset: 0; overflow: hidden; }
 
 /* The margins, outside the 1040px reading column. Behind a paragraph the
    engraving is noise however faint; in the margin it is paper showing past
@@ -88,8 +66,8 @@
    exactly what the margin mask hides, so without this the top of the page
    was bare. It stops above the title and never runs behind it. */
 .drift-head {
-  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 134px, transparent 208px);
-          mask-image: linear-gradient(180deg, #000 0, #000 134px, transparent 208px);
+  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 74px, transparent 148px);
+          mask-image: linear-gradient(180deg, #000 0, #000 74px, transparent 148px);
 }
 
 /* The tilt. Oversized far more above than anywhere else, and not for
