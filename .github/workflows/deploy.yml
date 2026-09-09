@@ -1,0 +1,95 @@
+# Deploy chopin.weefeen.com.
+#
+# Only from `main`, or by hand. NOT on pull_request — the workflow this was
+# adapted from deploys on pull_request, which means opening a pull request
+# ships to production.
+#
+# The target is a SHARED box: weefeen's Symfony app, its PHP RabbitMQ
+# consumers and the broker itself all live there. Everything destructive in
+# the original was removed for that reason; see deploy/deploy.sh for the list.
+#
+# Secrets this needs (Settings -> Secrets and variables -> Actions):
+#   SSH_PRIVATE_KEY    a key whose public half is in vsw@'s authorized_keys
+#   SSH_KNOWN_HOSTS    output of `ssh-keyscan chopin.weefeen.com`
+#   DEPLOY_HOST        chopin.weefeen.com
+#   DEPLOY_USER        vsw   (an unprivileged user, NOT root)
+#
+# Until those exist this workflow simply will not run: `environment` gates it
+# behind a GitHub environment, so the first deploy is a deliberate act.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to deploy"
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two deploys rsyncing into the same tree at once would interleave files.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Name this release
+        id: release
+        run: echo "name=$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Trust the host
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Send the release
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          REL: ${{ steps.release.outputs.name }}
+        run: |
+          set -euo pipefail
+          ssh "$USER@$HOST" "mkdir -p /mnt/volume_1/vsw/releases/$REL"
+          # --delete so a file removed from the repo is removed from the
+          # release; the excludes are the things that must never be shipped
+          # or must never be overwritten on the server.
+          rsync -az --delete \
+            --exclude '.git' --exclude '.github' \
+            --exclude '.env' --exclude 'var' \
+            --exclude '__pycache__' --exclude '*.pyc' \
+            --exclude '.venv' \
+            ./ "$USER@$HOST:/mnt/volume_1/vsw/releases/$REL/"
+
+      - name: Put it live
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          REL: ${{ steps.release.outputs.name }}
+        run: |
+          set -euo pipefail
+          ssh "$USER@$HOST" "bash /mnt/volume_1/vsw/releases/$REL/deploy/deploy.sh $REL"
+
+      - name: Say what is live
+        if: always()
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: ssh "$USER@$HOST" "readlink -f /mnt/volume_1/vsw/current" || true
