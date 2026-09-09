@@ -879,7 +879,6 @@ function foldScoreSources(){
   };
 }
 foldScoreSources();
-foldPrivacy();
 document.addEventListener('DOMContentLoaded', foldScoreSources);
 
 /* ── the sample on the landing page ──────────────────────────────────── */
@@ -1206,73 +1205,6 @@ function creditCliburn(){
 }
 creditCliburn();
 
-/* Privacy, folded away beside the score sources.
- *
- * The note says what the system does rather than making a general promise
- * about caring, because the specific version is both stronger and checkable:
- * the upload is deleted, and what is kept cannot be turned back into a
- * recording of anyone. A blanket "every video improves our service" would
- * have claimed a use of people's recordings that we neither need nor have
- * asked permission for.
- *
- * The window comes from the server so the sentence cannot outlive the
- * setting it describes. */
-function foldPrivacy(){
-  const inner = document.querySelector('.srcfoot .srcinner');
-  if(!inner || inner.querySelector('#privtoggle')) return;
-
-  // Read when the note is opened, not when the fold is built: the library
-  // call that carries the window has not answered yet at this point, so
-  // building the sentence now would freeze it at the fallback.
-  const noteHtml = () => {
-  const hours = (SERVER && SERVER.retentionHours) || 48;
-  // Hours, not days: a deadline someone has to act on reads better exact.
-  const span = `${hours} hours`;
-  // The backtick opens on this line deliberately: `return` alone on a line
-  // gets a semicolon inserted after it, and everything below becomes
-  // unreachable. It is valid syntax, so nothing warns; the panel simply
-  // renders the word "undefined".
-  return `<div class="srcblock">
-       <p><b>We keep your recording, and we show it to nobody.</b> It is not
-       published, not shared, and not sold.</p>
-       <p>We keep it to make the system better at what it does — recognising
-       pieces and following scores. Recordings made at home, on whatever
-       instrument and microphone you have, are exactly what it needs to learn
-       from and the one thing a studio library cannot teach it.</p>
-       <p>Your download link works for ${span}. After that the video moves to
-       long-term storage — it is not deleted, and we can restore it if you
-       ask.</p>
-       <p>Your email address is used to send you your own link, and for
-       nothing else. Nothing you type appears in any message we send.</p>
-       <p>If you would rather we did not keep your recording, or you want
-       everything of yours removed, reply to the message you were sent and we
-       will delete it.</p>
-     </div>`;
-  };
-
-  const button = document.createElement('button');
-  button.className = 'linkbtn';
-  button.id = 'privtoggle';
-  button.type = 'button';
-  button.textContent = 'Privacy';
-  button.setAttribute('aria-expanded', 'false');
-  button.setAttribute('aria-controls', 'privnotice');
-  button.style.cssText = 'justify-self:start;text-align:left';
-
-  const slot = document.createElement('div');
-  slot.id = 'privnotice';
-  slot.hidden = true;
-  slot.style.cssText = 'justify-self:stretch;width:100%';
-
-  button.onclick = () => {
-    const showing = !slot.hidden;
-    slot.hidden = showing;
-    slot.innerHTML = showing ? '' : noteHtml();
-    button.setAttribute('aria-expanded', String(!showing));
-  };
-  inner.appendChild(button);
-  inner.appendChild(slot);
-}
 
 /* Finish the footer.
  *
