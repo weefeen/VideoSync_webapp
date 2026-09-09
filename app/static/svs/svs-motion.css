@@ -40,24 +40,33 @@
   /* Twelve percent. It sits in the margin now, where nothing competes
      with it, so it can be seen rather than merely sensed. */
   opacity: .12;
-  /* Hard to the screen edges, and a short crossing into the reading
-     column rather than a long one.
-     
-     The 3% fade that used to sit at each edge is gone: it emptied the
-     corners, which is exactly where the header sits, so the top of the
-     page looked bare. And the crossing was 140px, which spent most of the
-     available margin fading — it is 60px now, so nearly all of the margin
-     shows the score moving instead of dissolving. */
-  -webkit-mask-image: linear-gradient(90deg,
-      #000 0,
-      #000 calc(50% - 620px), transparent calc(50% - 560px),
-      transparent calc(50% + 560px), #000 calc(50% + 620px),
-      #000 100%);
-          mask-image: linear-gradient(90deg,
-      #000 0,
-      #000 calc(50% - 620px), transparent calc(50% - 560px),
-      transparent calc(50% + 560px), #000 calc(50% + 620px),
-      #000 100%);
+  /* Two masks, unioned: show the score where EITHER says show.
+   *
+   *   across  a full-width strip down the top of the page, so the header
+   *           band and both top corners carry the engraving. Masking by
+   *           column alone left them bare — the header is centred, which
+   *           is exactly where a column mask hides things.
+   *   margins the space outside the 1040px reading column, everywhere else.
+   *
+   * The crossing is 30px rather than 60. On a 1440 laptop the margin is
+   * only about 130px wide, so a 60px fade was half of it: most of the
+   * space was dissolving rather than showing anything. */
+  -webkit-mask-image:
+      linear-gradient(180deg, #000 0, #000 210px, transparent 330px),
+      linear-gradient(90deg,
+        #000 0,
+        #000 calc(50% - 550px), transparent calc(50% - 520px),
+        transparent calc(50% + 520px), #000 calc(50% + 550px),
+        #000 100%);
+  -webkit-mask-composite: source-over;
+          mask-image:
+      linear-gradient(180deg, #000 0, #000 210px, transparent 330px),
+      linear-gradient(90deg,
+        #000 0,
+        #000 calc(50% - 550px), transparent calc(50% - 520px),
+        transparent calc(50% + 520px), #000 calc(50% + 550px),
+        #000 100%);
+          mask-composite: add;
 }
 
 /* The tilt. Oversized because a rectangle turned seven degrees no longer
