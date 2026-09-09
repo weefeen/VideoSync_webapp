@@ -85,15 +85,52 @@ function fileBar(meta){
 const LISTEN_ESTIMATE = 45;
 let listenStarted = 0, listenTimer = null;
 
-function listenTick(){
+/* The bar covers two real phases. Sending the file is measurable, so it is
+ * measured; finding the piece is not — the recogniser says nothing until it
+ * is done — so that stretch runs on the clock. Locally the first phase is
+ * over instantly and you see mostly the second; over a network it is the
+ * other way round, which is when an honest bar matters most. */
+const UPLOAD_SHARE = 0.35;
+let uploadFraction = 0, uploadDone = false;
+
+function setBar(fraction){
   const bar = $('#listenbar');
-  if(!bar) return;
+  if(bar) bar.style.width = (Math.max(0, Math.min(0.97, fraction)) * 100).toFixed(1) + '%';
+}
+
+function listenTick(){
+  if(!uploadDone) return setBar(uploadFraction * UPLOAD_SHARE);
   const gone = (Date.now() - listenStarted) / 1000;
-  bar.style.width = Math.min(97, (gone / LISTEN_ESTIMATE) * 100).toFixed(1) + '%';
+  setBar(UPLOAD_SHARE + (1 - UPLOAD_SHARE) * Math.min(1, gone / LISTEN_ESTIMATE));
+}
+
+/* fetch cannot report how much of a body has gone out; XHR can. */
+function postUpload(name, blob){
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('video', blob, name);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API.upload);
+    xhr.upload.onprogress = e => {
+      if(e.lengthComputable){ uploadFraction = e.loaded / e.total; listenTick(); }
+    };
+    xhr.onload = () => {
+      let body = {};
+      try{ body = JSON.parse(xhr.responseText || '{}'); }catch(err){}
+      if(xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `upload failed (${xhr.status})`));
+    };
+    // A refusal arrives as a status; a vanished server arrives here, and
+    // the two are told apart the same way the rest of this file does it.
+    xhr.onerror = () => reject(new TypeError('Failed to fetch'));
+    xhr.onabort  = () => reject(new TypeError('Failed to fetch'));
+    xhr.send(form);
+  });
 }
 
 function startListening(){
   listenStarted = Date.now();
+  uploadFraction = 0; uploadDone = false;
   clearInterval(listenTimer);
   listenTimer = setInterval(listenTick, 250);
 }
@@ -302,11 +339,9 @@ async function uploadAndIdentify(name, blob){
 
   let data;
   try{
-    const form = new FormData();
-    form.append('video', blob, name);
-    const r = await fetch(API.upload, { method:'POST', body: form });
-    data = await r.json();
-    if(!r.ok) throw new Error(data.error || `upload failed (${r.status})`);
+    data = await postUpload(name, blob);
+    uploadDone = true;              // the file is there; now it is listening
+    listenStarted = Date.now();
   }catch(err){
     // A server that refuses this file has said something worth reading; a
     // server that vanished mid-upload has not, and should not strand the
