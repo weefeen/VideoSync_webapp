@@ -17,7 +17,7 @@
  *
  * Fixed rather than scrolled, so the reader moves and the music stays put:
  * the page reads as laid over sheet music rather than dragging a picture
- * behind it. Six percent opacity, which is enough to see when you look for
+ * behind it. Held faint enough to see when you look for
  * it and not enough to notice while reading. */
 /* The fade at the edges of the window.
  *
@@ -36,9 +36,8 @@
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  /* Ten percent. It sits in the margin, where nothing competes with it,
-     so it can be seen rather than merely sensed. */
-  opacity: .10;
+  /* Eight percent. */
+  opacity: .08;
   -webkit-mask-image: linear-gradient(180deg,
       transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%);
           mask-image: linear-gradient(180deg,
