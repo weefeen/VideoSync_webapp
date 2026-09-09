@@ -121,7 +121,11 @@ def api_library():
                     "can_email": settings.can_email,
                     # Stated so the free-tier copy quotes the number that is
                     # enforced, instead of drifting away from it.
-                    "videos_per_week": limits.RULES["render_ip"].limit})
+                    "videos_per_week": limits.RULES["render_ip"].limit,
+                    # Published so the privacy note quotes the window that
+                    # is actually enforced rather than a number typed into
+                    # copy once and then left behind by a config change.
+                    "retention_hours": settings.retention_hot_hours})
 
 
 @bp.get("/api/stats")

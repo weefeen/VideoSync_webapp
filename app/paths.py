@@ -35,14 +35,23 @@ Three tiers hold these files over a job's life:
     hot           what a visitor can download, for RETENTION_HOT_HOURS.
     archive       the same objects afterwards, in Glacier.
 
-`KEEP` below is what crosses into the hot tier and then the archive.
-`DISCARD` is everything else, and the choice is not only about size: the two
-largest files are the visitor's own recording and their raw performance
-audio, which are also the two that are personal data. Neither is kept.
+`keep()` is what crosses into the hot tier and then the archive: the video,
+the recording it was made from, and the small artefacts that are expensive
+to recompute. With the chroma and the alignment kept, re-rendering a job in
+different colours is a two-minute encode rather than the whole job again.
 
-What is kept, besides the video, is the small stuff that is expensive to
-recompute — the chroma and the alignment. With those, re-rendering a job in
-different colours is a two-minute encode rather than an eleven-minute job.
+The upload is kept on purpose. Recordings made at home — whatever
+instrument, whatever microphone, whatever room — are the one thing a studio
+library cannot supply and the thing recognition most needs to be robust
+against. That is a commitment rather than a convenience: they are
+recordings of identifiable people, held indefinitely, so the page says
+plainly that we hold them, that nobody is shown them, and that they are
+deleted on request. If that promise changes, this function is where it
+changes, and the note on the page has to move with it.
+
+`discard()` is the extracted audio and the encoder's leavings. The audio
+goes because it is a lossy re-encode of a file we are already keeping;
+holding both is paying twice for one recording.
 """
 
 from __future__ import annotations
@@ -153,11 +162,19 @@ class JobPaths:
     def keep(self) -> list[pathlib.Path]:
         """Files that cross to the hot tier and then to the archive.
 
-        The video, and the small artefacts that are expensive to recompute:
-        with the chroma and the alignment, a re-render is a two-minute
-        encode rather than the whole eleven-minute job again.
+        The video, the recording it was made from, and the small artefacts
+        that are expensive to recompute: with the chroma and the alignment,
+        a re-render is a two-minute encode rather than the whole job again.
+
+        The upload is kept deliberately. Home recordings — whatever
+        instrument, whatever microphone, whatever room — are the one thing a
+        studio library cannot supply and the thing the recogniser most needs
+        to be robust against. Keeping them is a commitment, though, not a
+        convenience: they are recordings of identifiable people, so the
+        privacy note says plainly that we hold them, that nobody sees them,
+        and that they are deleted on request.
         """
-        wanted = [self.chroma, self.measures, self.verdict,
+        wanted = [self.upload, self.chroma, self.measures, self.verdict,
                   self.job_params, self.static_info]
         result = self.existing_result()
         if result:
@@ -167,12 +184,11 @@ class JobPaths:
     def discard(self) -> list[pathlib.Path]:
         """Files deleted once the result is safely stored.
 
-        The upload and the extracted audio are the two largest files here
-        and also the two that are recordings of an identifiable person.
-        Keeping them past the moment they are useful is storage we pay for
-        and a liability we do not need.
+        The extracted audio goes: it is a lossy re-encode of the upload we
+        are keeping, so holding both is paying twice for the same recording.
+        Everything else here is an intermediate the encode left behind.
         """
-        rubbish = [self.upload, self.audio]
+        rubbish = [self.audio]
         if self.output_dir.is_dir():
             rubbish += [p for p in self.output_dir.iterdir()
                         if p.is_file() and PROCESSED_SUFFIX not in p.name]
