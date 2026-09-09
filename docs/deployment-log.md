@@ -508,11 +508,21 @@ queue and nothing yet stops both rendering the same task.
 
 ### Proof
 
-    brokercheck ping     pong from localhost:15518 in 0.03s
+    brokercheck ping     a worker took it in 0.07s (1 consumer)
 
 `ping` is answered without touching ffmpeg, so a wrong URL, a missing vhost,
 a bad password or a queue whose arguments disagree shows up in a second
 rather than at the end of a half-hour render.
+
+It measures the queue draining rather than catching the worker's `pong`, and
+that is a correction rather than a preference. The first version listened on
+`vsw.events` — which the web process's applier also consumes, so RabbitMQ
+round-robined between them and `ping` reported NO ANSWER on a broker that was
+working, with both consumers registered. The real hazard was worse than a
+false negative: the listener acked whatever it was handed, so running `ping`
+during a live render could have swallowed that job's `done` event. The video
+would exist, the row would stay `running`, the lease would expire, and the
+janitor would render it a second time.
 
 Then a real upload, over HTTP, to the running web process:
 
