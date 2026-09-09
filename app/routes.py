@@ -238,17 +238,30 @@ def _trimmed(path: pathlib.Path) -> str:
     opening = re.search(r"<svg\b[^>]*>", text)
     if not opening:
         return text
-    tag = opening.group(0)
-    # The declared size shrinks with the viewBox so the plate keeps its
-    # proportions wherever it is drawn.
-    tag = re.sub(r'\swidth="[^"]*"', f' width="{wide:.0f}px"', tag)
-    tag = re.sub(r'\sheight="[^"]*"', f' height="{tall:.0f}px"', tag)
-    box = f'viewBox="{x:.0f} {y:.0f} {wide:.0f} {tall:.0f}"'
-    if "viewBox" in tag:
-        tag = re.sub(r'viewBox="[^"]*"', box, tag)
-    else:
-        tag = tag[:-1] + f" {box}>"
-    return text[:opening.start()] + tag + text[opening.end():]
+
+    # The plate is nested inside a new root rather than edited in place.
+    #
+    # Editing it in place did not work, through several attempts: Verovio
+    # writes overflow="visible" on the root, and a root <svg> is where a
+    # viewBox sets up the coordinate system rather than a window onto it.
+    # The crop kept changing the numbers and drawing the whole page.
+    #
+    # An OUTER svg has no such ambiguity. Its viewport clips by default,
+    # and the plate is placed inside it shifted by exactly the margin being
+    # removed. Every renderer agrees about this, which the other approach
+    # could not be relied on for.
+    inner = text[opening.start():]
+    inner = re.sub(r'^<svg\b[^>]*>',
+                   f'<svg x="{-x:.0f}" y="{-y:.0f}" '
+                   f'width="{width:.0f}" height="{height:.0f}" '
+                   f'viewBox="0 0 {width:.0f} {height:.0f}" '
+                   f'overflow="visible">',
+                   inner, count=1)
+    head = text[:opening.start()]
+    return (f'{head}<svg xmlns="http://www.w3.org/2000/svg" '
+            f'xmlns:xlink="http://www.w3.org/1999/xlink" '
+            f'width="{wide:.0f}px" height="{tall:.0f}px" '
+            f'viewBox="0 0 {wide:.0f} {tall:.0f}">{inner}</svg>')
 
 
 def _svg_px(text: str, attr: str) -> float | None:
@@ -383,7 +396,7 @@ def api_band(name: str):
 _TINT_RULE = 2
 
 # Bumped when the plate's crop changes, so cached copies are let go of.
-_PAGE_RULE = 5
+_PAGE_RULE = 7
 
 
 def _hex_colour(raw: str) -> str:
