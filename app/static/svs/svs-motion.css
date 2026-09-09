@@ -19,18 +19,17 @@
  * the page reads as laid over sheet music rather than dragging a picture
  * behind it. Six percent opacity, which is enough to see when you look for
  * it and not enough to notice while reading. */
-/* Where the score may show: the margins, never behind the reading column.
+/* The fade at the edges of the window.
  *
- * The content is 1040px wide and centred, so this is opaque outside a
- * centred band a little wider than that and transparent within it. Behind
- * text the engraving is noise however faint it is; in the margin it is
- * paper showing at the edges of a desk.
+ * This element does one thing and carries one gradient, because that is
+ * the part that has to be reliable: it is the margin at the top, and two
+ * attempts at it inside a multi-layer mask did not appear at all. A mask
+ * on a parent multiplies with a mask on its child in every browser, so the
+ * regions live one level down and this simply fades whatever they show.
  *
- * Not rotated, deliberately. The tilt lives on the child, because a mask
- * on a turned element turns with it, and the margins this has to line up
- * with are square to the page. Below about 1360px there is no margin left
- * and the whole thing simply fades out, which is the right answer on a
- * narrow screen rather than a special case to write. */
+ * Fading in over 34px means the engraving is never cut off against the top
+ * of the window — the score begins a little below the edge, the way it
+ * stops short of the reading column at the sides. */
 .driftpages {
   position: fixed;
   inset: 0;
@@ -40,48 +39,44 @@
   /* Ten percent. It sits in the margin, where nothing competes with it,
      so it can be seen rather than merely sensed. */
   opacity: .10;
-  /* Three masks: two say WHERE the score may show, the third says how it
-   * meets the edges of the window.
-   *
-   *   edge     a soft border all the way round, so the engraving is never
-   *            cut off against the top of the window or the sides. This is
-   *            the margin that was asked for twice and did not appear —
-   *            because with `add` the region masks simply overrode it.
-   *            Union says "opaque if EITHER says opaque", so a fade can
-   *            never take anything away. It has to intersect: opaque only
-   *            where the regions allow AND the fade permits.
-   *   across   a full-width strip over the header, above the title.
-   *   margins  the space outside the 1040px reading column, below it.
-   */
-  -webkit-mask-image:
-      linear-gradient(180deg, transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%),
-      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
-      linear-gradient(90deg,
-        #000 0,
-        #000 calc(50% - 550px), transparent calc(50% - 520px),
-        transparent calc(50% + 520px), #000 calc(50% + 550px),
-        #000 100%);
-  -webkit-mask-composite: source-in, source-over;
-          mask-image:
-      linear-gradient(180deg, transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%),
-      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
-      linear-gradient(90deg,
-        #000 0,
-        #000 calc(50% - 550px), transparent calc(50% - 520px),
-        transparent calc(50% + 520px), #000 calc(50% + 550px),
-        #000 100%);
-          mask-composite: intersect, add, add;
+  -webkit-mask-image: linear-gradient(180deg,
+      transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%);
+          mask-image: linear-gradient(180deg,
+      transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%);
 }
 
-/* The tilt. Oversized because a rectangle turned seven degrees no longer
-   covers the box it came from, and the bare wedges would land in view. */
+/* Where the score may show. One zone per region, each with a single
+   gradient, so their areas add up without any compositing. */
+.driftzone { position: absolute; inset: 0; overflow: hidden; }
+
+/* The margins, outside the 1040px reading column. Behind a paragraph the
+   engraving is noise however faint; in the margin it is paper showing past
+   the edge of a desk. Below about 1140px there is no margin left and it
+   fades out on its own, which is the right answer on a narrow screen. */
+.drift-margins {
+  -webkit-mask-image: linear-gradient(90deg,
+      #000 0, #000 calc(50% - 550px), transparent calc(50% - 520px),
+      transparent calc(50% + 520px), #000 calc(50% + 550px), #000 100%);
+          mask-image: linear-gradient(90deg,
+      #000 0, #000 calc(50% - 550px), transparent calc(50% - 520px),
+      transparent calc(50% + 520px), #000 calc(50% + 550px), #000 100%);
+}
+
+/* A strip across the header, full width. The header is centred, which is
+   exactly what the margin mask hides, so without this the top of the page
+   was bare. It stops above the title and never runs behind it. */
+.drift-head {
+  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 74px, transparent 148px);
+          mask-image: linear-gradient(180deg, #000 0, #000 74px, transparent 148px);
+}
+
+/* The tilt. Oversized far more above than anywhere else, and not for
+   symmetry: turning the layer anticlockwise drops its left edge, so the
+   top-left is the first place to run out of picture — and that is the
+   corner the header sits in. Reaching a whole viewport height above the
+   top puts the shortfall off screen at any width. */
 .drifttilt {
   position: absolute;
-  /* Far more room above than anywhere else, and it is not symmetry for its
-     own sake. Turning the layer anticlockwise drops its left edge, so the
-     top-left corner is the first place to run out of picture — and that is
-     the corner the header sits in. Reaching a whole viewport height above
-     the top puts the shortfall off screen at any width or angle. */
   top: -100%;
   right: -40%;
   bottom: -20%;

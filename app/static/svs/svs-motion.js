@@ -74,20 +74,43 @@
     run.style.backgroundImage =
       `url("/api/library/${encodeURIComponent(name)}/page?n=1&v=${rule}")`;
 
-    // Three nested elements, each doing one job: the outer decides WHERE
-    // the score may show, the middle tilts it, the inner moves it. They
-    // cannot be collapsed — a mask on a rotated element is rotated too, and
-    // the margins it has to line up with are square to the page.
-    const tilt = document.createElement('div');
-    tilt.className = 'drifttilt';
-    tilt.appendChild(run);
+    // Built from single-gradient masks only, nested.
+    //
+    // A mask on a parent multiplies with a mask on its child, which every
+    // browser has always done — where mask-composite, which the same
+    // effect needs in one element, did not take here at all. So:
+    //
+    //   .driftpages    the fade at the edges of the window
+    //     .driftzone   WHERE the score may show — one per region
+    //       .drifttilt the angle
+    //         .driftrun the moving engraving
+    //
+    // Two zones, so the regions add up without compositing: the margins
+    // beside the reading column, and a strip across the header. Both draw
+    // the same image from the same address, so it is still one request.
+    const plate = `/api/library/${encodeURIComponent(name)}/page?n=1&v=${rule}`;
+
+    const zone = (kind) => {
+      const run = document.createElement('div');
+      run.className = 'driftrun';
+      run.style.backgroundImage = `url("${plate}")`;
+      const tilt = document.createElement('div');
+      tilt.className = 'drifttilt';
+      tilt.appendChild(run);
+      const box = document.createElement('div');
+      box.className = `driftzone drift-${kind}`;
+      box.appendChild(tilt);
+      return box;
+    };
 
     const layer = document.createElement('div');
     layer.className = 'driftpages';
     layer.setAttribute('aria-hidden', 'true');
-    layer.appendChild(tilt);
+    layer.appendChild(zone('margins'));
+    layer.appendChild(zone('head'));
     document.body.insertBefore(layer, document.body.firstChild);
   }
+
 
   /* ── 3. the headline in musical time ────────────────────────────────── */
   /* The words arrive in sequence, but not evenly: the gaps lengthen and
