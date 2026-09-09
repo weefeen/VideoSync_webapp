@@ -21,6 +21,7 @@ from typing import Any, Iterator
 
 from . import pipeline
 from . import render as rnd
+from . import stats
 
 
 @dataclasses.dataclass
@@ -140,6 +141,9 @@ class Registry:
                 job.stages[name] = "done"
             job.state = "done"
             job.finished = time.time()
+            # One more video that actually exists. Counted here rather than
+            # at submit, so the tally means delivered and not attempted.
+            stats.record_video()
             self._emit(job.id, {"type": "done", "job": job.public()})
 
         except pipeline.PipelineError as exc:

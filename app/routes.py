@@ -18,6 +18,7 @@ from . import autosync, jobs, package as pkg, panel, pipeline
 from . import identify as ident
 from . import library
 from . import render as rnd
+from . import stats
 from . import sync as syncing
 from .settings import settings
 
@@ -113,6 +114,12 @@ def api_library():
     return jsonify({"works": works,
                     "can_identify": settings.can_identify,
                     "can_sync": settings.can_sync})
+
+
+@bp.get("/api/stats")
+def api_stats():
+    """What this install has actually done. Counts, never estimates."""
+    return jsonify({"videos": stats.videos()})
 
 
 @bp.get("/api/library/<path:name>/band")

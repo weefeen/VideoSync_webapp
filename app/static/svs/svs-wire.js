@@ -919,3 +919,46 @@ function trimFreeLine(){
 }
 trimFreeLine();
 document.addEventListener('DOMContentLoaded', trimFreeLine);
+
+/* ── how many videos have actually been made ─────────────────────────── */
+/* The server counts finished renders and nothing else. At zero the line
+ * says nothing at all: an empty tally on a landing page is worse than no
+ * tally, and inventing a flattering one is not on the table. */
+async function showCount(){
+  const badge = document.querySelector('.artifact .badge');
+  if(!badge) return;
+  let made = 0;
+  try{
+    const r = await fetch('/api/stats');
+    made = (await r.json()).videos | 0;
+  }catch(err){ return; }
+  if(made < 1) return;
+  const caption = document.querySelector('.artifact figcaption');
+  if(!caption || caption.dataset.counted) return;
+  caption.dataset.counted = '1';
+  const line = document.createElement('span');
+  line.className = 'lab';
+  line.style.color = 'var(--soft)';
+  line.textContent = made === 1 ? '1 video made' : `${made} videos made`;
+  caption.insertBefore(line, caption.firstChild);
+}
+showCount();
+
+/* ── the design's own screen switcher ────────────────────────────────── */
+/* Upload / Recognised / Unrecognised / How it looks / Inspector open /
+ * Almost there / Sent — the jump list that let the mock be reviewed
+ * without a server. With a server there is nothing to jump to: every one
+ * of those states is reached by using the thing. It also fakes a piece
+ * being chosen when none was uploaded, which is exactly the sort of lie
+ * this wiring exists to remove.
+ *
+ * Kept under ?debug, where it is a way to see a screen without waiting
+ * forty-five seconds for it. */
+function removeScreenSwitcher(){
+  const sw = document.querySelector('#sw');
+  if(!sw) return;
+  if(DEBUG){ sw.style.opacity = '.5'; return; }
+  sw.remove();
+}
+removeScreenSwitcher();
+document.addEventListener('DOMContentLoaded', removeScreenSwitcher);
