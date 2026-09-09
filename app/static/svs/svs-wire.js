@@ -812,3 +812,35 @@ function foldScoreSources(){
 }
 foldScoreSources();
 document.addEventListener('DOMContentLoaded', foldScoreSources);
+
+/* ── the sample on the landing page ──────────────────────────────────── */
+/* The design drew a suggestion of notation drifting behind the headline,
+ * because when it was made there was nothing real to show. There is now:
+ * this is the app's own output, cut short and scaled down. Showing the
+ * actual thing beats illustrating it.
+ *
+ * Muted and inline so it may play on its own, and held still for anyone
+ * who has asked for less motion — the same courtesy the drawn version
+ * paid with its prefers-reduced-motion rule.
+ */
+const SAMPLE = 'assets/sample.mp4';
+const SAMPLE_CAPTION = '3ème Scherzo, Op. 39';
+
+const baseSampleHTML = sampleHTML;
+sampleHTML = function(){
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return `<video class="samplevid" src="${SAMPLE}" muted playsinline
+    ${still ? 'controls' : 'autoplay loop'} preload="metadata"
+    style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"
+    onerror="this.remove()"></video>`;
+};
+
+/* Name what is actually playing. */
+function nameTheSample(){
+  const caption = document.querySelector('.artifact figcaption .lab');
+  if(caption && caption.textContent.includes('Nocturne')){
+    caption.innerHTML = SAMPLE_CAPTION.replace(/ /g, '&nbsp;');
+  }
+}
+nameTheSample();
+document.addEventListener('DOMContentLoaded', nameTheSample);
