@@ -32,7 +32,15 @@ def main() -> int:
     print(f"\n  score roots : "
           f"{', '.join(str(r.path) for r in settings.score_roots) or 'none'}")
     print(f"  jobs        : {settings.work_dir}")
-    print(f"  alignment   : {'ready' if settings.can_autosync else 'unavailable'}")
+    # can_sync, not can_autosync: the second is app/autosync.py, which is the
+    # music_line_extractor route that nothing on the running path uses. On the
+    # Linux node it is deliberately unconfigured, so the banner announced
+    # "alignment: unavailable" on a machine whose aligner was working.
+    print(f"  alignment   : {'ready' if settings.can_sync else 'unavailable'}")
+    print(f"  recognition : {'ready' if settings.can_identify else 'unavailable'}")
+    print(f"  email       : {'ready' if settings.can_email else 'unavailable'}")
+    if waiting:
+        print(f"  queued      : {waiting}")
     print(f"\n  http://{args.host}:{args.port}\n")
 
     # threaded=True so a running render doesn't block the SSE stream.
