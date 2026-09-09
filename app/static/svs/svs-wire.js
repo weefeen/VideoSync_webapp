@@ -1257,10 +1257,13 @@ function handNote(){
   // Beside the sample, not beside the dropzone: it describes what comes
   // out, and the figure's own caption already says 16:9 · 1920x1080 — the
   // note is the same claim said out loud.
-  // Written across the top-right of the sample itself, like a note on a
-  // photograph. The badge holds the top-left, so this corner is free.
-  const frame = document.querySelector('#sampleFrame');
-  if(!frame || frame.querySelector('[data-hand]')) return;
+  // Above the sample and hard right — outside the frame, not on it.
+  // Inside the frame it was hard to see, most likely because the sample's
+  // score band is cream across the top of the picture and the gold reads
+  // at about 2.6:1 there. Out here it is on the page's own paper, where it
+  // has a known background instead of a moving one.
+  const figure = document.querySelector('.hero .artifact');
+  if(!figure || figure.querySelector('[data-hand]')) return;
 
   if(!document.querySelector('link[data-caveat]')){
     const link = document.createElement('link');
@@ -1274,7 +1277,7 @@ function handNote(){
   note.className = 'handnote';
   note.dataset.hand = '1';
   note.textContent = 'Full HD video compatible, high quality score';
-  frame.appendChild(note);
+  figure.insertBefore(note, figure.firstElementChild);
 }
 handNote();
 

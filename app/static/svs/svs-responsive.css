@@ -149,33 +149,28 @@
   .pband:not(:first-child) { padding-left: 18px; }
 }
 
-/* ── the handwritten note, across the sample ─────────────────────────── */
-/* Top-right of the frame; the design's "Sample output" badge holds the
- * top-left. The gold measures 5.4:1 over dark footage but only 2.6:1 where
- * the sample's own score band shows cream paper, and a video is not a fixed
- * background — so the halo is dark now rather than white, which is what
- * writing over a photograph normally needs. Colour, face and size are
- * unchanged. */
-.frame .handnote {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  z-index: 6;
-  max-width: 62%;
+/* ── the handwritten note, above the sample ──────────────────────────── */
+/* Outside the frame, hard right, just above the video's top corner.
+ *
+ * Inside the frame it was hard to see: the sample's own score band is
+ * cream across the top of the picture, where this gold measures about
+ * 2.6:1. Out here the background is the page's paper, which is one known
+ * colour rather than a moving one, and the halo goes back to white — a
+ * dark shadow on light paper reads as a smudge. */
+.hero .artifact .handnote {
+  display: block;
   text-align: right;
+  margin: 0 4px 10px 0;
   font-family: Caveat, "Segoe Script", "Bradley Hand", cursive;
   font-size: 22px;
   font-weight: 600;
-  line-height: 1.12;
+  line-height: 1.15;
   color: #b8860b;
   letter-spacing: .005em;
-  transform: rotate(-2deg);
-  transform-origin: right top;
-  text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 10px rgba(0,0,0,.6);
-  pointer-events: none;          /* the frame beneath is clickable */
+  transform: rotate(-1.6deg);
+  transform-origin: right center;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .6);
 }
-@container (max-width: 420px) {
-  /* The frame is a container; below this the sample is small enough that
-     the note would cover the picture rather than annotate it. */
-  .frame .handnote { font-size: 15px; top: 9px; right: 10px; }
+@media (max-width: 600px) {
+  .hero .artifact .handnote { font-size: 18px; margin-bottom: 8px; }
 }
