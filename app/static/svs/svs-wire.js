@@ -887,3 +887,16 @@ function nameTheSample(){
 }
 nameTheSample();
 document.addEventListener('DOMContentLoaded', nameTheSample);
+
+/* ── the free-tier line ──────────────────────────────────────────────── */
+/* A length cap is a promise to enforce, and there is none. Saying it here
+ * would be describing a limit nothing implements. */
+function trimFreeLine(){
+  const line = document.querySelector('.freeline');
+  if(!line || line.dataset.trimmed) return;
+  const before = line.innerHTML;
+  const after = before.replace(/,\s*up to ten minutes each\./i, '.');
+  if(after !== before){ line.innerHTML = after; line.dataset.trimmed = '1'; }
+}
+trimFreeLine();
+document.addEventListener('DOMContentLoaded', trimFreeLine);
