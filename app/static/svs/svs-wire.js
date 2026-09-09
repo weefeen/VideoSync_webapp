@@ -316,7 +316,7 @@ paint = function(){
   $$('.frame .band, .frame .ctr-band').forEach(el =>
     el.classList.toggle('real', real));
   applyRealLayout();
-  applyBandMark();
+  applyMarks();
   return out;
 };
 
@@ -606,6 +606,15 @@ function nudgeVideo(by){
 
 const baseInspBody = inspBody;
 inspBody = function(id){
+  if(id === 'logo'){
+    // The design's note promised the mark stays in the score band. It does
+    // not any more when there is a panel to put it in.
+    return baseInspBody(id).replace(
+      'The Weefeen mark in the score band stays on the free plan.',
+      S.panel === 'off'
+        ? 'The Weefeen mark stays in the score band on the free plan.'
+        : 'The Weefeen mark stays at the foot of the panel on the free plan.');
+  }
   if(id !== 'vid') return baseInspBody(id);
   const L = renderLayout();
   const canMove = L && L.surplus > 1;
@@ -737,18 +746,52 @@ logoSlot = function(size, mb, round){
     background:url('${panelMark()}') left center/contain no-repeat"></span>`;
 };
 
-/* The band carries the circle only when nothing else carries the mark. */
-function applyBandMark(){
+/* The mark appears once, in the place that suits the layout:
+ *
+ *   panel, with the Weefeen logo   the FULL logo at its head is the mark
+ *   panel, with your own or none   the circle at the foot of the panel
+ *   no panel at all                the circle on the score band
+ *
+ * Never on the band while a panel exists: a panel is where identity
+ * belongs, and the band is for the notation.
+ */
+function markPlacement(){
+  if(S.panel === 'off') return 'band';
+  return S.logo === 'weefeen' ? 'panel-head' : 'panel-foot';
+}
+
+function applyMarks(){
   const frame = $('#frame');
   if(!frame) return;
+  const where = markPlacement();
+  const side = Math.max(10, (frame.clientHeight || 0) * 0.055);
+
+  // The band's mark, only when nothing else carries one.
   frame.querySelectorAll('.wmk').forEach(el => {
-    const alone = S.panel === 'off' && S.logo === 'weefeen';
-    if(!alone){ el.style.display = S.logo === 'weefeen' ? 'none' : ''; return; }
-    const side = Math.max(10, (frame.clientHeight || 0) * 0.055);
+    if(where !== 'band'){ el.style.display = 'none'; return; }
     el.textContent = '';
     Object.assign(el.style, {
       display: 'block', width: side + 'px', height: side + 'px',
       background: `url('${bandMark()}') center/contain no-repeat`,
+    });
+  });
+
+  // The foot of the panel, when the head of it is somebody else's logo.
+  frame.querySelectorAll('.pnl, .ctr-pnl').forEach(panel => {
+    if(panel.classList.contains('ghost')) return;
+    let foot = panel.querySelector('.panelfoot');
+    if(where !== 'panel-foot'){ if(foot) foot.remove(); return; }
+    if(!foot){
+      foot = document.createElement('span');
+      foot.className = 'panelfoot';
+      panel.appendChild(foot);
+    }
+    const inset = Math.max(6, (panel.clientWidth || 0) * 0.12);
+    Object.assign(foot.style, {
+      position: 'absolute', left: inset + 'px', bottom: inset + 'px',
+      width: side + 'px', height: side + 'px', pointerEvents: 'none',
+      background: `url('${markFor('CIRCLE', S.bd === 'colour' ? S.bdColor : '#241a33')}')`
+                + ' left bottom/contain no-repeat',
     });
   });
 }
