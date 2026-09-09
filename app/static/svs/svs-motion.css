@@ -21,7 +21,10 @@
  * it and not enough to notice while reading. */
 .driftpages {
   position: fixed;
-  inset: 0;
+  /* Oversized so the tilt below cannot pull a bare corner into view: a
+     rectangle turned seven degrees no longer covers the box it came from,
+     and the missing wedges would sit exactly where the page corners are. */
+  inset: -25%;
   z-index: 0;
   pointer-events: none;
   opacity: .06;
@@ -34,9 +37,15 @@
      instead and that width varies with the viewport, so the loop lands
      mid-plate on every screen but one. */
   background-size: 620px auto;
-  /* Faded at the edges so the plates never end on a hard line. */
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
-          mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+  /* Off the square, the way paper actually lies on a desk. The drift runs
+     along the tilt because the background moves in the element's own
+     coordinates, which this turns with it. */
+  transform: rotate(-7deg);
+  /* Strongest in the middle, gone by the edges — so the texture never
+     ends on a line, and never crowds the corners where the header, the
+     footer and the panel sit. */
+  -webkit-mask-image: radial-gradient(ellipse 62% 62% at 50% 50%, #000 35%, transparent 100%);
+          mask-image: radial-gradient(ellipse 62% 62% at 50% 50%, #000 35%, transparent 100%);
   animation: driftpages 180s linear infinite;
 }
 /* Left to right, by exactly one tile, so the last frame draws what the
