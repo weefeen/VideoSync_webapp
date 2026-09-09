@@ -10,11 +10,10 @@
  * Try them one at a time in the address bar, which is the only way to
  * judge them honestly:
  *
- *     /app/                      all five, which is deliberately too many
+ *     /app/                      all three
  *     /app/?motion=drift         just the engraving behind the headline
  *     /app/?motion=rubato        the headline arrives in musical time
  *     /app/?motion=count         the tally counts up
- *     /app/?motion=settle        notes land on a staff
  *     /app/?motion=drift,count   any combination
  *     /app/?motion=none          nothing
  *
@@ -158,35 +157,7 @@
     watch.observe(cell);
   }
 
-  /* ── 5. notes landing on a staff ────────────────────────────────────── */
-  /* Five lines draw themselves left to right, then noteheads arrive in
-   * playing order. It is a small piece of engraving assembling itself,
-   * which is close to what the pipeline actually does — and it is drawn
-   * here rather than fetched, so it costs nothing and cannot 404. */
-  function settle() {
-    const host = $('.hero .artifact');
-    if (!host || host.querySelector('.settlestaff')) return;
-
-    const W = 460, H = 62, top = 14, gap = 8;
-    const lines = [0, 1, 2, 3, 4].map(i =>
-      `<line x1="6" y1="${top + i * gap}" x2="${W - 6}" y2="${top + i * gap}"
-             class="sline" style="animation-delay:${i * 0.06}s"/>`).join('');
-    // Roughly the opening turn of the Scherzo's octave figure — a shape
-    // rather than a transcription.
-    const pitches = [3.5, 3.0, 2.5, 3.0, 2.0, 1.5, 2.0, 1.0, 0.5, 1.0, 0.0, 0.5];
-    const notes = pitches.map((p, i) =>
-      `<ellipse cx="${40 + i * 33}" cy="${top + p * gap}" rx="4.6" ry="3.4"
-                class="snote" style="animation-delay:${0.42 + i * 0.055}s"/>`).join('');
-
-    const figure = document.createElement('div');
-    figure.className = 'settlestaff';
-    figure.setAttribute('aria-hidden', 'true');
-    figure.innerHTML =
-      `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="">${lines}${notes}</svg>`;
-    host.appendChild(figure);
-  }
-
-  const MOTION = { drift, rubato, count, settle };
+  const MOTION = { drift, rubato, count };
 
   function start() {
     Object.entries(MOTION).forEach(([name, run]) => {

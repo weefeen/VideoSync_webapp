@@ -1,6 +1,6 @@
-/* Styles for the five motion ideas in svs-motion.js.
+/* Styles for the motion in svs-motion.js.
  *
- * A proposal, not a decision. Delete this file and its script together.
+ * Delete this file and its script together to remove all of it.
  *
  * Everything here is inside a reduced-motion guard, so a visitor who has
  * asked their system for less movement gets a still page — the effects do
@@ -25,24 +25,27 @@
   z-index: 0;
   pointer-events: none;
   opacity: .06;
-  background-repeat: repeat-y;
-  background-position: center 0;
-  /* The HEIGHT is fixed and the width follows from A4, not the other way
-     round. It matters: the animation below travels one tile height, so if
-     that height varied with the viewport — as it does when the width is
-     what is pinned — the loop would land mid-plate and show a seam on
-     every screen except one. */
-  background-size: auto 1020px;
-  /* Faded at top and bottom so the plates never end on a hard edge. */
-  -webkit-mask-image: linear-gradient(180deg, transparent, #000 12%, #000 88%, transparent);
-          mask-image: linear-gradient(180deg, transparent, #000 12%, #000 88%, transparent);
-  animation: driftpages 200s linear infinite;
+  /* Tiled both ways, so the plates fill the screen rather than forming a
+     single band across it. */
+  background-repeat: repeat;
+  background-position: 0 center;
+  /* The WIDTH is pinned and the height follows from A4, because the drift
+     is horizontal and travels exactly one tile width. Pin the height
+     instead and that width varies with the viewport, so the loop lands
+     mid-plate on every screen but one. */
+  background-size: 620px auto;
+  /* Faded at the edges so the plates never end on a hard line. */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+  animation: driftpages 180s linear infinite;
 }
-/* Exactly one tile height, so the last frame shows what the first did. */
+/* Left to right, by exactly one tile, so the last frame draws what the
+   first did and there is no seam to see. */
 @keyframes driftpages {
-  from { background-position: center 0; }
-    to { background-position: center -1020px; }
+  from { background-position: 0 center; }
+    to { background-position: 620px center; }
 }
+
 /* The page's own content has to sit above it. `main` and the rest are not
    positioned by the design, so without this they share a stacking context
    with the backdrop and depend on document order. */
@@ -57,30 +60,6 @@ body > .srcfoot, body > .confirm { position: relative; z-index: 1; }
   animation: rubatoword .62s cubic-bezier(.22, .68, .28, 1) forwards;
 }
 @keyframes rubatoword { to { opacity: 1; transform: none; } }
-
-/* ── 5. notes landing on a staff ──────────────────────────────────────── */
-.settlestaff { margin-top: 14px; }
-.settlestaff svg { display: block; width: 100%; max-width: 460px; height: auto; }
-.settlestaff .sline {
-  stroke: var(--ink);
-  stroke-width: .8;
-  opacity: .30;
-  stroke-dasharray: 460;
-  stroke-dashoffset: 460;
-  animation: drawline .9s cubic-bezier(.2, .7, .3, 1) forwards;
-}
-.settlestaff .snote {
-  fill: var(--b2);
-  opacity: 0;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: landnote .34s cubic-bezier(.2, .8, .3, 1) forwards;
-}
-@keyframes drawline { to { stroke-dashoffset: 0; } }
-@keyframes landnote {
-  from { opacity: 0; transform: translateY(-9px) scale(.7); }
-    to { opacity: .85; transform: none; }
-}
 
 }  /* end reduced-motion guard */
 
