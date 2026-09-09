@@ -75,7 +75,10 @@
     const hero = $('.hero');
     if (!video || !hero) return;
 
-    let target = 0, queued = false;
+    // Only while the hero is on screen. Past it the video goes back to
+    // playing on its own: a scrubbed video left behind is a video frozen
+    // on its last frame, which reads as broken rather than as finished.
+    let owned = false, target = 0, queued = false;
     const apply = () => {
       queued = false;
       if (!video.duration || Number.isNaN(video.duration)) return;
@@ -84,18 +87,25 @@
 
     const onScroll = () => {
       const box = hero.getBoundingClientRect();
-      // 0 when the hero's top reaches the top of the window, 1 when its
-      // bottom does — so the piece plays across exactly one screen of
-      // scrolling rather than the whole page.
-      const travelled = -box.top / Math.max(1, box.height);
-      target = Math.max(0, Math.min(1, travelled));
+      const past = -box.top;
+      // Spread the piece over twice the hero's height, so sixteen seconds
+      // of music take a comfortable amount of scrolling rather than
+      // flashing past in a flick of the wheel.
+      const span = Math.max(1, box.height * 2);
+      const inside = past > -innerHeight * 0.2 && past < span;
+
+      if (inside && !owned) { owned = true; video.pause(); }
+      if (!inside && owned) {
+        owned = false;
+        // Handed back where the scrubbing left it, still playing.
+        video.play().catch(() => { });
+      }
+      if (!owned) return;
+      target = Math.max(0, Math.min(1, past / span));
       if (!queued) { queued = true; requestAnimationFrame(apply); }
     };
 
     const begin = () => {
-      video.pause();
-      video.removeAttribute('autoplay');
-      video.dataset.scrubbed = '1';
       addEventListener('scroll', onScroll, { passive: true });
       onScroll();
     };
@@ -156,14 +166,26 @@
 
     const run = () => {
       const shown = (cell.textContent || '').trim();
-      const target = parseInt(shown.replace(/[^0-9]/g, ''), 10);
-      if (!target || target < 2 || /[KM]/i.test(shown)) return;   // already short-formed
+      let target = parseInt(shown.replace(/[^0-9]/g, ''), 10);
+      let pretend = false;
+      if (/[KM]/i.test(shown)) return;            // already shortened; leave it
+      // With one video made, counting 0 to 1 shows nothing, and the idea
+      // cannot be judged. Asked for by name, it counts to a plausible
+      // figure instead and says so in the console — a demonstration, not
+      // a number anybody should believe.
+      if (!target || target < 12) {
+        if (!(WANTED && WANTED.includes('count'))) return;
+        target = 1284; pretend = true;
+        console.info('motion:count — the real tally is ' + (shown || '0') +
+                     '; counting to a made-up 1284 so the effect is visible');
+      }
       cell.dataset.counted = '1';
       const started = performance.now();
       const step = now => {
         const t = Math.min(1, (now - started) / 900);
         cell.textContent = String(Math.round(ease(t) * target));
-        if (t < 1) requestAnimationFrame(step); else cell.textContent = shown;
+        if (t < 1) requestAnimationFrame(step);
+        else cell.textContent = pretend ? '1.3K' : shown;
       };
       requestAnimationFrame(step);
     };
