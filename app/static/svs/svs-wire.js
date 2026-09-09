@@ -1169,3 +1169,36 @@ async function showCountAgain(){
     line.textContent = compact((await r.json()).videos | 0);
   }catch(err){ /* the number simply stays as it was */ }
 }
+
+/* The Cliburn credit.
+ *
+ * Added here rather than in index.html so the vendored design stays what was
+ * handed over: this file is the one place the app is allowed to differ from
+ * it, which keeps "what did we change?" answerable by reading one file.
+ *
+ * It is a claim about something that happened, so it says what happened —
+ * the system was used during the 2025 competition — and nothing more. It
+ * does not say "in partnership with", which would be a different and larger
+ * claim than the one that was asked for. */
+function creditCliburn(){
+  const bands = document.querySelector('.pbands');
+  if(!bands || bands.querySelector('[data-cliburn]')) return;
+
+  const a = document.createElement('a');
+  a.className = 'pband';
+  a.href = 'https://cliburn.org/';
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';        // the opened tab gets no handle on ours
+  a.dataset.cliburn = '1';
+  a.setAttribute('aria-label',
+    'System used during the Cliburn competition, 2025');
+  a.innerHTML =
+    '<img class="fbav" src="assets/cliburn-mark.png" alt="" ' +
+         'width="38" height="38"/>' +
+    '<span class="fbmeta">' +
+      '<span class="fbname">Cliburn 2025</span>' +
+      '<span class="fbsub">System used during the competition</span>' +
+    '</span>';
+  bands.appendChild(a);
+}
+creditCliburn();
