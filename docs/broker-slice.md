@@ -1,6 +1,8 @@
 # Slice 1 — the worker out of the Flask process, RabbitMQ between them, one node
 
-Design for review. Nothing here is implemented yet.
+The design, and a record of what was built from it. Kept as written
+rather than rewritten to match the result: where the build departed
+from the plan, the plan still says what it said and the step says why.
 
 **Status: all four steps of §14 are done and proved on the dev node
 (`deployment-log.md` §12 to §15). §12's contradictions are settled and §13's
