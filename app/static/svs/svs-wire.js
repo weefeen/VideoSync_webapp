@@ -846,6 +846,10 @@ function foldScoreSources(){
 
   const button = foot.querySelector('#srctoggle');
   const slot = foot.querySelector('#srcnotice');
+  // This file is one script: anything that throws here takes every
+  // function below it with it, and the page loses the real sample, the
+  // layout and the marks over a footer link.
+  if(!button || !slot){ foot.innerHTML = notice; return; }
   button.onclick = () => {
     const showing = !slot.hidden;
     slot.hidden = showing;
@@ -878,6 +882,20 @@ sampleHTML = function(){
     onerror="this.remove()"></video>`;
 };
 
+/* Overriding sampleHTML is not enough on its own: svs-min.js ends by
+ * calling draw(), which fills this frame and sets a `built` flag before
+ * this file has even loaded. So the drawn version is already in the page
+ * and will never be rebuilt. Replace it outright, keeping the badge. */
+function realSample(){
+  const frame = $('#sampleFrame');
+  if(!frame || frame.dataset.real) return;
+  frame.dataset.real = '1';
+  Array.from(frame.children).forEach(el => {
+    if(!el.classList.contains('badge')) el.remove();
+  });
+  frame.insertAdjacentHTML('beforeend', sampleHTML());
+}
+
 /* Name what is actually playing. */
 function nameTheSample(){
   const caption = document.querySelector('.artifact figcaption .lab');
@@ -885,8 +903,9 @@ function nameTheSample(){
     caption.innerHTML = SAMPLE_CAPTION.replace(/ /g, '&nbsp;');
   }
 }
+realSample();
 nameTheSample();
-document.addEventListener('DOMContentLoaded', nameTheSample);
+document.addEventListener('DOMContentLoaded', () => { realSample(); nameTheSample(); });
 
 /* ── the free-tier line ──────────────────────────────────────────────── */
 /* A length cap is a promise to enforce, and there is none. Saying it here
