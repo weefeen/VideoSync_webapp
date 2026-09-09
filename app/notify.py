@@ -20,6 +20,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 
+from . import retention
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -34,13 +35,26 @@ def _link(job_id: str) -> str:
     return f"{base}/api/jobs/{job_id}/download"
 
 
-def send_ready(job_id: str, address: str, piece: str = "") -> None:
+def send_ready(job_id: str, address: str, piece: str = "",
+               finished: float | None = None) -> None:
     """Send one "it's ready" message. Raises MailError if it cannot."""
     if not settings.can_email:
         raise MailError(settings.why_cannot_email())
     address = (address or "").strip()
     if "@" not in address:
         raise MailError(f"Not an address: {address!r}")
+
+    # The deadline goes in the message that carries the link, with the date
+    # spelled out. "As long as the file is kept" told the reader nothing and
+    # is about to become false: the link now stops working at a known hour.
+    if finished:
+        window = (f"You can download it until {retention.deadline_text(finished)} "
+                  f"— {retention.hours_phrase()} from now. After that it moves to "
+                  f"long-term storage; it is not deleted, and we can restore it "
+                  f"if you ask.")
+    else:
+        window = (f"The link works for {retention.hours_phrase()} after the "
+                  f"video is made.")
 
     # `piece` comes from our own library, never from the uploader.
     named = f" of {piece}" if piece else ""
@@ -51,7 +65,7 @@ def send_ready(job_id: str, address: str, piece: str = "") -> None:
     message.set_content(
         f"Your video{named} has finished rendering.\n\n"
         f"{_link(job_id)}\n\n"
-        f"The link works for as long as the file is kept on the server.\n\n"
+        f"{window}\n\n"
         f"— Weefeen\n"
     )
 

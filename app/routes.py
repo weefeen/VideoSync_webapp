@@ -19,6 +19,7 @@ from . import identify as ident
 from . import library
 from . import limits
 from . import render as rnd
+from . import retention
 from . import stats
 from . import sync as syncing
 from .settings import settings
@@ -520,9 +521,25 @@ def api_download(job_id: str):
     job = jobs.registry.get(job_id)
     if job is None or job.state != "done" or not job.result:
         return jsonify({"error": "That video isn't ready."}), 404
-    stem = pathlib.Path(job.original_name).stem
+
+    # 410, not 404. The video still exists; it has moved to storage that
+    # cannot serve it directly. "Gone" is the honest code, and the message
+    # has to say archived rather than missing — whoever is reading this
+    # waited for the file, and a bare 404 tells them we threw it away.
+    if not retention.is_live(job.finished):
+        return jsonify({"error": retention.gone_message(),
+                        "expired": True}), 410
+
+    # Named from our own library, never from what the visitor called their
+    # file: that name is untrusted text and this sets a response header.
+    stem = _safe_stem(job.score) or "score_video"
     return send_file(job.result, as_attachment=True,
                      download_name=f"{stem}_score_sync.mp4")
+
+
+def _safe_stem(name: str | None) -> str:
+    """A filename from a score's name: letters, digits, dot, dash, underscore."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "")).strip("._-")[:80]
 
 
 # --------------------------------------------------------------------------

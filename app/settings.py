@@ -116,6 +116,17 @@ class Settings:
     smtp_ssl: bool = False           # implicit TLS, usually port 465
     smtp_starttls: bool = True       # upgrade in place, usually port 587
     public_base_url: str = ""        # where a link in the mail should point
+    # How long the emailed link keeps working. Afterwards the video is
+    # archived rather than deleted — still ours, no longer a download.
+    #
+    # This is enforced here, in our own code, and NOT by the storage
+    # lifecycle rule. Those run in whole days and asynchronously, so a rule
+    # set for the same moment would sometimes fire early and leave a live
+    # link pointing at an object in cold storage: a download that hangs for
+    # hours instead of failing in a way we can explain. The transition is
+    # therefore set a day later than the expiry, and the gap costs nothing.
+    retention_hot_hours: float = 48.0
+    archive_transition_days: int = 3
 
     def allows(self, surname: str) -> bool:
         """Whether a score by this composer belongs in the library."""
@@ -284,6 +295,8 @@ def load() -> Settings:
         smtp_ssl=_flag("SMTP_SSL", False),
         smtp_starttls=_flag("SMTP_STARTTLS", True),
         public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/"),
+        retention_hot_hours=_number("RETENTION_HOT_HOURS", 48.0),
+        archive_transition_days=int(_number("ARCHIVE_TRANSITION_DAYS", 3)),
     )
 
 
