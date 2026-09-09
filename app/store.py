@@ -65,9 +65,17 @@ CREATE TABLE IF NOT EXISTS jobs (
     meta        TEXT,
     queued_at   REAL,
     started     REAL,
-    finished    REAL
+    finished    REAL,
+    -- Higher goes first. Everything is 0 today; an institution running an
+    -- event to a schedule cannot sit behind forty public uploads, and
+    -- adding this column later means migrating a table with history in it.
+    priority    INTEGER NOT NULL DEFAULT 0,
+    -- Which worker took it. Useless with one worker and necessary with two,
+    -- which is the point: the second one should need no schema change.
+    worker      TEXT,
+    lease_until REAL
 );
-CREATE INDEX IF NOT EXISTS jobs_state_queued ON jobs(state, queued_at);
+CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(state, priority DESC, queued_at);
 
 CREATE TABLE IF NOT EXISTS stage_runs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,9 +185,14 @@ def get_job(job_id: str) -> sqlite3.Row | None:
 
 
 def waiting() -> list[sqlite3.Row]:
-    """Queued jobs, oldest first — the line, in the order it will be served."""
-    return query("SELECT * FROM jobs WHERE state = ? ORDER BY queued_at",
-                 (QUEUED,))
+    """The line, in the order it will actually be served.
+
+    The ordering is duplicated in `claim_next` and in `position`, and all
+    three have to agree: a page that says "you are next" while the worker
+    takes somebody else is worse than showing no position at all.
+    """
+    return query("SELECT * FROM jobs WHERE state = ?"
+                 " ORDER BY priority DESC, queued_at", (QUEUED,))
 
 
 def running() -> sqlite3.Row | None:
@@ -198,13 +211,65 @@ def unfinished() -> list[sqlite3.Row]:
 
 def position(job_id: str) -> int | None:
     """How many jobs are ahead of this one. 0 means it is next; None if it
-    is not waiting (already running, finished, or unknown)."""
+    is not waiting (already running, finished, or unknown).
+
+    "Ahead" follows the order work is actually taken in, so a higher
+    priority counts as ahead even when it arrived later. A queue position
+    that does not match the order of service is worse than none.
+    """
     row = get_job(job_id)
     if row is None or row["state"] != QUEUED:
         return None
-    ahead = one("SELECT COUNT(*) AS n FROM jobs WHERE state = ? AND queued_at < ?",
-                (QUEUED, row["queued_at"] or 0))
+    ahead = one(
+        "SELECT COUNT(*) AS n FROM jobs WHERE state = ? AND ("
+        "  priority > ? OR (priority = ? AND queued_at < ?))",
+        (QUEUED, row["priority"], row["priority"], row["queued_at"] or 0))
     return int(ahead["n"]) if ahead else 0
+
+
+def claim_next(worker: str, lease_seconds: float = 3600.0) -> sqlite3.Row | None:
+    """Take the next job, atomically. None when the queue is empty.
+
+    One statement, so two workers asking at the same moment cannot be given
+    the same job: SQLite applies the UPDATE and its subquery as a unit. That
+    is what makes adding a second worker a matter of starting one, rather
+    than of revisiting this file.
+
+    The lease is the answer to a worker that dies mid-render. It does not
+    hold a lock; it records when everyone else may stop believing this job
+    is being worked on.
+    """
+    now = time.time()
+    with write() as conn:
+        row = conn.execute(
+            "UPDATE jobs SET state = ?, worker = ?, started = ?, lease_until = ?"
+            " WHERE id = (SELECT id FROM jobs WHERE state = ?"
+            "             ORDER BY priority DESC, queued_at LIMIT 1)"
+            " RETURNING *",
+            (RUNNING, worker, now, now + lease_seconds, QUEUED)).fetchone()
+        return row
+
+
+def reclaim_expired() -> list[str]:
+    """Put back jobs whose worker stopped saying it was alive.
+
+    Called at start-up and periodically. A render cannot be resumed from the
+    middle, so this returns the job to the queue rather than pretending the
+    work survived — a second attempt is cheaper than a job that is silently
+    nobody's.
+    """
+    now = time.time()
+    with write() as conn:
+        rows = conn.execute(
+            "UPDATE jobs SET state = ?, worker = NULL, lease_until = NULL,"
+            " started = NULL WHERE state = ? AND lease_until IS NOT NULL"
+            " AND lease_until < ? RETURNING id", (QUEUED, RUNNING, now)).fetchall()
+    return [r["id"] for r in rows]
+
+
+def renew(job_id: str, lease_seconds: float = 3600.0) -> None:
+    """A worker saying it is still there."""
+    update_job(job_id, lease_until=time.time() + lease_seconds)
 
 
 # ---------------------------------------------------------------------------
