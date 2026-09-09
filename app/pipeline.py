@@ -28,18 +28,20 @@ import pathlib
 import shutil
 from typing import Callable
 
-from . import autosync, package as pkg, render as rnd
+from . import package as pkg, render as rnd
+from . import sync as syncing
 from .settings import settings
 
 ProgressFn = Callable[[str, str], None]
 
-AUTO = "auto"              # align against the score
-REFERENCE = "reference"    # align against the reference recording
-MODES = (AUTO, REFERENCE)
+# One way to align: onto the package's own reference recording, which is
+# the only thing it carries a chroma for. "auto" — aligning against the
+# score itself — was music_line_extractor's, and left with it.
+REFERENCE = "reference"
+MODES = (REFERENCE,)
 
 MODE_LABELS = {
-    AUTO: "automatic sync — aligned against the score",
-    REFERENCE: "reference sync — aligned against the reference recording",
+    REFERENCE: "aligned against the score's reference recording",
 }
 
 # Stage labels, in the order they run.
@@ -64,33 +66,19 @@ class JobResult:
 
 
 def choose_mode(p: pkg.ScorePackage, requested: str | None = None) -> str:
-    """Pick a mode, or validate the one asked for.
+    """Validate the mode. There is one, and it is against the reference.
 
-    Reference sync is preferred when the package has a reference recording
-    — audio-to-audio alignment between two performances is a closer match
-    than performance-to-score. Otherwise fall back to automatic sync.
+    Alignment warps the upload onto the package's own reference recording,
+    which is the only thing a package carries a chroma for. The score-only
+    mode belonged to music_line_extractor and is gone with it.
     """
-    if not settings.can_autosync:
-        raise PipelineError(
-            "Alignment needs music_line_extractor. Set MLE_ROOT and "
-            "MLE_PYTHON in .env to its checkout and interpreter.")
-
-    if autosync.find_score_source(p.root) is None:
-        raise PipelineError(
-            f"{p.name} has no score source in score/ — alignment needs "
-            f"source.krn (or .musicxml/.mxl) there.")
-
-    has_ref = autosync.has_reference(p.root)
-    if requested:
-        if requested not in MODES:
-            raise PipelineError(f"Unknown mode {requested!r}. "
-                                f"Choose from: {', '.join(MODES)}.")
-        if requested == REFERENCE and not has_ref:
-            raise PipelineError(
-                f"{p.name} has no reference recording, so reference sync "
-                f"isn't possible. Use mode '{AUTO}' instead.")
-        return requested
-    return REFERENCE if has_ref else AUTO
+    if not settings.can_sync:
+        raise PipelineError("Alignment isn't configured. "
+                            + settings.why_cannot_sync())
+    if requested and requested not in MODES:
+        raise PipelineError(f"Unknown mode {requested!r}. "
+                            f"Choose from: {', '.join(MODES)}.")
+    return REFERENCE
 
 
 def job_folder(job_id: str) -> pathlib.Path:
@@ -112,12 +100,13 @@ def run(p: pkg.ScorePackage, video: pathlib.Path, job_id: str,
 
     on_progress("prepare", f"{p.name} · {MODE_LABELS[mode]}")
 
-    align = (autosync.align_to_reference if mode == REFERENCE
-             else autosync.align_to_score)
+    on_progress("align", "matching the recording to the score")
     try:
-        measures = align(p.root, video, job_dir, on_progress)
-    except autosync.SyncError as exc:
+        alignment = syncing.align(p.root, video, job_dir)
+    except syncing.SyncError as exc:
         raise PipelineError(str(exc)) from exc
+    measures = alignment.measures_path
+    on_progress("align", f"{alignment.measures} measures placed")
 
     try:
         timed = p.with_alignment(measures)

@@ -106,6 +106,16 @@ class Settings:
     vss_root: pathlib.Path | None = None
     sync_python: str = ""
     sync_timeout: float = 900.0
+    # Telling someone their video is ready. Credentials belong in .env,
+    # which is not committed; .env.example carries the names only.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_ssl: bool = False           # implicit TLS, usually port 465
+    smtp_starttls: bool = True       # upgrade in place, usually port 587
+    public_base_url: str = ""        # where a link in the mail should point
 
     def allows(self, surname: str) -> bool:
         """Whether a score by this composer belongs in the library."""
@@ -165,6 +175,22 @@ class Settings:
         # recognition would resolve to no score at all.
         if self.pair_list and not self.pair_list.is_file():
             return f"PAIR_LIST is set but there is no file at {self.pair_list}."
+        return ""
+
+    @property
+    def can_email(self) -> bool:
+        """Whether this install can actually send a message."""
+        return not self.why_cannot_email()
+
+    def why_cannot_email(self) -> str:
+        """Empty when mail works. The interface asks before promising one."""
+        if not self.smtp_host:
+            return "SMTP_HOST is not set."
+        if not self.smtp_from:
+            return "SMTP_FROM is not set — a message needs a sender."
+        if not self.public_base_url:
+            return ("PUBLIC_BASE_URL is not set, so a link in the mail would "
+                    "point nowhere.")
         return ""
 
     @property
@@ -250,7 +276,22 @@ def load() -> Settings:
         vss_root=_one("VSS_ROOT"),
         sync_python=os.getenv("SYNC_PYTHON", "").strip().strip('"'),
         sync_timeout=_number("SYNC_TIMEOUT", 900.0),
+        smtp_host=os.getenv("SMTP_HOST", "").strip(),
+        smtp_port=int(_number("SMTP_PORT", 587)),
+        smtp_user=os.getenv("SMTP_USER", "").strip(),
+        smtp_password=os.getenv("SMTP_PASSWORD", ""),
+        smtp_from=os.getenv("SMTP_FROM", "").strip(),
+        smtp_ssl=_flag("SMTP_SSL", False),
+        smtp_starttls=_flag("SMTP_STARTTLS", True),
+        public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/"),
     )
+
+
+def _flag(var: str, default: bool) -> bool:
+    raw = os.getenv(var, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
 
 
 def _number(var: str, default: float) -> float:

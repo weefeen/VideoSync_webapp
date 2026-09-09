@@ -34,7 +34,8 @@ const API = {
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
 let JOB = null;                 // the job this upload belongs to
-let SERVER = { online: false, can_identify: false, can_sync: false };
+let SERVER = { online: false, can_identify: false, can_sync: false,
+               can_email: false };
 
 /* What the design shipped with. Opening the HTML on its own is a supported
  * way to use this — the README says so — and it must keep working: with no
@@ -51,7 +52,7 @@ async function loadLibrary(){
     if(!r.ok) throw new Error(r.status);
     const data = await r.json();
     SERVER = { online: true, can_identify: data.can_identify,
-               can_sync: data.can_sync };
+               can_sync: data.can_sync, can_email: !!data.can_email };
     if(Array.isArray(data.works) && data.works.length) WORKS = data.works;
   }catch(err){
     // No server: keep the shipped library so the whole interface still
@@ -474,7 +475,18 @@ $('#submit').onclick = async function(){
     return;
   }
   emailNote();
-  baseSubmit();          // the screens, the address memory, the recap
+  S.email = address;
+
+  if(SERVER.can_email){
+    baseSubmit();        // the screens, the address memory, the recap
+  }else{
+    // No mail can be sent, so the "check your inbox" screen would be a
+    // promise nobody keeps. Straight to the one that hands over the file.
+    correctDoneCopy();
+    S.screen = 'done';
+    draw();
+  }
+  watchRender(JOB);
 };
 
 /* ── take over the upload, leaving the rights gate exactly as it was ─── */
@@ -1019,3 +1031,125 @@ function removeScreenSwitcher(){
 }
 removeScreenSwitcher();
 document.addEventListener('DOMContentLoaded', removeScreenSwitcher);
+
+/* ── delivering the finished video ───────────────────────────────────── */
+/* The done screen said "we'll email you when it's ready" and then nothing
+ * happened: no mail is sent, and the finished file had no way of reaching
+ * the person who asked for it. Until there is an email path, the page says
+ * what is actually true — stay here, it appears below — and hands over the
+ * file itself when the render finishes.
+ */
+const deliverCSS = document.createElement('style');
+deliverCSS.textContent = `
+  .delivery{margin:22px 0 0;padding:16px 18px;background:var(--surface);
+    border:1px solid var(--hair);border-left:2px solid var(--mag);
+    border-radius:3px;max-width:52ch}
+  .delivery .stat{display:block;font-family:"JetBrains Mono",monospace;
+    font-size:9.5px;font-weight:500;letter-spacing:.19em;
+    text-transform:uppercase;color:var(--soft)}
+  .delivery .what{display:block;margin-top:7px;font-size:14.5px;
+    color:var(--ink)}
+  .delivery .rail{position:relative;height:2px;margin:13px 0 0;
+    border-radius:2px;background:var(--hair);overflow:hidden}
+  .delivery .rail i{position:absolute;left:0;top:0;height:100%;width:0;
+    background:var(--mag);border-radius:2px;transition:width .4s linear}
+  .delivery .get{display:inline-block;margin-top:14px;padding:13px 22px;
+    background:var(--b1);color:#fff;border-radius:3px;text-decoration:none;
+    font-family:Fraunces,Georgia,serif;font-size:16px;border-bottom:0}
+  .delivery .get:hover{background:var(--b2);color:#fff}
+`;
+document.head.appendChild(deliverCSS);
+
+const STAGE_WORDS = {
+  prepare: 'Getting the score ready',
+  align:   'Matching the recording to the score',
+  bands:   'Preparing the score images',
+  strip:   'Timing the score to your playing',
+  encode:  'Encoding the video',
+  done:    'Finished',
+};
+
+function deliveryBox(){
+  const confirm = document.querySelector('section[data-s="done"] .confirm');
+  if(!confirm) return null;
+  let box = confirm.querySelector('.delivery');
+  if(!box){
+    box = document.createElement('div');
+    box.className = 'delivery';
+    box.innerHTML = `<span class="stat">Rendering</span>
+      <span class="what">Starting…</span>
+      <span class="rail"><i></i></span>`;
+    const recap = confirm.querySelector('.recap');
+    confirm.insertBefore(box, recap || confirm.lastElementChild);
+  }
+  return box;
+}
+
+/* Say what is true on the screen that claimed an email. */
+function correctDoneCopy(){
+  const section = document.querySelector('section[data-s="done"]');
+  if(!section || section.dataset.corrected) return;
+  section.dataset.corrected = '1';
+  const heading = section.querySelector('h1');
+  if(heading) heading.innerHTML = `It's <em>rendering</em>. Stay here &mdash; `
+    + `the video appears below when it is done.`;
+  const first = section.querySelector('.confirm > p');
+  if(first) first.textContent =
+    'It takes a few minutes. Nothing else is needed from you.';
+}
+
+async function watchRender(job){
+  const box = deliveryBox();
+  if(!box) return;
+  const stat = box.querySelector('.stat');
+  const what = box.querySelector('.what');
+  const bar = box.querySelector('.rail i');
+  const started = Date.now();
+
+  while(Date.now() - started < 40 * 60 * 1000){
+    let s;
+    try{
+      const r = await fetch(`/api/jobs/${job}/status`);
+      s = (await r.json()).job || {};
+    }catch(err){
+      what.textContent = 'Lost contact with the server while rendering.';
+      return;
+    }
+    const stages = s.stages || {};
+    const order = ['prepare', 'align', 'bands', 'strip', 'encode', 'done'];
+    const at = order.filter(k => stages[k] === 'done').length;
+    bar.style.width = Math.min(96, (at / order.length) * 100) + '%';
+    const active = order.find(k => stages[k] === 'active');
+    if(active) what.textContent = STAGE_WORDS[active] || active;
+
+    if(s.state === 'done'){
+      stat.textContent = 'Ready';
+      bar.style.width = '100%';
+      const size = s.output_bytes ? ` · ${(s.output_bytes / 1e6).toFixed(0)} MB` : '';
+      what.innerHTML = `Your scored video is ready${size}.`;
+      box.insertAdjacentHTML('beforeend',
+        `<a class="get" href="/api/jobs/${job}/download">Download the video</a>`);
+      showCountAgain();
+      return;
+    }
+    if(s.state === 'error'){
+      stat.textContent = 'Stopped';
+      what.textContent = s.error || 'The render did not finish.';
+      bar.style.width = '100%';
+      bar.style.background = 'var(--alert)';
+      return;
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  what.textContent = 'This is taking longer than expected.';
+}
+
+/* The tally moves when a video lands. */
+async function showCountAgain(){
+  const line = document.querySelector('.madecount b');
+  if(!line) return;
+  try{
+    const r = await fetch('/api/stats');
+    line.textContent = compact((await r.json()).videos | 0);
+  }catch(err){ /* the number simply stays as it was */ }
+}

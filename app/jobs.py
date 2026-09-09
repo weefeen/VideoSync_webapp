@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
+import json
+import logging
 import queue
 import threading
 import time
@@ -19,7 +21,11 @@ import traceback
 import uuid
 from typing import Any, Iterator
 
+from . import notify
 from . import pipeline
+from .settings import settings
+
+logger = logging.getLogger(__name__)
 from . import render as rnd
 from . import stats
 
@@ -34,6 +40,7 @@ class Job:
     state: str = "uploaded"          # uploaded | running | done | error
     error: str | None = None
     result: pathlib.Path | None = None
+    email: str = ""
     detail: str = ""
     duration: float | None = None
     size_bytes: int | None = None
@@ -42,6 +49,34 @@ class Job:
     finished: float | None = None
     stages: dict[str, str] = dataclasses.field(
         default_factory=lambda: {s: "pending" for s in pipeline.STAGES})
+
+    def manifest(self) -> dict[str, Any]:
+        """Everything needed to answer for this job after a restart."""
+        return {
+            "id": self.id, "name": self.original_name,
+            "upload": str(self.upload_path), "score": self.score,
+            "mode": self.mode, "state": self.state, "error": self.error,
+            "result": str(self.result) if self.result else None,
+            "duration": self.duration, "size_bytes": self.size_bytes,
+            "created": self.created, "finished": self.finished,
+            "email": self.email,
+        }
+
+    def save(self) -> None:
+        """Write the manifest beside the job. Never fatal.
+
+        The registry lives in memory, so without this a finished video
+        becomes unreachable the moment the server restarts — and the link
+        someone was given stops working for reasons they cannot see.
+        """
+        try:
+            folder = pathlib.Path(self.result).parent if self.result                 else pipeline.job_folder(self.id)
+            folder.mkdir(parents=True, exist_ok=True)
+            temp = folder / "job.json.part"
+            temp.write_text(json.dumps(self.manifest(), indent=2), encoding="utf-8")
+            temp.replace(folder / "job.json")
+        except OSError as exc:
+            logger.warning("could not write the job manifest: %s", exc)
 
     def public(self) -> dict[str, Any]:
         return {
@@ -141,9 +176,12 @@ class Registry:
                 job.stages[name] = "done"
             job.state = "done"
             job.finished = time.time()
+            job.save()
             # One more video that actually exists. Counted here rather than
             # at submit, so the tally means delivered and not attempted.
             stats.record_video()
+            job.save()
+            self._tell_them(job)
             self._emit(job.id, {"type": "done", "job": job.public()})
 
         except pipeline.PipelineError as exc:
@@ -152,9 +190,25 @@ class Registry:
             traceback.print_exc()
             self._fail(job, f"Unexpected failure: {exc}")
 
+    @staticmethod
+    def _tell_them(job: Job) -> None:
+        """Send the "it is ready" message, if we can and were asked to.
+
+        Never fatal: the video exists, the page shows the link, and a mail
+        server having a bad day is not a reason to report a failed render.
+        """
+        if not job.email or not settings.can_email:
+            return
+        try:
+            notify.send_ready(job.id, job.email, piece=job.score or "")
+        except notify.MailError as exc:
+            logger.warning("could not tell %s about job %s: %s",
+                           job.email, job.id, exc)
+
     def _fail(self, job: Job, message: str) -> None:
         job.state, job.error = "error", message
         job.finished = time.time()
+        job.save()
         for name, value in job.stages.items():
             if value == "active":
                 job.stages[name] = "failed"
@@ -181,6 +235,43 @@ class Registry:
                     return
         finally:
             self.unsubscribe(job_id, q)
+
+
+    def rehydrate(self) -> int:
+        """Read finished jobs back off disk at start-up.
+
+        Only the ones that produced a file: an interrupted render cannot be
+        resumed, and offering a link to a video that was never finished is
+        worse than admitting the job is gone.
+        """
+        found = 0
+        root = settings.work_dir
+        if not root.is_dir():
+            return 0
+        for manifest in sorted(root.glob("*/job.json")):
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            result = data.get("result")
+            if data.get("state") != "done" or not result:
+                continue
+            if not pathlib.Path(result).is_file():
+                continue
+            job = Job(id=data["id"], original_name=data.get("name", ""),
+                      upload_path=pathlib.Path(data.get("upload", "")))
+            job.score, job.mode = data.get("score"), data.get("mode")
+            job.state, job.result = "done", pathlib.Path(result)
+            job.duration, job.size_bytes = data.get("duration"), data.get("size_bytes")
+            job.created = data.get("created") or time.time()
+            job.finished = data.get("finished")
+            job.email = data.get("email") or ""
+            job.stages = {s: "done" for s in pipeline.STAGES}
+            self.add(job)
+            found += 1
+        if found:
+            logger.info("%d finished job(s) still available", found)
+        return found
 
 
 registry = Registry()

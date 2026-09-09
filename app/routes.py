@@ -14,7 +14,7 @@ from flask import (Blueprint, Flask, current_app, jsonify, redirect,
                    Response)
 from werkzeug.utils import secure_filename
 
-from . import autosync, jobs, package as pkg, panel, pipeline
+from . import jobs, package as pkg, panel, pipeline
 from . import identify as ident
 from . import library
 from . import render as rnd
@@ -113,7 +113,10 @@ def api_library():
         })
     return jsonify({"works": works,
                     "can_identify": settings.can_identify,
-                    "can_sync": settings.can_sync})
+                    "can_sync": settings.can_sync,
+                    # Asked so the interface never promises a message this
+                    # install cannot send.
+                    "can_email": settings.can_email})
 
 
 @bp.get("/api/stats")
@@ -322,7 +325,7 @@ def api_options():
         "modes": [{"value": m, "label": pipeline.MODE_LABELS[m]}
                   for m in pipeline.MODES],
         "panel_fields": [f[0] for f in panel.FIELDS],
-        "can_align": settings.can_autosync,
+        "can_align": settings.can_sync,
         "can_rasterize_svg": pkg.can_rasterize_svg(),
         "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
         "composer_filter": settings.composer_filter,
@@ -335,7 +338,7 @@ def api_scores():
     out = []
     for p in pipeline.usable_packages():
         vector = sum(1 for b in p.bands if b.is_vector)
-        has_ref = autosync.has_reference(p.root)
+        has_ref = (p.root / 'reference').is_dir()
         out.append({
             "name": p.name,
             "label": p.display_name,
@@ -348,7 +351,8 @@ def api_scores():
             "measures": p.last_measure,
             "modes": pipeline.MODES if has_ref else [pipeline.AUTO],
             "has_reference": has_ref,
-            "has_score_source": autosync.find_score_source(p.root) is not None,
+            "has_score_source": (p.root / "source.krn").is_file()
+                               or (p.root / "score" / "source.krn").is_file(),
         })
     return jsonify({"scores": sorted(out, key=lambda s: s["name"])})
 
@@ -455,6 +459,7 @@ def api_render(job_id: str):
     except (rnd.RenderError, pipeline.PipelineError) as exc:
         return jsonify({"error": str(exc)}), 400
 
+    job.email = str(body.get("email", "")).strip()
     jobs.registry.start(job, package.name, mode, style, body.get("meta") or {})
     return jsonify({"job": job.public()})
 
@@ -508,4 +513,7 @@ def create_app() -> Flask:
                                  f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB."}), 413
 
     settings.ensure_dirs()
+
+    # Finished videos outlive the process that made them.
+    jobs.registry.rehydrate()
     return app
