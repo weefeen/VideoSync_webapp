@@ -932,19 +932,22 @@ const countCSS = document.createElement('style');
 countCSS.textContent = `
   /* Beside the standfirst, not a band across the page. Read easily,
      said once, and not shouted. */
-  /* Centred on each other: a 23px numeral sitting on the same baseline as
-     9.5px small caps reads as though the text has slipped. */
-  .madecount{display:inline-flex;align-items:center;gap:11px;
+  /* One line that cannot become two: no flex to wrap or reflow, the
+     number and the words as inline-blocks on a shared middle, and the
+     label refusing to break. */
+  .madecount{display:inline-block;white-space:nowrap;
     margin:22px 0 0;padding:10px 15px 10px 13px;
     border-left:2px solid var(--mag);background:var(--surface);
-    border-radius:2px}
-  .madecount b{font-family:Fraunces,Georgia,serif;font-weight:400;
-    font-size:23px;letter-spacing:-.02em;line-height:1;color:var(--b1);
-    font-variant-numeric:tabular-nums;display:flex;align-items:center}
-  .madecount span{font-family:"JetBrains Mono",monospace;font-size:9.5px;
-    font-weight:500;letter-spacing:.16em;text-transform:uppercase;
-    color:var(--ink);line-height:1;display:flex;align-items:center;
-    padding-top:1px}
+    border-radius:2px;line-height:1}
+  .madecount b{display:inline-block;vertical-align:middle;
+    font-family:Fraunces,Georgia,serif;font-weight:400;font-size:23px;
+    letter-spacing:-.02em;line-height:1;color:var(--b1);
+    font-variant-numeric:tabular-nums}
+  .madecount span{display:inline-block;vertical-align:middle;
+    margin-left:11px;white-space:nowrap;
+    font-family:"JetBrains Mono",monospace;font-size:9.5px;font-weight:500;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--ink);
+    line-height:1}
 `;
 document.head.appendChild(countCSS);
 
