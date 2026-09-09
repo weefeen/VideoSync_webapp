@@ -257,6 +257,24 @@ def _trimmed(path: pathlib.Path) -> str:
                    f'viewBox="0 0 {width:.0f} {height:.0f}" '
                    f'overflow="visible">',
                    inner, count=1)
+    # Staff lines, stems, beams and barlines are stroked paths carrying a
+    # stroke-width and no stroke: Verovio's own stylesheet paints them with
+    # `stroke: currentColor`. As page furniture there is no document colour
+    # for that to inherit, so every stroked symbol renders with no stroke at
+    # all — the score arrives as noteheads floating with nothing to stand
+    # on, because noteheads are filled rather than stroked.
+    #
+    # Written as an attribute rather than a rule. A <style> block depends on
+    # the renderer implementing CSS inside SVG, which is exactly the
+    # assumption that lost the lines in the first place; an attribute is
+    # understood by everything that can draw a path at all.
+    def paint(match: "re.Match[str]") -> str:
+        tag = match.group(0)
+        if " stroke=" in tag or "stroke-width" not in tag:
+            return tag
+        return "<path stroke=\"#1c1622\"" + tag[len("<path"):]
+
+    inner = re.sub(r"<path\b[^>]*>", paint, inner)
     head = text[:opening.start()]
     return (f'{head}<svg xmlns="http://www.w3.org/2000/svg" '
             f'xmlns:xlink="http://www.w3.org/1999/xlink" '
@@ -396,7 +414,7 @@ def api_band(name: str):
 _TINT_RULE = 2
 
 # Bumped when the plate's crop changes, so cached copies are let go of.
-_PAGE_RULE = 7
+_PAGE_RULE = 9
 
 
 def _hex_colour(raw: str) -> str:

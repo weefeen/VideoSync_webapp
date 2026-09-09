@@ -37,9 +37,9 @@
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  /* Twelve percent. It sits in the margin now, where nothing competes
-     with it, so it can be seen rather than merely sensed. */
-  opacity: .12;
+  /* Ten percent. It sits in the margin, where nothing competes with it,
+     so it can be seen rather than merely sensed. */
+  opacity: .10;
   /* Two masks, unioned: show the score where EITHER says show.
    *
    *   across  a full-width strip over the header only — down to 96px,
@@ -53,7 +53,7 @@
    * only about 130px wide, so a 60px fade was half of it: most of the
    * space was dissolving rather than showing anything. */
   -webkit-mask-image:
-      linear-gradient(180deg, #000 0, #000 96px, transparent 150px),
+      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),
@@ -61,7 +61,7 @@
         #000 100%);
   -webkit-mask-composite: source-over;
           mask-image:
-      linear-gradient(180deg, #000 0, #000 96px, transparent 150px),
+      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),
@@ -120,31 +120,25 @@
     to { transform: translate3d(734px, 0, 0); }
 }
 
-/* The page's own content has to sit above the backdrop, and it has to say
-   so rather than rely on paint order.
-   
-   Not `body > .top`: this design builds itself out of a <template>, so the
-   header and the rest are not direct children of body and that selector
-   matched nothing. It worked anyway, by document order — which is exactly
-   the kind of accident that stops working when something is reordered.
-   Matched by class at any depth instead. */
+/* The page's own content has to sit above the backdrop — but WITHOUT
+   creating a stacking context, which is a distinction that broke the
+   upload dialog.
+
+   `position: relative` alone leaves z-index at auto, so these elements
+   paint in the same layer as the backdrop and simply come later in the
+   document. That is enough to put them on top.
+
+   Adding `z-index: 1` also worked for the text and quietly broke the
+   rights dialog: a z-index on a positioned element creates a stacking
+   context, so the dialog's own `z-index: 80` was scoped inside whichever
+   of these contained it, and a later sibling with the same z-index painted
+   straight over it. The popup went behind the page and uploading became
+   impossible.
+
+   Not `body > .top`: this design assembles itself from a <template>, so
+   none of these are direct children of body and that selector matched
+   nothing. It worked by document order alone, which is the kind of
+   accident that stops working the moment something is reordered. */
 .top, main, footer, .foot, .srcfoot, .confirm, .partrow, .terms {
   position: relative;
-  z-index: 1;
 }
-
-/* ── 3. the headline in musical time ──────────────────────────────────── */
-.rubatoword {
-  display: inline-block;
-  opacity: 0;
-  transform: translateY(.14em);
-  animation: rubatoword .62s cubic-bezier(.22, .68, .28, 1) forwards;
-}
-@keyframes rubatoword { to { opacity: 1; transform: none; } }
-
-}  /* end reduced-motion guard */
-
-/* Scroll-scrubbing (2) and the counter (4) need no styling: one moves a
-   video's playhead, the other rewrites a number. Both check the same
-   preference in script, since neither can be expressed as a CSS animation
-   that a media query could simply switch off. */
