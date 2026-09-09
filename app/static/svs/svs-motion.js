@@ -52,11 +52,13 @@
   async function drift() {
     if (document.querySelector('.driftpages')) return;
 
-    let name = null;
+    let name = null, rule = 1;
     try {
-      const works = (await (await fetch('/api/library')).json()).works || [];
+      const data = await (await fetch('/api/library')).json();
+      const works = data.works || [];
       if (!works.length) return;
       name = works[0].id;
+      rule = data.page_rule || 1;
     } catch (err) { return; }        // offline: no backdrop, no complaint
     if (!name) return;
 
@@ -66,8 +68,11 @@
     // megabyte each, to draw the same thing this draws with one.
     const run = document.createElement('div');
     run.className = 'driftrun';
+    // The rule number is in the address on purpose: the plate is cached
+    // for an hour, so without it a change to how it is cropped stays
+    // invisible until the copy in the browser expires.
     run.style.backgroundImage =
-      `url("/api/library/${encodeURIComponent(name)}/page?n=1")`;
+      `url("/api/library/${encodeURIComponent(name)}/page?n=1&v=${rule}")`;
 
     // Three nested elements, each doing one job: the outer decides WHERE
     // the score may show, the middle tilts it, the inner moves it. They

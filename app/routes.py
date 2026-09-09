@@ -145,7 +145,8 @@ def api_library():
                     # copy once and then left behind by a config change.
                     "retention_hours": settings.retention_hot_hours,
                     "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
-                    "max_minutes": MAX_DURATION_MINUTES})
+                    "max_minutes": MAX_DURATION_MINUTES,
+                    "page_rule": _PAGE_RULE})
 
 
 @bp.get("/api/stats")
@@ -162,12 +163,18 @@ def api_stats():
 _INK: dict[tuple[str, int], tuple[float, float]] = {}
 
 
-def _ink_band(path: pathlib.Path) -> tuple[float, float]:
-    """(top, bottom) of the engraving, 0..1 down the plate."""
+def _ink_band(path: pathlib.Path) -> tuple[float, float, float, float]:
+    """(top, bottom, left, right) of the engraving, as fractions of the plate.
+
+    All four, not just the vertical pair: plates tiled side by side show
+    their side margins as a white channel between them, which is exactly
+    the seam that makes a backdrop read as a stack of pages instead of as
+    continuous music.
+    """
     key = (str(path), path.stat().st_mtime_ns)
     if key in _INK:
         return _INK[key]
-    band = (0.0, 1.0)
+    band = (0.0, 1.0, 0.0, 1.0)
     try:
         import io
         from PIL import Image
@@ -184,8 +191,11 @@ def _ink_band(path: pathlib.Path) -> tuple[float, float]:
             px = grey.load()
             rows = [y for y in range(h)
                     if any(px[x, y] < 200 for x in range(0, w, 2))]
-            if rows:
-                band = (rows[0] / h, (rows[-1] + 1) / h)
+            cols = [x for x in range(w)
+                    if any(px[x, y] < 200 for y in range(0, h, 2))]
+            if rows and cols:
+                band = (rows[0] / h, (rows[-1] + 1) / h,
+                        cols[0] / w, (cols[-1] + 1) / w)
     except Exception as exc:                     # noqa: BLE001
         logger.info("could not measure the engraving in %s: %s", path.name, exc)
     _INK[key] = band
@@ -199,23 +209,26 @@ def _trimmed(path: pathlib.Path) -> str:
     change, so nothing inside has to be understood or rewritten.
     """
     text = path.read_text(encoding="utf-8")
-    top, bottom = _ink_band(path)
-    if bottom - top > 0.98:
+    top, bottom, left, right = _ink_band(path)
+    if bottom - top > 0.98 and right - left > 0.98:
         return text
     height = _svg_px(text, "height") or 2970.0
     width = _svg_px(text, "width") or 2100.0
-    y = top * height
-    tall = (bottom - top) * height
+    x, y = left * width, top * height
+    wide, tall = (right - left) * width, (bottom - top) * height
     opening = re.search(r"<svg\b[^>]*>", text)
     if not opening:
         return text
     tag = opening.group(0)
+    # The declared size shrinks with the viewBox so the plate keeps its
+    # proportions wherever it is drawn.
+    tag = re.sub(r'\swidth="[^"]*"', f' width="{wide:.0f}px"', tag)
     tag = re.sub(r'\sheight="[^"]*"', f' height="{tall:.0f}px"', tag)
+    box = f'viewBox="{x:.0f} {y:.0f} {wide:.0f} {tall:.0f}"'
     if "viewBox" in tag:
-        tag = re.sub(r'viewBox="[^"]*"',
-                     f'viewBox="0 {y:.0f} {width:.0f} {tall:.0f}"', tag)
+        tag = re.sub(r'viewBox="[^"]*"', box, tag)
     else:
-        tag = tag[:-1] + f' viewBox="0 {y:.0f} {width:.0f} {tall:.0f}">'
+        tag = tag[:-1] + f" {box}>"
     return text[:opening.start()] + tag + text[opening.end():]
 
 
@@ -349,6 +362,9 @@ def api_band(name: str):
 # Bumped whenever _tint changes what it does, so caches let go of the old
 # answer instead of showing a half-coloured score.
 _TINT_RULE = 2
+
+# Bumped when the plate's crop changes, so cached copies are let go of.
+_PAGE_RULE = 3
 
 
 def _hex_colour(raw: str) -> str:

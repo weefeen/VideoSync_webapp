@@ -100,19 +100,24 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -620px;
-  right: -620px;
+  left: -744px;
+  right: -744px;
   background-repeat: repeat;
   background-position: 0 center;
-  /* Width pinned, height from A4: the slide travels one tile width, so a
-     width that varied with the viewport would land mid-plate. */
-  background-size: 620px auto;
+  /* 744px, not 620. The plate is cropped to its engraving now — 2051 by
+     2417 rather than 2100 by 2970 — so at the old width a page stood 731px
+     tall instead of 877 and read as shrunk. This is the width at which a
+     trimmed page occupies exactly the height an untrimmed one did.
+     
+     Width pinned and height from the plate: the slide travels one tile
+     width, so a width that varied with the viewport would land mid-page. */
+  background-size: 744px auto;
   animation: driftrun 100s linear infinite;
   will-change: transform;
 }
 @keyframes driftrun {
   from { transform: translate3d(0, 0, 0); }
-    to { transform: translate3d(620px, 0, 0); }
+    to { transform: translate3d(744px, 0, 0); }
 }
 
 /* The page's own content has to sit above the backdrop, and it has to say
