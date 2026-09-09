@@ -522,6 +522,98 @@ def check_linux_configuration_leaves_no_gaps() -> str:
     return f"{len(prod)} variables, covering all {len(example)} in .env.example"
 
 
+def check_a_redelivery_does_not_render_twice() -> str:
+    """A broker redelivers on any doubt. The work has to be safe under it.
+
+    Without the attempt record a redelivered task is rendered again: a
+    finished job overwrites a video somebody may already hold a link to and
+    sends a second email about it, and a job that failed on its own inputs
+    spends another half hour failing the same way.
+
+    The record is checked on EVERY delivery, not only on ones the broker
+    flags as redelivered — a duplicate the janitor published is a first
+    delivery as far as RabbitMQ is concerned, which is the case that flag
+    misses.
+    """
+    from app import pipeline
+    from app.queue import attempt, worker
+    from app.queue.messages import RenderTask
+
+    with tempfile.TemporaryDirectory(prefix="svs_attempt_") as tmp:
+        job_dir = pathlib.Path(tmp) / "job"
+        job_dir.mkdir()
+        task = RenderTask(job_id="job", upload="/tmp/x.mp4",
+                          package="Some Score", attempt=2)
+
+        rendered: list[str] = []
+
+        def ran_the_render(*_a, **_k):
+            # Raises the failure the worker EXPECTS, so the cases that are
+            # supposed to render report cleanly instead of dumping a
+            # traceback; the cases that are not supposed to render assert
+            # that `rendered` stayed empty.
+            rendered.append("ran")
+            raise pipeline.PipelineError("stubbed render")
+
+        # `find_package` is stubbed too: without it the task fails on "no
+        # such score" before `pipeline.run` is ever reached, and the probe
+        # for "did it render?" would never fire — which is exactly what the
+        # first version of this check got wrong.
+        saved = (pipeline.run, pipeline.job_folder, pipeline.find_package)
+        pipeline.run = ran_the_render
+        pipeline.job_folder = lambda _job_id: job_dir
+        pipeline.find_package = lambda _name: object()
+        try:
+            # A finished attempt: report the same outcome, do not re-render.
+            attempt.write(job_dir, 2, attempt.DONE, result="/tmp/out.mp4",
+                          output_bytes=1234, elapsed=9.0)
+            seen: list = []
+            worker.handle_task(task, seen.append)
+            if rendered:
+                raise Failed("a finished attempt was rendered again")
+            if [e.type for e in seen] != ["done"]:
+                raise Failed(f"expected one 'done', got {[e.type for e in seen]}")
+            if seen[0].result != "/tmp/out.mp4" or seen[0].output_bytes != 1234:
+                raise Failed("the repeated outcome lost the original's detail")
+
+            # A failed attempt: report the failure again, do not re-run it.
+            attempt.write(job_dir, 2, attempt.FAILED, error="ffmpeg said no",
+                          error_class="ToolFailed", returncode=1)
+            seen = []
+            worker.handle_task(task, seen.append)
+            if rendered:
+                raise Failed("a failed attempt was run again")
+            if [e.type for e in seen] != ["failed"] or seen[0].error != "ffmpeg said no":
+                raise Failed(f"the failure was not repeated: {seen}")
+
+            # A *different* attempt of the same job must render: submitting
+            # again with new colours is exactly that, and must not be
+            # mistaken for a duplicate.
+            other = RenderTask(job_id="job", upload="/tmp/x.mp4",
+                               package="Some Score", attempt=3)
+            seen = []
+            worker.handle_task(other, seen.append)
+            if not rendered:
+                raise Failed("a new attempt was skipped as though it were a "
+                             "redelivery of the old one")
+            if [e.type for e in seen] != ["started", "failed"]:
+                raise Failed(f"a new attempt did not run and report: "
+                             f"{[e.type for e in seen]}")
+
+            # An attempt that only got as far as `started` died mid-render,
+            # and there is no result to report — it has to run again.
+            rendered.clear()
+            attempt.write(job_dir, 4, attempt.STARTED, worker="dead")
+            fourth = RenderTask(job_id="job", upload="/tmp/x.mp4",
+                                package="Some Score", attempt=4)
+            worker.handle_task(fourth, lambda _e: None)
+            if not rendered:
+                raise Failed("an interrupted attempt was treated as finished")
+        finally:
+            pipeline.run, pipeline.job_folder, pipeline.find_package = saved
+    return "done and failed repeated, new attempt runs, interrupted re-runs"
+
+
 def check_the_queue_topology_is_stable() -> str:
     """The queue arguments must not change by accident.
 
@@ -614,6 +706,7 @@ def main() -> int:
         check_job_store_round_trips,
         check_a_task_reaches_a_worker_and_comes_back,
         check_the_queue_topology_is_stable,
+        check_a_redelivery_does_not_render_twice,
         check_old_databases_gain_the_new_columns,
         check_messages_round_trip,
         check_ledger_applies_a_run_in_order,

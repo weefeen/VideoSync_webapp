@@ -458,6 +458,11 @@ the ledger's rules are exercised on every push without a broker anywhere.
     win32  python 3.12.7  all 14 passed
     linux  python 3.12.3  all 14 passed
 
+**Confirmed green on GitHub Actions by the owner**, on both runners. Until
+that confirmation the matrix had only been proven by running the same script
+on the two machines by hand — the workflow file itself had never been watched
+executing.
+
 ---
 
 ## 14. RabbitMQ, on the dev node

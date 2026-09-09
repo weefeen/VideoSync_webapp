@@ -22,6 +22,7 @@ from typing import Callable
 
 from .. import pipeline
 from .. import render as rnd
+from . import attempt
 from .messages import Event, RenderTask
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,17 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
         say("pong")
         return False
 
+    # What did this worker already do with this exact attempt? Asked on
+    # EVERY delivery, not only ones the broker flags as redelivered: a
+    # duplicate the janitor published is a first delivery as far as RabbitMQ
+    # is concerned, and that is the case the flag misses.
+    job_dir = pipeline.job_folder(task.job_id)
+    already = attempt.read(job_dir, task.attempt)
+    if already is not None and already.get("status") in (attempt.DONE,
+                                                         attempt.FAILED):
+        return _repeat(already, say, task)
+
+    attempt.write(job_dir, task.attempt, attempt.STARTED, worker=me)
     say("started")
     began = time.time()
     try:
@@ -67,10 +79,17 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
             package, pathlib.Path(task.upload), task.job_id, style,
             task.mode, task.meta,
             lambda stage, detail="": say("progress", stage=stage, detail=detail))
+        size = (result.output.stat().st_size
+                if result.output.is_file() else None)
+        elapsed = round(time.time() - began, 1)
+        # Recorded BEFORE the event is published. If this worker dies in the
+        # gap, the redelivery finds the record and republishes the outcome
+        # instead of rendering the same thing again.
+        attempt.write(job_dir, task.attempt, attempt.DONE,
+                      result=str(result.output), mode=result.mode,
+                      output_bytes=size, elapsed=elapsed)
         say("done", result=str(result.output), mode=result.mode,
-            output_bytes=(result.output.stat().st_size
-                          if result.output.is_file() else None),
-            elapsed=round(time.time() - began, 1))
+            output_bytes=size, elapsed=elapsed)
         return True
 
     except pipeline.PipelineError as exc:
@@ -80,17 +99,48 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
         # command matters more than it looks, because a render's ffmpeg
         # invocation is assembled from the visitor's own crop, colours and
         # panel choices and cannot be reconstructed by hand.
-        say("failed", error=str(exc), error_class=type(exc).__name__,
-            command=shlex.join(getattr(exc, "command", []) or []),
-            returncode=getattr(exc, "returncode", None),
-            stderr_tail=(getattr(exc, "stderr", "") or "")[-4000:])
+        detail = {"error": str(exc), "error_class": type(exc).__name__,
+                  "command": shlex.join(getattr(exc, "command", []) or []),
+                  "returncode": getattr(exc, "returncode", None),
+                  "stderr_tail": (getattr(exc, "stderr", "") or "")[-4000:]}
+        # A render that failed on its own inputs fails the same way next
+        # time. Recorded so a redelivery reports it again rather than
+        # spending another half hour proving it.
+        attempt.write(job_dir, task.attempt, attempt.FAILED, **detail)
+        say("failed", **detail)
         return False
 
     except Exception as exc:                  # noqa: BLE001 - never die silently
         traceback.print_exc()
-        say("failed", error=f"Unexpected failure: {exc}",
-            error_class=type(exc).__name__)
+        detail = {"error": f"Unexpected failure: {exc}",
+                  "error_class": type(exc).__name__}
+        attempt.write(job_dir, task.attempt, attempt.FAILED, **detail)
+        say("failed", **detail)
         return False
+
+
+def _repeat(record: dict, say, task: RenderTask) -> bool:
+    """Report an outcome this worker already reached, without repeating it.
+
+    The video exists, or the failure is settled. Either way the work is done
+    and only the news is missing — this attempt's `done` or `failed` never
+    reached the table, or reached it and the ack did not get back to the
+    broker before the worker stopped.
+    """
+    status = record.get("status")
+    logger.info("attempt %d of %s already %s here; reporting it again, "
+                "not rendering again", task.attempt, task.job_id, status)
+    if status == attempt.DONE:
+        say("done", result=record.get("result"), mode=record.get("mode"),
+            output_bytes=record.get("output_bytes"),
+            elapsed=record.get("elapsed"))
+        return True
+    say("failed", error=record.get("error", "") or "It failed before.",
+        error_class=record.get("error_class", ""),
+        command=record.get("command", ""),
+        returncode=record.get("returncode"),
+        stderr_tail=record.get("stderr_tail", ""))
+    return False
 
 
 def main() -> int:

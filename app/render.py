@@ -29,6 +29,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import shlex
@@ -572,9 +573,16 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         cmd += ["-filter_complex", ";".join(chain), "-map", "[out]"]
         if info["has_audio"]:
             cmd += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]
+        # ffmpeg writes beside the real name and Python renames on success,
+        # so a run that dies part-way leaves `.part.mp4` rather than a file
+        # that looks exactly like a finished video. That matters once a task
+        # can be redelivered: "is the output already there?" has to mean
+        # "did a render finish", and a half-written file answers it wrongly.
+        partial = output.with_suffix(".part" + output.suffix)
+        partial.unlink(missing_ok=True)
         cmd += ["-c:v", "libx264", "-crf", str(style.crf), "-preset", "medium",
                 "-pix_fmt", "yuv420p", "-t", f"{info['duration']:.3f}",
-                str(output)]
+                str(partial)]
 
         on_progress("encode", f"{width}x{height} · band {layout.band.w}x"
                               f"{layout.band.h} {style.band_position}"
@@ -586,7 +594,10 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         for path in temps:
             pathlib.Path(path).unlink(missing_ok=True)
 
-    if not output.is_file():
+    if not partial.is_file():
         raise RenderError("ffmpeg reported success but produced no file.")
+    # os.replace is atomic on both platforms, so a reader either sees the
+    # previous file or the new one and never a partial.
+    os.replace(partial, output)
     on_progress("done", f"{output.stat().st_size / 1e6:.1f} MB")
     return output
