@@ -203,24 +203,24 @@ Until then, 25 minutes.
 ## 2. Topology
 
 ```
- BROWSER                 WEB — the existing www.weefeen.com Linode (EU): Apache vhost chopin.weefeen.com → gunicorn   LINODE OBJECT STORAGE (S3)
+ BROWSER                 WEB — the existing www.weefeen.com Linode (EU): Apache vhost chopin.weefeen.com → gunicorn   AWS S3 — Standard 48 h, then Glacier
  ───────                 ───────────────────────────────────────────────                            ──────────────────────────
  POST /api/uploads ────▶ Flask: limits.guard(upload_ip) · rights · declared size ≤ MAX_UPLOAD_GB      bucket vsw/
-   (metadata only)       INSERT jobs(state=uploading) · presigned PUT urls (step 7, optional)          uploads/<job>/<name>
- PUT parts ─────────────────────────────────────────────────────────────────────────────────────────▶ audio/<job>/audio.wav
- POST …/complete ──────▶ ffprobe (range reads) → duration ≤ MAX_DURATION_MINUTES, has_audio           work/<job>/verdict.json
-                         state=uploaded · publish vsw.extract                                          work/<job>/chroma.npy
-                                │                                                                      work/<job>/measures.data
-                         ┌──────▼──── RabbitMQ — the EXISTING broker on www, our own vhost "vsw", TLS 5671 on the VLAN address ──┐  work/<job>/<stage>_attempt<N>
-                         │  work:   vsw.extract  vsw.identify  vsw.chroma  vsw.sync  vsw.fetch  vsw.embed        │  results/<job>/<stem>_synced.mp4
-                         │  return: vsw.events ◀── every stage, both hosts: started / log / finished / failed     │  logs/<job>/<stage>.attempt<N>.log
+   (metadata only)       INSERT jobs(state=uploading) · presigned PUT urls (step 7, optional)          transit/<job>/input/<job>.<ext>
+ PUT parts ─────────────────────────────────────────────────────────────────────────────────────────▶ transit/<job>/sync_data/audio.wav
+ POST …/complete ──────▶ ffprobe (range reads) → duration ≤ MAX_DURATION_MINUTES, has_audio           jobs/<job>/sync_data/verdict.json
+                         state=uploaded · publish vsw.extract                                          jobs/<job>/sync_data/chroma.npy
+                                │                                                                      jobs/<job>/sync_data/measures.data
+                         ┌──────▼──── RabbitMQ — the EXISTING broker on www, our own vhost "vsw", TLS 5671 on the VLAN address ──┐  jobs/<job>/markers/<stage>_attempt<N>
+                         │  work:   vsw.extract  vsw.identify  vsw.chroma  vsw.sync  vsw.fetch  vsw.embed        │  jobs/<job>/output/<job>_PROCESSED.mp4
+                         │  return: vsw.events ◀── every stage, both hosts: started / log / finished / failed     │  jobs/<job>/logs/<stage>.attempt<N>.log
                          │  dead:   vsw.dead ◀── {task, failure record} published by the failing stage,           │  logs/instances/<instance_id>/*.log
                          │                       plus DLX for anything rejected before our code ran               │
                          └──┬──────────┬───────────────┬──────────────────────────────────────────────────────────┘
                             │          │               │
    ┌── web-box programs ────┘          │               └── compute-box programs
    │  (supervisord, one log each)      │
-   │  extract   app env   ffmpeg -vn -ac 1 -ar 22050 → audio/<job>/audio.wav  (exact command kept) → vsw.identify
+   │  extract   app env   ffmpeg -vn -ac 1 -ar 22050 → transit/<job>/sync_data/audio.wav  (exact command kept) → vsw.identify
    │  events    app env   → jobs.sqlite: jobs · stage_runs (inputs, outputs, command, error, stderr tail) · calibration
    │                      → WORK_DIR/<job>/job.log — one narrative per job, both hosts, all stages       → vsw.notify on done / failed
    │  notify    app env   → SMTP: "queued, ready by ~HH:MM" · "ready" · "failed: why", table-gated
@@ -241,11 +241,11 @@ Until then, 25 minutes.
    identify   engine env  torch CPU + indexes resident   vsw.identify   audio.wav → verdict.json → S            → event identified
    chroma     engine env  audio2chroma imported          vsw.chroma     audio.wav → chroma.npy → S               → vsw.sync
    sync       engine env  wfn_combination_selector       vsw.sync       chroma + package reference → measures → S → vsw.fetch
-   fetch      app env     boto3                          vsw.fetch      uploads/<job>/<name> → local disk         → vsw.embed
+   fetch      app env     boto3                          vsw.fetch      transit/<job>/input/<job>.<ext> → local disk         → vsw.embed
    embed      app env     cairo, ffmpeg                  vsw.embed      THE ONLY CONSUMER, prefetch 1 = one encode at a time → event done
    logship    app env     every 60 s and at shutdown: /var/log/supervisor/*.log → logs/instances/<instance_id>/
    each program serves /metrics on its own port (§14.3), scraped over the VLAN; node_exporter on 9100 for the host curves
-   every attempt: PUT logs/<job>/<stage>.attempt<N>.log (full stderr, traceback, exact commands) BEFORE its finished/failed event
+   every attempt: PUT jobs/<job>/logs/<stage>.attempt<N>.log (full stderr, traceback, exact commands) BEFORE its finished/failed event
    a stage is done when its output is in S (HEAD); the local <stage>_done.flag only caches that fact (§6.1)
 ```
 
@@ -253,7 +253,7 @@ Until then, 25 minutes.
 |---|---|---|
 | www.weefeen.com (existing, EU) | Apache vhost → Flask, our vhost on the existing RabbitMQ, the job table and per-job logs, extract, events, notify, scaler, Prometheus + Grafana | Always on and already paid for; owns every promise to a visitor and every diagnostic. Extract is seconds per minute of video, makes the recogniser and the aligner consume a small file, and the box has ffmpeg duty anyway (`routes.py:405` probes there today). §15.1 says what sits beside the live Symfony site and what is capped. |
 | Compute singleton | identify, chroma, sync, fetch, embed, logship | The minutes-to-hours of CPU. Exists only while there is work, plus a grace period. |
-| Object storage | uploads, canonical audio, intermediates, attempt markers, results, **per-attempt logs and shipped instance logs** | The only durable bytes; the singleton's disk dies with it. |
+| AWS S3 | `transit/` — the recording and its audio, deleted after 48 h; `jobs/` — result, chroma, measures, verdict, params without contact details, logs; markers; shipped instance logs | The only durable bytes; the singleton's disk dies with it. Three tiers (§10.4): the singleton's disk, S3 Standard for 48 h, Glacier by lifecycle rule. |
 
 **One process per stage, and what that buys.** The owner's two
 requirements — "one at a time" and "debug quickly: which stage, inputs,
@@ -303,12 +303,12 @@ VideoScoreSync declares them, `consumer_base_queue.py:44`);
 
 | Queue | Program / host / interpreter | Reads (recorded as `inputs`) | Does | Writes (recorded as `outputs`) → publishes | Completion check |
 |---|---|---|---|---|---|
-| `vsw.extract` | `extract` / web / app env | `uploads/<job>/<name>` (the staged file on www; a presigned GET stream once step 7 exists) | One ffmpeg pass: `-vn -ac 1 -ar 22050 -c:a pcm_s16le`; **exact command and full stderr kept** (§7.4) | `audio/<job>/audio.wav` → `vsw.identify` | HEAD `audio/<job>/audio.wav` |
-| `vsw.identify` | `identify` / singleton (§12 for the alternative) / **engine env**, imports `weefeen_id` directly | `audio/<job>/audio.wav`, `duration_s`, the two indexes | Torch and indexes loaded **once at process start** — the resident "serve mode" `identify.py:17-20` wished for; `identify_aggregated`; the too-short / no-audio gates of `identify.py:160-178` as native checks | `work/<job>/verdict.json` → event `identified` with the verdict | HEAD `work/<job>/verdict.json` |
-| `vsw.chroma` | `chroma` / singleton / **engine env**, imports `services.audio_to_chroma` from the read-only VideoScoreSync checkout | `audio/<job>/audio.wav` | `audio2chroma`; a **startup self-test** on a bundled 1-second WAV so a mis-built env fails at program start, not on a visitor's job (§8.1) | `work/<job>/chroma.npy` → `vsw.sync` | HEAD `work/<job>/chroma.npy` |
-| `vsw.sync` | `sync` / singleton / **engine env**, imports `services.audio_synchronization_service` | `work/<job>/chroma.npy`, the package's `performance/chroma.npy` + `measures.data` | `wfn_combination_selector`; the column translation and the crowding / span checks exactly as `tools/sync_runner.py:95-210` and `app/sync.py:163-180`, now raising `PartialRecording` natively. **A partial recording fails here, permanently, before gigabytes are fetched.** | `work/<job>/measures.data` → `vsw.fetch` | HEAD `work/<job>/measures.data` |
-| `vsw.fetch` | `fetch` / singleton / app env | `uploads/<job>/<name>`, `upload_bytes` | `download_with_retry` shape of `consumer_download_video_queue.py:39-57`; verify size; skip if present at that size | `input/video.<ext>` (local; size recorded) → `vsw.embed` | local file at the right size |
-| `vsw.embed` | `embed` / singleton / app env (cairo) — **the only consumer of this queue** | `input/video.<ext>`, `work/<job>/measures.data`, the package's `lines/*`, `export.json`, `style`, `meta` | `render.render()` unchanged in substance; **three commands** (ffprobe, band strip, main encode) each kept verbatim with their stderr (§7.4); ffmpeg writes `<stem>.attempt<N>.part.mp4`, Python renames on exit 0 | `results/<job>/<stem>_synced.mp4` → event `done` with key, bytes, elapsed | HEAD `results/<job>/…mp4` |
+| `vsw.extract` | `extract` / web / app env | `transit/<job>/input/<job>.<ext>` (the staged file on www; a presigned GET stream once step 7 exists) | One ffmpeg pass: `-vn -ac 1 -ar 22050 -c:a pcm_s16le`; **exact command and full stderr kept** (§7.4) | `transit/<job>/sync_data/audio.wav` → `vsw.identify` | HEAD `transit/<job>/sync_data/audio.wav` |
+| `vsw.identify` | `identify` / singleton (§12 for the alternative) / **engine env**, imports `weefeen_id` directly | `transit/<job>/sync_data/audio.wav`, `duration_s`, the two indexes | Torch and indexes loaded **once at process start** — the resident "serve mode" `identify.py:17-20` wished for; `identify_aggregated`; the too-short / no-audio gates of `identify.py:160-178` as native checks | `jobs/<job>/sync_data/verdict.json` → event `identified` with the verdict | HEAD `jobs/<job>/sync_data/verdict.json` |
+| `vsw.chroma` | `chroma` / singleton / **engine env**, imports `services.audio_to_chroma` from the read-only VideoScoreSync checkout | `transit/<job>/sync_data/audio.wav` | `audio2chroma`; a **startup self-test** on a bundled 1-second WAV so a mis-built env fails at program start, not on a visitor's job (§8.1) | `jobs/<job>/sync_data/chroma.npy` → `vsw.sync` | HEAD `jobs/<job>/sync_data/chroma.npy` |
+| `vsw.sync` | `sync` / singleton / **engine env**, imports `services.audio_synchronization_service` | `jobs/<job>/sync_data/chroma.npy`, the package's `performance/chroma.npy` + `measures.data` | `wfn_combination_selector`; the column translation and the crowding / span checks exactly as `tools/sync_runner.py:95-210` and `app/sync.py:163-180`, now raising `PartialRecording` natively. **A partial recording fails here, permanently, before gigabytes are fetched.** | `jobs/<job>/sync_data/measures.data` → `vsw.fetch` | HEAD `jobs/<job>/sync_data/measures.data` |
+| `vsw.fetch` | `fetch` / singleton / app env | `transit/<job>/input/<job>.<ext>`, `upload_bytes` | `download_with_retry` shape of `consumer_download_video_queue.py:39-57`; verify size; skip if present at that size | `input/<job_id>.<ext>` (local; size recorded) → `vsw.embed` | local file at the right size |
+| `vsw.embed` | `embed` / singleton / app env (cairo) — **the only consumer of this queue** | `input/<job_id>.<ext>`, `jobs/<job>/sync_data/measures.data`, the package's `lines/*`, `export.json`, `style`, `meta` | `render.render()` unchanged in substance; **three commands** (ffprobe, band strip, main encode) each kept verbatim with their stderr (§7.4); ffmpeg writes `output/<job_id>.attempt<N>.part.mp4`, Python renames on exit 0 | `jobs/<job>/output/<job>_PROCESSED.mp4` → event `done` with key, bytes, elapsed | HEAD `jobs/<job>/output/<job>_PROCESSED.mp4` |
 | `vsw.events` | `events` / web / app env | — | Applies `started / log / finished / failed` events to `jobs`, `stage_runs`, `calibration`; appends narrative lines to `WORK_DIR/<job>/job.log`; on `embed.done` / `failed(permanent)` publishes `vsw.notify`; recomputes positions and ETAs (§11.2) | `vsw.notify` | upsert on `(job_id, stage, attempt)` |
 | `vsw.notify` | `notify` / web / app env | `job_id`, `kind ∈ {queued, ready, failed}` | `notify.send_*` gated by `mail_<kind>_at IS NULL` (§13.2) | — | the table |
 | `vsw.dead` | read by `tools/queue.py` | — | `{task, failure}` records published by the failing stage before it acks (§7.5), plus raw DLX rejects with `x-death` headers | — | — |
@@ -371,11 +371,11 @@ class Task:
     job_id: str
     stage: str                       # extract | identify | chroma | sync | fetch | embed
     attempt: int = 1                 # bumped by the consumer that republishes a transient failure
-    upload_key: str | None = None    # uploads/<job>/<name>
+    upload_key: str | None = None    # transit/<job>/input/<job>.<ext>
     upload_bytes: int | None = None
     upload_ext: str | None = None
     duration_s: float | None = None  # ffprobe at upload; one ETA axis
-    audio_key: str | None = None     # audio/<job>/audio.wav
+    audio_key: str | None = None     # transit/<job>/sync_data/audio.wav
     package: str | None = None       # score package folder name, as library.py keys it
     mode: str | None = None          # "reference" (pipeline.MODES)
     style: dict | None = None        # dataclasses.asdict(render.Style)
@@ -393,27 +393,67 @@ as arguments to `Registry.start()` (`jobs.py:143-144`). Everything a
 stage needs to be **re-run** is either in the `Task` or in the bucket,
 which is what makes replay (§7.5) a one-line publish.
 
-### 4.2 `app/queue/paths.py`, `app/queue/keys.py`
+### 4.2 The job tree — VideoScoreSync's, exactly, plus one file
+
+The owner: *"I want to keep the same job project structure that we have
+in VideoScoreSync."* From `config.py:311-360` and
+`helpers/folders_utils.py:57-72`, the canonical tree, and what this app
+puts in each slot:
+
+```
+<WORK_DIR>/<job_id>/
+    input/          <job_id>.<ext>              the recording — named by job id, never by the visitor's file name
+                    job_params.json             the Task: package, mode, style, meta, duration, bytes, sha256 of the
+                                                recording — NO email address, NO visitor address (those stay in jobs.sqlite)
+                    video_params.json           ffprobe's answer (VideoScoreSync's VIDEO_PARAMS)
+    sync_data/      audio.wav                   the canonical 22050 Hz mono audio (§3.2)   AUDIO_FOR_SYNC_FILE_PATH
+                    chroma.npy                                                              CHROMA_FILE_PATH
+                    measures.data                                                           MEASURES_DATA_FILE_PATH
+                    verdict.json                THE ONE ADDITION: the recogniser's decision; VideoScoreSync has no equivalent
+    output/         <job_id>_PROCESSED.<ext>    the result (PROCESSED_EXTENSION)
+                    <job_id>.attempt<N>.part.<ext>   ffmpeg's target until Python renames it on exit 0
+    logs/           <stage>.attempt<N>.log      our addition: the per-attempt logs of §7.3
+    static_pages/   present for parity, unused: VideoScoreSync's Cliburn title pages (static_info.json)
+                    output/hq_audio.m4a and silent_<job_id>.<ext> are likewise not produced here (§3.2)
+```
+
+`app/queue/paths.py` copies the constants by name — `INPUT_FOLDER`,
+`OUTPUT_FOLDER`, `SYNC_DATA_FOLDER`, `STATIC_PAGES_FOLDER`,
+`PROCESSED_EXTENSION`, `JOB_PARAMS_FILE_PATH`, `AUDIO_FOR_SYNC_FILE_PATH`,
+`CHROMA_FILE_PATH`, `MEASURES_DATA_FILE_PATH` — so a person who knows one
+tree knows the other. **One directory is the whole job**, on either
+host; `shutil.rmtree(job_dir)` is the whole cleanup.
+
+**The defect this fixes.** Today an upload lands in a *shared*
+`work_dir/uploads/<job_id>.mp4` (`settings.py:216`, `routes.py:399-402`)
+while the job's own folder is `work_dir/<job_id>` (`pipeline.py:84-85`)
+holding `sync/<package>/` and the output loose at the top. A job's
+files live in two places, which is why `pipeline.cleanup()`
+(`pipeline.py:171-173`) is dead code — nothing calls it — and why
+980 MB has accumulated from testing alone. Step 1 adopts the tree and
+calls the cleanup.
 
 ```python
 @dataclasses.dataclass(frozen=True)
-class JobPaths:                       # WORK_DIR/<job>/ on either host
+class JobPaths:                                   # WORK_DIR/<job_id>/ on either host, the tree above
     dir: Path
-    video: Path                       # input/video.<ext>          (singleton; fetched)
-    audio: Path                       # audio.wav                   (web makes it; singleton caches it)
-    chroma: Path; measures: Path; verdict: Path
-    result: Path                      # <pipeline._safe(package)>_synced.mp4
-    def part(self, attempt: int) -> Path        # <stem>.attempt<N>.part.mp4
-    def flag(self, stage: str) -> Path          # <stage>_done.flag — a cache of "the output is in S"
-    def log(self, stage: str, attempt: int) -> Path   # logs/<stage>.attempt<N>.log, PUT to the bucket at attempt end
+    video: Path                                   # input/<job_id>.<ext>
+    params: Path                                  # input/job_params.json
+    audio: Path; chroma: Path; measures: Path; verdict: Path      # sync_data/…
+    result: Path                                  # output/<job_id>_PROCESSED.<ext>
+    def part(self, attempt: int) -> Path          # output/<job_id>.attempt<N>.part.<ext>
+    def flag(self, stage: str) -> Path            # <stage>_done.flag — a cache of "the output is in S3"
+    def log(self, stage: str, attempt: int) -> Path   # logs/<stage>.attempt<N>.log
 
-def keys(job_id: str) -> Keys:
-    uploads/<job>/<name>    audio/<job>/audio.wav
-    work/<job>/verdict.json  work/<job>/chroma.npy  work/<job>/measures.data
-    work/<job>/<stage>_attempt<N>                    # zero-byte attempt markers (§6.3)
-    results/<job>/<stem>_synced.mp4
-    logs/<job>/<stage>.attempt<N>.log                # the full per-attempt log (§7.3)
-    logs/instances/<instance_id>/<program>.log       # shipped supervisord logs (§7.7)
+def keys(job_id: str) -> Keys:                    # the bucket mirrors the tree, under two prefixes (§10.4)
+    transit/<job_id>/input/<job_id>.<ext>         # DISCARDED after the job: the visitor's recording
+    transit/<job_id>/sync_data/audio.wav          # DISCARDED: their raw performance audio
+    jobs/<job_id>/input/job_params.json           # KEPT (no contact details in it)
+    jobs/<job_id>/sync_data/{chroma.npy, measures.data, verdict.json}     # KEPT: a re-render needs no re-alignment
+    jobs/<job_id>/output/<job_id>_PROCESSED.<ext> # KEPT: the video, live 48 h, then Glacier
+    jobs/<job_id>/logs/<stage>.attempt<N>.log     # KEPT: diagnostics
+    jobs/<job_id>/markers/<stage>_attempt<N>      # zero-byte attempt markers (§6.3)
+    logs/instances/<instance_id>/<program>.log    # shipped supervisord logs (§7.7)
 ```
 
 The score library must exist on the singleton (sync reads
@@ -462,7 +502,7 @@ CREATE TABLE stage_runs (                       -- one row per attempt of a stag
   error_class TEXT,                             -- e.g. app.sync.PartialRecording, subprocess.CalledProcessError
   error_message TEXT,                           -- the user-safe message, or the exception's str()
   stderr_tail TEXT,                             -- last 200 lines of the failing child's stderr, or the full traceback
-  log_key TEXT,                                 -- logs/<job>/<stage>.attempt<N>.log in the bucket (the whole story)
+  log_key TEXT,                                 -- jobs/<job>/logs/<stage>.attempt<N>.log in the bucket (the whole story)
   PRIMARY KEY (job_id, stage, attempt)
 );
 
@@ -495,7 +535,7 @@ events consumer (§7.3).
 | Has stage X already happened? | **the bucket** — HEAD on the stage's output; the local flag is a cache | the table (singleton programs never read it) |
 | Where are the bytes? | **the bucket** | local disks |
 | What state is J in, where in line, when ready, was it mailed? | **the table**, derived from `vsw.events` | the broker |
-| What did stage X of J read, write, run and say, on attempt N? | **`stage_runs`** for the record, **`logs/<job>/…` in the bucket** for the whole story, **`job.log`** for the narrative | the singleton's disk |
+| What did stage X of J read, write, run and say, on attempt N? | **`stage_runs`** for the record, **`jobs/<job>/logs/…` in the bucket** for the whole story, **`job.log`** for the narrative | the singleton's disk |
 | Does a compute instance exist? | **the Linode API** (label `vsw-compute`); the `compute` row is the lease for *intent* | — |
 
 The table may lag by the latency of `vsw.events`; it never decides
@@ -534,7 +574,7 @@ stateDiagram-v2
     running --> running: chroma → sync → fetch → embed
     running --> queued: transient failure, attempt < cap (republished after RETRY_DELAY_SECONDS)
     running --> failed: permanent / config / cap reached
-    running --> done: results/… in S; event done
+    running --> done: jobs/<job>/output/… in S3, confirmed; event done
     done --> notified: mail_ready_at set
     failed --> notified: mail_failed_at set
     uploaded --> abandoned: no submit within UPLOAD_TTL_DAYS
@@ -550,7 +590,7 @@ on message (task):
     n = count_markers_in_bucket(stage) + 1                  # crash-attempt counting that survives destroy — §6.3
     if n > 1 and no stage_run(stage, n−1) ended:            # the previous attempt died without reporting
         event interrupted(stage, n−1, "process died; see logs/instances/<id>/")
-    PUT work/<job>/<stage>_attempt<n>
+    PUT jobs/<job>/markers/<stage>_attempt<n>
     if n > cap(stage): publish dead{task, failure(exhausted)}; event failed(exhausted); ack; return
     open per-attempt log  logs/<stage>.attempt<n>.log       # everything below is written to it
     event started(inputs = what will be read, with sizes)
@@ -654,7 +694,7 @@ what to expect:
 
 | Stage | `inputs` | `outputs` | `commands` |
 |---|---|---|---|
-| extract | `{"upload": key or path, "bytes": …, "duration_s": …}` | `{"audio": "audio/<job>/audio.wav", "bytes": …, "seconds": …}` | 1 × ffmpeg |
+| extract | `{"upload": key or path, "bytes": …, "duration_s": …}` | `{"audio": "transit/<job>/sync_data/audio.wav", "bytes": …, "seconds": …}` | 1 × ffmpeg |
 | identify | `{"audio": key, "bytes": …, "duration_s": …, "pitch_index": path+mtime, "chord_index": path+mtime}` | `{"verdict": key, "mode": …, "winner": …, "consensus": …, "n_windows": …}` | none |
 | chroma | `{"audio": key, "bytes": …}` | `{"chroma": key, "frames": …, "bytes": …}` | none |
 | sync | `{"chroma": key, "package": name, "ref_chroma": path+frames, "ref_measures": path+count}` | `{"measures": key, "measures": …, "first": …, "last": …, "crowding": …, "span_ratio": …}` | none |
@@ -685,7 +725,7 @@ be on the singleton, and gone with it. Two tiers instead:
 2. **The whole story** — the same logger's DEBUG stream, the complete
    stderr of every subprocess, and tracebacks, written to the local
    per-attempt file `logs/<stage>.attempt<N>.log` and **PUT to the bucket
-   at `logs/<job>/<stage>.attempt<N>.log` before the attempt's
+   at `jobs/<job>/logs/<stage>.attempt<N>.log` before the attempt's
    `finished` or `failed` event** (§6.1). Sizes are small — an hour of
    ffmpeg stderr with `-nostats -loglevel warning` is kilobytes; the
    progress stream goes to `-progress` on a separate local file and is
@@ -790,7 +830,7 @@ tools/queue.py compute [--gc]                          # the singleton row, prog
 
 ```
 job 3263f4b50583   Op.39 Scherzo (Breitkopf)   visitor 203.0.113.7   state failed (exhausted at embed)
-upload  uploads/3263f4b50583/perf.mp4   16.4 MB   7.25 min   640x360
+upload  transit/3263f4b50583/input/3263f4b50583.mp4   16.4 MB   7.25 min   640x360
 
 stage     att  host             started   elapsed  state        error
 extract   1    web              10:31:02  0m09s    done
@@ -802,19 +842,19 @@ embed     1    compute li-4821  10:35:57  4m10s    failed       transient  Comma
 embed     2    compute li-4821  10:41:12  4m08s    failed       exhausted  CommandFailed: Rendering the video failed
 
 embed attempt 2
-  inputs   video input/video.mp4 (16.4 MB)  measures work/3263f4b50583/measures.data (412 rows)
+  inputs   video input/3263f4b50583.mp4 (16.4 MB)  measures jobs/3263f4b50583/sync_data/measures.data (412 rows)
            package Op.39_…  bands 71  style {aspect 16/9, band bottom, bg none, ink #1c1622}
   outputs  none
   commands
-    $ ffprobe -v error -print_format json -show_format -show_streams input/video.mp4          rc 0   0.2s
+    $ ffprobe -v error -print_format json -show_format -show_streams input/3263f4b50583.mp4          rc 0   0.2s
     $ ffmpeg -y -f concat -safe 0 -i /tmp/videosync-x/bands.txt -vf scale=1306:244,… band.mp4  rc 0   31.4s
-    $ ffmpeg -y -f lavfi -i color=c=0x141019:s=1920x1080:r=25 -i input/video.mp4 -i band.mp4 \
+    $ ffmpeg -y -f lavfi -i color=c=0x141019:s=1920x1080:r=25 -i input/3263f4b50583.mp4 -i band.mp4 \
         -filter_complex "[0:v]scale=…" -map "[out]" -map 1:a:0 -c:a aac -b:a 192k \
         -c:v libx264 -crf 20 -preset medium -pix_fmt yuv420p -t 435.096 Op.39_….attempt2.part.mp4   rc 137  3m36s
   error    CommandFailed (transient→exhausted): Rendering the video failed
   stderr   … [libx264 @ 0x55d] frame= 5391 fps=24 q=28.0 size= 61440kB time=00:03:35.64 bitrate=2333.6kbits/s
            Killed
-  log      logs/3263f4b50583/embed.attempt2.log   (tools/queue.py logs 3263f4b50583 embed 2)
+  log      jobs/3263f4b50583/logs/embed.attempt2.log   (tools/queue.py logs 3263f4b50583 embed 2)
   dead     vsw.dead #17  — tools/queue.py replay 3263f4b50583 embed
 
 narrative (job.log, 41 lines) — tools/queue.py show --full
@@ -830,7 +870,7 @@ box; no public admin surface (§17).
 |---|---|---|
 | `stage_runs` rows, `jobs` state | web box, SQLite | every `started` / `finished` / `failed` / `interrupted` event, at once |
 | the narrative `job.log` | web box | every `log` event, at once |
-| per-attempt logs with full stderr and tracebacks | bucket `logs/<job>/…` | PUT at the end of every attempt, before its final event |
+| per-attempt logs with full stderr and tracebacks | bucket `jobs/<job>/logs/…` | PUT at the end of every attempt, before its final event |
 | the dead record | broker (durable queue, on the web box) | published before the failing stage acks |
 | supervisord per-program logs — the only trace of a program that **died without raising** (OOM, native abort, `kill -9`, destroy) | bucket `logs/instances/<instance_id>/` | `logship` program: every 60 s, and once more at shutdown |
 | ffmpeg's partial `.part` output | the singleton's disk | not preserved; it is an incomplete encode and its stderr already says why |
@@ -1094,10 +1134,15 @@ Better, and not much more work:
 1. **Per-instance, short-lived credentials created by the scaler at
    create time and revoked at destroy.** RabbitMQ: `PUT /api/users/vsw_c_<id>`
    with a random password; permissions read on the work queues, write
-   on `^vsw\.(sync|fetch|embed|events|dead)$`. Object storage:
-   `POST /v4/object-storage/keys` with `bucket_access` limited to the
-   `vsw` bucket. Both deleted on destroy; `tools/queue.py compute --gc`
-   sweeps any left by a crashed destroy.
+   on `^vsw\.(sync|fetch|embed|events|dead)$`; deleted on destroy,
+   `tools/queue.py compute --gc` sweeping any left by a crashed destroy.
+   S3: **STS temporary credentials** — the scaler's own IAM user may
+   only `sts:AssumeRole` a role scoped to the `vsw` bucket
+   (`s3:GetObject/PutObject/DeleteObject/ListBucket` on `transit/*` and
+   `jobs/*`), and assumes it with `DurationSeconds` at the role's
+   12-hour maximum. Nothing to revoke: they expire. A session that
+   outlives them (a four-hour queue cap makes that rare) refreshes
+   through the VLAN bootstrap endpoint of item 3.
 2. **Delivered through cloud-init `user_data`** on the create call
    (Linode Metadata; region-dependent — **verify**). The image holds no
    secrets; first boot writes `/etc/vsw/env` and starts supervisord.
@@ -1148,6 +1193,7 @@ if any ready > 0 and row is none:                        → claim lease; CREATE
                                                            firewall, user_data with fresh credentials, label);
                                                            write deploy/targets/compute.json so Prometheus scrapes it (§14.4)
 if row.running and all ready == 0 and all unacked == 0:  → idle_since = idle_since or now
+                                                           (unacked == 0 is what proves every result is in S3 — see below)
                                                            if now − idle_since ≥ COMPUTE_GRACE_SECONDS:
                                                                re-read; row → draining; POST …/shutdown;
                                                                wait for offline (≤ 90 s; logship's final sync happens here);
@@ -1156,10 +1202,26 @@ else:                                                    → idle_since = null
 write compute.state into the table for /status ("compute": none | creating | running)
 ```
 
+**The hard ordering rule: "render succeeded" and "the result is safe"
+are different events, and the instance may only die after the second.**
+It holds by construction, and is stated so nobody weakens it by
+accident: the embed program's `ack` is the *last* step of §6.1, after
+the PUT of `output/<job_id>_PROCESSED.<ext>` to `jobs/<job_id>/…` has
+returned and a HEAD has confirmed the size (multipart for anything over
+100 MB, so a dropped connection fails the PUT rather than truncating
+the object). Until that `ack`, the delivery is `messages_unacknowledged`
+and the destroy condition above is false — `unacked == 0` *means* every
+result is in S3. A SIGTERM during the PUT (the provider stopping the
+box, not us) requeues the message; the next instance finds no result
+and re-runs the encode. The scaler adds one belt to those braces: it
+also refuses to destroy while any `jobs` row is `running:embed` with
+`result_key IS NULL` — a check that lags by the events latency, which
+is why the unacknowledged count, not the table, is the authority.
+
 ```ini
 COMPUTE_MODE=auto                  # auto | always | never   (never = single-machine deployments)
 COMPUTE_POLL_SECONDS=10
-COMPUTE_GRACE_SECONDS=1800         # §9.5
+COMPUTE_GRACE_SECONDS=600          # §9.5 — the largest single cost driver at this volume
 COMPUTE_CREATE_SECONDS=120         # what the UI and the ETA quote while creating; calibrated from the compute table
 COMPUTE_TYPE=g6-dedicated-8        # Linode names plans by RAM: 8 GB, 4 dedicated cores (§1.2). g6-dedicated-16 doubles both and the rate.
 COMPUTE_REGION=                    # MUST equal www's region
@@ -1191,91 +1253,189 @@ What each avoided cold start is worth: ~2 min of instance creation plus
 ~20 s of model load for the visitor (a warm recognition instead of a
 cold one), and the visitor who identified a piece and is choosing a
 style — typically a few minutes — never sees the instance vanish under
-them. **Recommend `COMPUTE_GRACE_SECONDS=1800` (30 min):** under $5/month
-at three sessions a day, and it covers both the "same evening" cluster
-and the identify-then-submit pause. A session then lives for its jobs
-(≤ 24 min each, typically 10–16) plus 30 minutes. If Linode bills any started hour in
+them. But measured per video (§11.6), **the grace is the largest single
+cost at this volume**: on the 8 GB plan a median 3.5-minute video costs
+$0.0036 to identify, $0.0014 per minute to align and encode and $0.0033
+to boot the instance for — about $0.012 of work — while a 30-minute
+grace adds $0.0493, six times the work. Per isolated video: 5-min grace
+$0.020, 10-min $0.028, 30-min $0.061. And at ~10 videos a month a
+second job almost never arrives inside any window, so the grace is
+paid and rarely redeemed.
+
+**Recommend `COMPUTE_GRACE_SECONDS=600` (10 min).** What it must cover is
+the one dependency inside a single visit: recognition happens on the
+singleton, the visitor then picks a score and a style and submits; if
+the box dies in that pause, the submit pays a two-minute create. Ten
+minutes covers that pause for anyone actually choosing; five is tight
+for it. What it gives up against 30: the second visitor of an evening
+arriving 10–30 minutes after the first finished pays the create — a
+latency cost, ~$0.003, not a money one. In one line: 10 min costs
+$0.028 per isolated video against $0.061, and loses warm starts only
+for arrivals 10–30 minutes apart, which at ten videos a month are a
+handful a year. Raise it when the traffic says so — the
+`vsw_compute_creates_total` panel shows how often a create follows a
+destroy within the hour. A session then lives for its jobs (≤ 24 min
+each, typically 10–16) plus 10 minutes. If Linode bills any started hour in
 full (**verify**), replace the fixed grace with "destroy at the end of
 the hour already paid for, but not sooner than 30 minutes idle"
 (`COMPUTE_ALIGN_TO_BILLING_HOUR=true`).
 
 ---
 
-## 10. Artifacts: how bytes cross
+## 10. Artifacts: three tiers, and how bytes cross
 
-### 10.1 Linode Object Storage, not Dropbox
+### 10.1 AWS S3 with Glacier — not Dropbox, not Linode Object Storage, not R2
 
 VideoScoreSync's Dropbox flow (`api_dropbox/`, watch → processing → done
 folders at `config.py:251-256`) is a **human** handover for the Cliburn
-team. Here the counterpart is a browser and two machines. S3-compatible
-storage gives presigned browser PUTs with CORS, multipart uploads that
-resume, presigned GETs for the link, lifecycle rules, and near-free
-transfer within the region. Linode Object Storage (Ceph RGW, S3 API,
-~$5/month for 250 GB and 1 TB transfer) fits; `boto3` is the one new
-dependency.
+team; the counterpart here is a browser and two machines.
+
+**A correction to this document's own earlier choice.** Previous
+versions specified Linode Object Storage, for intra-provider transfer.
+Two facts make that wrong now. It has a single storage class (lifecycle
+*expiry* only, no archive tier), so the 48-hour → archive move would be
+a mover we write and operate; S3 does it with one lifecycle rule. And
+transfer is not a cost at this volume: AWS gives 100 GB a month of
+egress free, and this app moves about 3 GB a month to visitors (ten
+50 MB downloads, plus the singleton's fetches of recordings — median
+50 MB, 4 GB at the cap — from S3 to Linode). Cloudflare R2's zero-egress
+advantage therefore does not apply here either, and R2 has one storage
+class too. The bucket lives in the AWS region nearest www's Linode
+region; one private bucket, no public ACLs, presigned URLs only.
+
+**Glacier Flexible Retrieval, not Deep Archive.** Restores in 3–5 hours
+(1–5 minutes expedited) against 12–48 hours, for under a dollar a month
+of difference until the archive passes ~300 GB. With a 48-hour link,
+missed windows will be routine, so restore requests will be routine.
+Small print to record: a 90-day minimum storage duration per object;
+upload requests $0.03–0.05 per 1 000.
 
 ### 10.2 Upload — parametric in the caps
 
 **At 4 GB (§1.1) — the path we ship:** browser → Apache → gunicorn →
 Flask (`MAX_CONTENT_LENGTH` raised to 4 GB) → a staging file on the block
-volume (§15.1) → PUT to `uploads/<job>/`, local copy deleted after
-extract. What Apache needs for that body: `ProxyTimeout 3600` (the
-default is 60 s; 4 GB at 20 Mbit/s takes ~27 min) and a matching
-gunicorn `--timeout`; nothing for the size itself — `LimitRequestBody`
-defaults to unlimited. Werkzeug streams a multipart body to a temp
-file, so RAM is not the limit; staging disk is: 4 GB × concurrent
-uploads, bounded by `LIMIT_UPLOADS_PER_HOUR` and a new
-`MAX_CONCURRENT_UPLOADS=2` that answers 503 beyond. Acceptable at this
-volume on a box with a block volume; the moment uploads contend with
-the Symfony site for bandwidth, step 7 removes the bytes from the box.
+volume (§15.1) → PUT to `transit/<job_id>/input/<job_id>.<ext>`, local
+copy deleted after extract. What Apache needs for that body:
+`ProxyTimeout 3600` (the default is 60 s; 4 GB at 20 Mbit/s takes
+~27 min) and a matching gunicorn `--timeout`; nothing for the size —
+`LimitRequestBody` defaults to unlimited. Werkzeug streams a multipart
+body to a temp file, so RAM is not the limit; staging disk is: 4 GB ×
+concurrent uploads, bounded by `LIMIT_UPLOADS_PER_HOUR` and a new
+`MAX_CONCURRENT_UPLOADS=2` that answers 503 beyond.
 
-**Direct-to-bucket (step 7, optional at 4 GB):** the browser talks to
-the bucket directly; the web box sees only metadata:
+**Direct-to-bucket (step 7, optional at 4 GB):** the browser PUTs
+multipart parts to `transit/<job_id>/input/…` through presigned URLs
+(64 MiB parts; `ListParts` on reload so an interrupted upload resumes;
+`abort-incomplete-multipart-upload` after 1 day), and the web box sees
+only metadata: `POST /api/uploads` (limits, rights, declared size),
+`GET …/part/<n>`, `POST …/complete` (HEAD for the size, `ffprobe` over a
+presigned GET for duration and audio, both caps, both budgets, then
+`vsw.extract`). Admission happens twice either way: before any byte and
+after the probe; a file failing the second check is deleted and the
+visitor told why, as at `routes.py:404-416` today.
 
-```
-POST /api/uploads        {name, bytes, rights: true}
-    limits.guard("upload_ip") · rights asserted here (moves from routes.py:381)
-    bytes ≤ MAX_UPLOAD_GB · provisional weekly-GB budget check
-    INSERT jobs(state=uploading) · CreateMultipartUpload → {job_id, upload_id, part_size: 64 MiB, parts: N}
-GET  /api/uploads/<id>/part/<n>   → one presigned PUT (presigned lazily; 4 GB = 64 parts)
-GET  /api/uploads/<id>/parts      → ListParts, so a reloaded page resumes
-POST /api/uploads/<id>/complete   {etags}
-    CompleteMultipartUpload · HEAD confirms size
-    ffprobe over a presigned GET (range reads: header + moov, a few MB even for a non-faststart file)
-    has_audio · duration ≤ MAX_DURATION_MINUTES · weekly-minutes budget check
-    state=uploaded · publish vsw.extract · return {job, eta}
-```
+### 10.3 The link, and the 48 hours enforced by our code
 
-Admission happens twice: before any byte (address limit, rights,
-declared size) and after the probe (duration, both budgets). A file
-failing the second check is deleted and the visitor told why — one
-upload's cost, as at `routes.py:404-416` today. Resumability is S3
-multipart itself: independent parts, retried individually, listable
-after a reload; no `tus` server; an `abort-incomplete-multipart-upload`
-rule of 1 day cleans abandoned ones.
+`/api/jobs/<id>/download` stays the address in the mail. Before
+`finished + RETENTION_HOT_HOURS` it answers `302` to a 15-minute presigned
+GET, generated per click; the web box never proxies a result. After it,
+**`410 Gone`**, with a JSON body for the API and a plain page for a
+browser:
 
-### 10.3 Download link
+> **This video has been moved to long-term storage.** It was online
+> until Thursday 11 September, 14:20 — links stay live for 48 hours
+> after a render. It has not been lost: reply to your confirmation
+> email, or write to <address>, and we will bring it back online within
+> a few hours, for another 48 hours.
 
-`/api/jobs/<id>/download` stays the address in the mail; it answers
-`302` to a presigned GET valid 15 minutes, generated per click. Stable,
-revocable, expiring with the lifecycle rule — as `notify.py:54` already
-promises.
+It must read as "archived, restorable", never as "we lost it".
 
-### 10.4 Lifecycle, and what dies with the singleton
+**Why our clock and not the lifecycle rule.** S3 lifecycle works in
+whole days and runs asynchronously: a rule set at day 2 fires "sometime
+after", and a live link could then point at an object already in
+Glacier — a GET that fails with `InvalidObjectState`, which to a
+visitor is a broken link, or a naive client waiting hours for it. So:
 
 ```
-uploads/ 7 days      audio/ work/ 30 days      results/ 30 days      logs/ 90 days
+our /download endpoint     410 Gone at exactly finished + RETENTION_HOT_HOURS (48 h)
+S3 lifecycle rule          transition jobs/ to GLACIER at Days: 3
+the deliberate gap         one day, so a valid link always points at a retrievable object
 ```
 
-Every stage's output reaches the bucket before its flag, and every
-attempt's log before its final event, so a destroyed instance loses
-exactly the stage that was running and at most the last minute of its
-program log. Its disk is a cache. Storage at the caps of §1.1: a
-25-minute result at today's output bitrate (1.9 Mbit/s) is ~0.36 GB,
-ten a day for 30 days ≈ 110 GB; uploads at ≤ 4 GB × 7 days, ten a day
-≤ 280 GB and typically a tenth of that — inside Linode Object Storage's
-250 GB base plan or cents of overage; logs are kilobytes; egress is the
-visitors' downloads, cents.
+**Restore.** `tools/queue.py restore <job> [--expedited]` calls
+`RestoreObject(Days=2)`; the events program polls `HEAD` for
+`x-amz-restore: ongoing-request="false"`, sets `jobs.restored_until`,
+and the link is live again for 48 hours with a second `ready` mail.
+Expedited ~$0.03/GB and $10 per 1 000 requests; standard $0.01/GB.
+Restoring the small `sync_data/` files is seconds and cents.
+
+`notify.py:54`'s "The link works for as long as the file is kept on the
+server" becomes untrue and is replaced by the copy in §13.2, which
+names the actual expiry date and time.
+
+### 10.4 Three tiers — what crosses, what is discarded, and why
+
+| Tier | Where | Holds | Lives |
+|---|---|---|---|
+| **1 — performance** | the singleton's local disk | the whole `<job_id>/` tree of §4.2, **one job at a time**, ~4.5 GB peak (4 GB recording + 0.36 GB result + audio + chroma) | dies with the instance |
+| **2 — hot, 48 h** | S3 Standard | what crosses from tier 1 (below); the emailed link is live | `RETENTION_HOT_HOURS`, enforced by us |
+| **3 — archive** | S3 Glacier Flexible Retrieval | the same objects, moved by lifecycle rule | indefinitely; restored on request |
+
+What crosses from tier 1 to tier 2 — the exclusions are deliberate:
+
+| | Object | Why |
+|---|---|---|
+| **KEEP** | `output/<job_id>_PROCESSED.<ext>` | the deliverable |
+| **KEEP** | `sync_data/chroma.npy`, `measures.data`, `verdict.json` | a job can be **re-rendered with different styling** without redoing recognition or alignment: the encode alone (~0.8 min per minute of music) instead of boot + recognition + alignment + encode. This is why project files are kept, not only the video. |
+| **KEEP** | `input/job_params.json` **minus the email address** and minus the visitor's address | reproducibility: package, mode, style, meta, duration, bytes, the recording's sha256 |
+| **KEEP** | `logs/<stage>.attempt<N>.log` | diagnostics (§7.7); they contain job-id paths and commands, no personal data |
+| **DISCARD** | `input/<job_id>.<ext>` — the visitor's own recording | |
+| **DISCARD** | `sync_data/audio.wav` — their raw performance audio | |
+| **DISCARD** | `output/hq_audio.m4a`, `silent_*` — intermediates (not produced here anyway) | |
+| **DISCARD** | the rasterised bands | regenerable from the package |
+
+**The privacy argument, explicitly:** the two largest files are also the
+two that are personal data — someone's recording of themselves, and its
+audio — and both are discarded. What is archived is a video the visitor
+asked us to make and the abstract artefacts of aligning it. **No
+contact details in archived storage:** the email address exists only in
+`jobs.sqlite` on the always-on host; `job_params.json` in the bucket
+carries neither it nor the visitor's network address nor the original
+file name (the tree is named by job id; the original name lives in
+`jobs.name`). The panel text (`meta`) is what the visitor chose to burn
+into the video and is kept with it.
+
+**Mechanics.** `transit/<job_id>/…` is deleted by the events program at
+`finished + RETENTION_HOT_HOURS` — the same moment the link goes `410` —
+and on `abandoned`; the lifecycle rule expiring `transit/` at day 3 is
+the backstop. Within those 48 hours a restyle needs no re-upload; after
+them the visitor re-uploads, `sha256` and duration in `job_params.json`
+match the file to its archived `sync_data/` (restored expedited in
+minutes), and recognition and alignment are skipped.
+
+```
+deploy/s3/lifecycle.json
+  transit/          Expiration Days: 3                       backstop; our code deletes at 48 h
+  jobs/             Transition GLACIER Days: 3               our code returns 410 at 48 h; the day between is deliberate
+  jobs/*/markers/   Expiration Days: 30
+  logs/instances/   Expiration Days: 90
+  AbortIncompleteMultipartUpload  Days: 1
+```
+
+Sizes: tier 2 at ten videos a month holds well under a gigabyte; tier 3
+grows by ~50 MB per video — 0.018 cents per video per month, $0.11 a
+month after five years at ten a month. Egress is the visitors'
+downloads and the singleton's fetches, inside the free 100 GB.
+
+```ini
+S3_BUCKET=vsw
+AWS_REGION=eu-central-1            # nearest www's Linode region; verify
+AWS_ACCESS_KEY_ID= AWS_SECRET_ACCESS_KEY=      # www's user: the bucket, and sts:AssumeRole on the compute role (§9.3)
+S3_COMPUTE_ROLE_ARN=
+RETENTION_HOT_HOURS=48
+ARCHIVE_TRANSITION_DAYS=3          # must exceed RETENTION_HOT_HOURS / 24 by at least a whole day
+S3_ARCHIVE_CLASS=GLACIER           # Flexible Retrieval. DEEP_ARCHIVE deliberately not (§10.1)
+```
 
 ---
 
@@ -1325,16 +1485,17 @@ With the 25-minute ceiling every job costs `≈ 3 + 0.82·D` minutes of
 compute (identify 2, chroma/sync/extract ~1, encode 0.82 per minute of
 music — **on four cores this may be 1.2–1.6; measure**, §1.2 — fetch
 seconds at ≤ 4 GB) plus the cold start and grace **once per session** —
-assumed here at one session per five jobs (2 min create + 30 min grace
-≈ 6.4 min per job). Rows are real Chopin lengths; the last is the
-ceiling.
+assumed here at one session per five jobs (2 min create + 10 min grace
+≈ 2.4 min per job; at "a handful a day" sessions are mostly single
+jobs, and §11.6 prices that case). Rows are real Chopin lengths; the
+last is the ceiling.
 
 | min/job ↓ · jobs/week → | 5 | 20 | 50 | 100 | 200 |
 |---|---|---|---|---|---|
-| **8** (a nocturne) | 1.3 h | 5.3 h | 13 h | 27 h | 53 h |
-| **15** (a ballade) | 1.8 h | 7.2 h | 18 h | 36 h | 72 h |
-| **20** (a scherzo pair) | 2.2 h | 8.6 h | 22 h | 43 h | 86 h |
-| **25** (the ceiling; the longest concerto movement) | 2.5 h | 10 h | 25 h | 50 h | 100 h |
+| **8** (a nocturne) | 1.0 h | 4.0 h | 10 h | 20 h | 40 h |
+| **15** (a ballade) | 1.5 h | 5.9 h | 15 h | 30 h | 59 h |
+| **20** (a scherzo pair) | 1.8 h | 7.3 h | 18 h | 36 h | 73 h |
+| **25** (the ceiling; the longest concerto movement) | 2.2 h | 8.6 h | 22 h | 43 h | 86 h |
 
 Dollars: ~$0.108/h → **$/month ≈ h/week × 0.47**; always-on the same
 plan is $72/month ≈ 150 h/week, which no cell reaches. The owner's
@@ -1348,7 +1509,7 @@ per visitor per week, so **140 visitors** all at the ceiling fill the
 singleton 24/7; at typical 12-minute pieces (~13 compute-minutes each),
 ~260. Under create/destroy "saturation" means a growing queue and bill,
 which §11.5 caps. A session of three typical jobs keeps the singleton
-alive ~45 min plus the 30-min grace; one full-length job, ~24 + 30.
+alive ~45 min plus the 10-min grace; one full-length job, ~24 + 10.
 
 ### 11.4 Budgets on both axes — replacing the job count
 
@@ -1389,6 +1550,32 @@ hours is ten full-length jobs or about eighteen typical ones ahead — an
 evening's burst — and with the 24-minute ceiling no honest ETA inside
 it is "tomorrow". Delivery is by mail (§13.2), so the cap bounds the
 bill and the bucket, not the visitor's patience; it is easy to raise.
+
+### 11.6 The bill, per video — measured, and what drives it
+
+Median video in the corpus: 3.5 minutes, ~50 MB of output, 5.2 minutes
+of work. On the 8 GB dedicated plan ($72/month ÷ 730 h):
+
+| item | cost | scales with |
+|---|---|---|
+| identify | $0.0036 | nothing — fixed per video (`MAX_WINDOWS=8`) |
+| chroma + sync + encode | $0.0014 per minute of music | **minutes of music** |
+| boot the instance | $0.0033 | **sessions** |
+| grace before destroy, 30 min | $0.0493 — **6.2× the work** | sessions × the grace |
+| the same at 10 min (§9.5's default) | $0.0164 | |
+| **an isolated video, 10-min grace** | **$0.028** ($0.061 at 30 min) | |
+| a video sharing a warm instance | $0.008 | |
+| Glacier, per video per month | $0.00018 — five years at ten a month: $0.11/month | videos × months |
+| **all in, ten videos a month** | **~$0.36/month** at 30-min grace; **~$0.18** at 10 | |
+| all in, thirty a month | ~$1.08 / ~$0.55 | |
+
+Stated plainly, because it was asked twice and it is the crux: **the
+bill is driven by minutes of music and by sessions — not by gigabytes,
+and not per video.** Upload size affects storage (about 3 % of the
+bill) and transfer, not the encode: the canvas is a fixed 1080p, so a
+4 GB 4K source and a 200 MB phone clip of the same piece cost the same
+to process. The two levers are the duration budget (§11.4) and the
+grace period (§9.5); nothing else moves the number.
 
 ---
 
@@ -1464,7 +1651,7 @@ inverted and the docstring must say so. Three mails per job through
 | kind | when | says |
 |---|---|---|
 | `queued` | at submit | position, ETA as a clock time (§11.2), "you can close this page", the link that will work later |
-| `ready` | on `embed.done` | the link (`notify.py:37-73`, unchanged in substance), how long it is kept |
+| `ready` | on `embed.done` | the link, and **the exact date and time it stops working** (`finished + RETENTION_HOT_HOURS`, §10.3); that it can be restored on request afterwards. `notify.py:54`'s "The link works for as long as the file is kept on the server" becomes untrue and is replaced: *"Your video is ready: <link>. The link works until Thursday 11 September, 14:20 (your video is kept online for 48 hours). After that it is moved to long-term storage; reply to this message and we will bring it back within a few hours."* |
 | `failed` | on `failed(permanent | exhausted)` | the stage's own message; for anything that is our fault, say so |
 
 Guarantees:
@@ -1807,7 +1994,9 @@ has no deployment files. Everything below is new.
 | `app/workers/logship.py` | supervisord logs → `logs/instances/<id>/` (§7.7) | 6 |
 | `app/metrics.py` | plain registry, per-process psutil with children, `start_http_server` (§14.3, §14.5) | 2 |
 | `app/scaler.py` | Linode create/destroy, lease row, credentials, `targets/compute.json` (§9.4, §14.4) | 6 |
-| `app/store/` (`object_store.py`) | boto3 wrapper: PUT/GET/HEAD, presign, multipart (§10) | 5 |
+| `app/store/` (`object_store.py`) | boto3 against AWS S3: PUT/GET/HEAD/DELETE, presign, multipart, `RestoreObject`, the `transit/` / `jobs/` key scheme (§4.2, §10) | 5 |
+| `app/retention.py` | the 48-hour clock: `410` after `finished + RETENTION_HOT_HOURS`, deletion of `transit/` objects, the restore request (§10.3, §10.4) | 5 |
+| `deploy/s3/bucket.sh`, `deploy/s3/lifecycle.json`, `deploy/s3/iam/` | bucket creation, the lifecycle rules of §10.4 (`transit/` expire day 3, `jobs/` → GLACIER day 3), the compute role and the scaler's user policy (§9.3) | 5 |
 | `tools/queue.py` | `list`, `show`, `logs`, `dead`, `replay`, `run`, `queues`, `compute` (§7.6) | 1 (`list`, `show`, `logs`), 3 (`dead`, `replay`, `run`), 4 (`queues`), 6 (`compute`) |
 | `tools/workers.py` | starts the stage programs with their interpreters on Windows (§8.5) | 2 |
 | `tools/doctor.py --monitoring` | the check of §14.11 | 2 |
@@ -1839,7 +2028,10 @@ so every ffmpeg/ffprobe command and its stderr tail are recorded;
 per-attempt logs under `WORK_DIR/<job>/logs/`; `tools/queue.py list`,
 `show`, `logs`; `position` and `eta_at` exactly as §11.2 with `cold = 0`;
 `routes.py:459` refuses `queued`; both UIs show "N in line, ready by
-about HH:MM"; SSE removed; `MAX_DURATION_MINUTES` enforced at upload.
+about HH:MM"; SSE removed; `MAX_DURATION_MINUTES` enforced at upload;
+**the job tree of §4.2 adopted** — `input/<job_id>.<ext>` replaces the
+shared `uploads/` folder, `pipeline.cleanup()` is finally called, and
+the 980 MB of test residue is deleted by hand once.
 *Verify:* two submits → one ffmpeg; restart with two queued → both
 resume in order; `stage_runs` has a row with elapsed, bytes in and
 out, media seconds and the process's peak RSS, and `show` prints the
@@ -1923,14 +2115,23 @@ ours and `supervisorctl status` shows their consumers untouched;
 `doctor --monitoring` on www is green, including `rabbitmq :15692` and
 the per-queue depth series.
 
-**Step 5 — object storage, still one machine (~300 lines).** Keys,
-PUT/GET/HEAD in every handler, markers in the bucket, **per-attempt
-logs PUT to `logs/<job>/` before the final event**, `log_key` in
-`stage_runs`, `tools/queue.py logs` reading from the bucket, download
-`302`, lifecycle rules.
+**Step 5 — AWS S3 and the three tiers, still one machine (~400
+lines).** `deploy/s3/` (bucket, lifecycle rules, IAM role and user);
+the `transit/` / `jobs/` key scheme mirroring the job tree; PUT/GET/HEAD
+in every handler, markers in the bucket, **per-attempt logs PUT to
+`jobs/<job>/logs/` before the final event**, `log_key` in `stage_runs`,
+`tools/queue.py logs` reading from the bucket; `app/retention.py`:
+download `302` until `finished + RETENTION_HOT_HOURS`, then `410` with
+the copy of §10.3, `transit/` deleted at the same moment, the `ready`
+mail naming the expiry; `tools/queue.py restore`.
 *Verify:* delete the local job directory after `done` → download and
 `logs` still work; delete `chroma.npy` locally and replay sync → fetched
-from the bucket, not recomputed.
+from the bucket, not recomputed; set `RETENTION_HOT_HOURS=0.05` → the
+link answers `410` three minutes after `done` with the archived-not-lost
+text, and `transit/<job>/` is empty; `aws s3api get-bucket-lifecycle-configuration`
+shows the two rules with the one-day gap; `restore` on an object forced
+to GLACIER brings the link back and sends a second `ready`; `jobs/<job>/`
+contains no email address and no original file name.
 
 **Step 6 — the singleton and the scaler (~450 lines + the image
 script).** VLAN in www's region, Cloud Firewalls, the TLS listener on
@@ -1998,6 +2199,13 @@ recur (§8.1).
   job without refusing anyone.
 - Pushgateway, `remote_write`, cAdvisor, Docker on the compute image
   (§14.4, §14.9).
+- Linode Object Storage or Cloudflare R2 for the tiers (one storage
+  class each; the mover would be ours to write and run), Glacier Deep
+  Archive (12–48 h restores against routine restore requests), and
+  enforcing the 48 hours with a lifecycle rule instead of our own clock
+  (§10.1, §10.3).
+- Archiving the visitor's recording or their audio; keeping an email
+  address anywhere but `jobs.sqlite` (§10.4).
 - Vendoring the 699 KB host dashboard; it is imported by ID (§14.8).
 - Recognition on www (§12 b) unless it measures under ~90 s on a plan
   that can spare 2 GB beside the Symfony site.
@@ -2055,6 +2263,11 @@ recur (§8.1).
   identify, the 16 GB plan) are ready.
 - **The encode ratio on four cores** — 0.82 was a workstation; the
   capacity and ETA tables scale with whatever step 6 measures.
+- **AWS small print I have not re-verified this month:** the 100 GB/month
+  free egress, Glacier Flexible's 90-day minimum and $0.03–0.05 per
+  1 000 requests, the 12-hour STS role maximum, and expedited-restore
+  availability in the chosen region. None changes the shape; the
+  per-video figures of §11.6 move by cents at most.
 - **`Job.save()` / `rehydrate()`** (`jobs.py:66-79, 250-284`) landed in
   `c718193` at 10:43 today and the only job on disk finished at 10:41
   without a manifest; step 1 replaces both with the table.
