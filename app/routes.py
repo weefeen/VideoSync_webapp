@@ -212,6 +212,25 @@ def _trimmed(path: pathlib.Path) -> str:
     top, bottom, left, right = _ink_band(path)
     if bottom - top > 0.98 and right - left > 0.98:
         return text
+
+    # A join should show one margin, `a` — not two, and not none.
+    #
+    # Tiling whole plates puts two margins at every join: `2a` of blank
+    # where the music should carry on. Cropping to the ink puts none, which
+    # jams the last system of one page against the first of the next. So
+    # crop to the ink and give back half a margin on each side; the two
+    # halves meet and make exactly one.
+    #
+    # `a` is the SMALLER margin on each axis, and that matters here. This
+    # plate has 1.7% at the head and 17% at the foot — the foot is not a
+    # design margin at all, it is the space left when the music ran out
+    # before the page did. Halving that left 277px at every vertical join,
+    # which is precisely the `2a` this is meant to remove.
+    gap_y = min(top, 1.0 - bottom) / 2
+    gap_x = min(left, 1.0 - right) / 2
+    top, bottom = max(0.0, top - gap_y), min(1.0, bottom + gap_y)
+    left, right = max(0.0, left - gap_x), min(1.0, right + gap_x)
+
     height = _svg_px(text, "height") or 2970.0
     width = _svg_px(text, "width") or 2100.0
     x, y = left * width, top * height
@@ -364,7 +383,7 @@ def api_band(name: str):
 _TINT_RULE = 2
 
 # Bumped when the plate's crop changes, so cached copies are let go of.
-_PAGE_RULE = 3
+_PAGE_RULE = 5
 
 
 def _hex_colour(raw: str) -> str:
