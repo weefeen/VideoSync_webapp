@@ -37,9 +37,9 @@
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  /* Ten percent. It sits in the margin now, where nothing competes
+  /* Twelve percent. It sits in the margin now, where nothing competes
      with it, so it can be seen rather than merely sensed. */
-  opacity: .10;
+  opacity: .12;
   -webkit-mask-image: linear-gradient(90deg,
       transparent 0, #000 3%,
       #000 calc(50% - 680px), transparent calc(50% - 540px),
