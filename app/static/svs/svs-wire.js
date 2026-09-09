@@ -533,10 +533,13 @@ function renderLayout(){
   const boxH = contentH - bandH - GAP;
   if(boxH < 16) return null;
 
-  const videoW = even(contentW);
-  const naturalH = even(videoW / videoAspect);
-  const videoH = Math.min(naturalH, even(boxH));
-  const surplus = Math.max(0, naturalH - videoH);
+  // Cover the box on both axes: fitting inside would leave a bar down the
+  // sides on a wide frame, and dead space above the video beside a panel.
+  const videoW = even(contentW), videoH = even(boxH);
+  const sourceH = even(Math.max(videoW / videoAspect, videoH));
+  const sourceW = even(sourceH * videoAspect);
+  const surplus = Math.max(0, sourceH - videoH);      // the vertical choice
+  const surplusX = Math.max(0, sourceW - videoW);     // centred, no choice
 
   const top = S.bandPos === 'top';
   const bandY = top ? contentY : contentY + boxH + GAP;
@@ -544,7 +547,7 @@ function renderLayout(){
   // far edge rather than opening a seam between them.
   const videoY = top ? contentY + bandH + GAP : bandY - GAP - videoH;
 
-  return { cw, ch, surplus,
+  return { cw, ch, surplus, surplusX,
     band:  { x: contentX + evenAt((contentW - bandW) / 2), y: bandY, w: bandW, h: bandH },
     video: { x: contentX, y: videoY, w: videoW, h: videoH } };
 }
@@ -563,9 +566,10 @@ function applyRealLayout(){
     Object.assign(vid.style, {
       left: px(L.video,'x'), top: px(L.video,'y'),
       width: px(L.video,'w'), height: px(L.video,'h'), right: 'auto',
-      // cover + which slice: the same crop the renderer performs
+      // cover, then the same slice the renderer takes: centred across,
+      // and down wherever there is a choice to make
       backgroundSize: 'cover',
-      backgroundPosition: `center ${(S.vidOffset * 100).toFixed(1)}%`,
+      backgroundPosition: `50% ${(L.surplus > 1 ? S.vidOffset * 100 : 50).toFixed(1)}%`,
     });
   }
   const band = frame.querySelector('.band');

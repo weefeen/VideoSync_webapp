@@ -144,6 +144,7 @@ class Layout:
     # surplus height is cropped rather than the picture shrunk. These say
     # what to scale to and which slice of it to keep.
     video_source: tuple[int, int] = (0, 0)
+    video_crop_x: int = 0
     video_crop_y: int = 0
 
     @property
@@ -217,19 +218,25 @@ def compute_layout(style: Style, band_aspect: float,
     if video_box_h < 16:
         raise RenderError("No room left for the video beside the band.")
 
-    # The video spans the content width and keeps its aspect, so its height
-    # is whatever that demands. Fitting it inside the leftover space instead
-    # would shrink it and leave bars down both sides; filling the width and
-    # cropping the surplus keeps the picture as large as the frame allows.
+    # The video fills the space beside the band completely, in both
+    # directions, and whatever overflows is cropped. Fitting it inside
+    # instead would leave a bar down the sides on a wide frame and a band
+    # of dead space above it on a narrow one — which is what happened
+    # beside a title panel, where the picture is too short for its column.
     video_w = _even(content_w)
-    natural_h = _even(video_w / video_aspect)
-    video_h = min(natural_h, _even(video_box_h))
+    video_h = _even(video_box_h)
 
-    # Which slice of the height survives. 0 keeps the top of the frame, 1
-    # keeps the bottom, and the default keeps the middle — the same part a
-    # centred fit would have shown.
-    surplus = max(0, natural_h - video_h)
-    video_crop_y = _even_at(surplus * _clamp01(style.video_offset))
+    # Scale until it covers the box on both axes, then take the middle of
+    # whatever is left over horizontally and the chosen slice vertically.
+    scale = max(video_w / video_aspect, video_h)
+    source_h = _even(scale)
+    source_w = _even(source_h * video_aspect)
+    if source_w < video_w:                       # rounding nudged it under
+        source_w = video_w
+        source_h = _even(source_w / video_aspect)
+
+    video_crop_x = _even_at((source_w - video_w) / 2)
+    video_crop_y = _even_at(max(0, source_h - video_h) * _clamp01(style.video_offset))
 
     video_x = content_x
     band_x = content_x + _even_at((content_w - band_w) / 2)
@@ -249,7 +256,8 @@ def compute_layout(style: Style, band_aspect: float,
                   band=Rect(band_x, band_y, band_w, band_h),
                   video=Rect(video_x, video_y, video_w, video_h),
                   panel=panel,
-                  video_source=(video_w, natural_h),
+                  video_source=(source_w, source_h),
+                  video_crop_x=video_crop_x,
                   video_crop_y=video_crop_y)
 
 
@@ -505,7 +513,8 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
             f"crop={width}:{height},setsar=1,format=yuv420p[bg]",
             f"[1:v]setpts=PTS-STARTPTS,"
             f"scale={layout.video_source[0]}:{layout.video_source[1]},"
-            f"crop={layout.video.w}:{layout.video.h}:0:{layout.video_crop_y}[vid]",
+            f"crop={layout.video.w}:{layout.video.h}:"
+            f"{layout.video_crop_x}:{layout.video_crop_y}[vid]",
             f"[bg][vid]overlay=x={layout.video.x}:y={layout.video.y}[s1]",
             f"[2:v]setpts=PTS-STARTPTS,scale={layout.band.w}:{layout.band.h}[bnd]",
             f"[s1][bnd]overlay=x={layout.band.x}:y={layout.band.y}:shortest=1[s2]",
