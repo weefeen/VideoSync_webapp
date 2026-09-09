@@ -5,14 +5,23 @@ at `97e253a` (`feature/recognition`); VideoScoreSync and
 music_finrgerprint were read and are never modified.
 
 **Settled by the owner, not re-argued here:** RabbitMQ; the web app's
-own queues and consumers, in its own repo, on the same broker; a cheap
+own queues and consumers, in its own repo, on the same broker; **one
+consumer process per stage**, as VideoScoreSync runs them — one
+supervisord program, one log, one restart domain each; a cheap
 always-on Linode for the page; **at most one** CPU-only compute Linode,
-**created** when work exists, draining tickets **one at a time**, and
-**destroyed** after a grace period with nothing to do; **libx264**;
-**no GPU anywhere** (CPU recognition measured at 130 s cold against 78 s
-on the RTX, same verdict, same confidence); object storage between the
-hosts; VideoScoreSync's consumer skeleton reused by copying; limits on
-**two axes**, file size and duration.
+**created** when work exists and **destroyed** after a grace period;
+**libx264**; **no GPU anywhere** (CPU recognition measured at 130 s cold
+against 78 s on the RTX, same verdict); object storage between the
+hosts; limits on **two axes**, file size and duration;
+**debuggability as a requirement**: for any failure, which stage, what
+it read, what it wrote, what it said — from a machine that may no
+longer exist; **observability designed fresh** — Prometheus and Grafana
+for time, memory and disk per worker, per-file time and throughput,
+with the existing VideoScoreSync setup treated as a list of what not to
+repeat ("I have it, but it was not working"); and **everything
+deployment-related lives in this repository** — VideoScoreSync's
+compose, prometheus, grafana and supervisord files stay untouched and
+unreferenced; only its audio services are consumed (§15).
 
 **Still open — the owner's call:**
 
@@ -22,7 +31,8 @@ hosts; VideoScoreSync's consumer skeleton reused by copying; limits on
 | E | Whether recognition may become non-blocking ("we will confirm the piece by email") — a product change, laid out, not made | §12 |
 
 Reading order if short of time: §2 (topology and diagram), §6 (state
-machine), §9 (the singleton's life), §14 (migration path).
+machine), §7 (failure and diagnostics), §9 (the singleton's life), §14
+(observability), §15 (file layout), §16 (migration path).
 
 ---
 
@@ -53,93 +63,141 @@ workstation, not a Linode plan; `stage_runs` (§5) replaces each with a
 median once ten samples exist, and **no user-facing ETA should quote a
 constant that has not been re-measured on the actual instance type**.
 
+### 1.1 The caps — settled
+
 ```ini
-MAX_UPLOAD_GB=2                 # per job — transfer, storage, decode. 0.5 today (routes.py:28); 10 at the large end
-MAX_DURATION_MINUTES=90         # per job — encode, chroma, sync. Nothing equivalent exists today
+MAX_DURATION_MINUTES=40         # "all Chopin pieces are less than 40 min" — the owner. Nothing equivalent exists today.
+MAX_UPLOAD_GB=4                 # 0.5 today (routes.py:28). See below.
 ```
 
-### 1.1 The two ends of the range
+**Duration = 40 min** puts a ceiling on every job. From the one measured
+render (0.82 s of processing per second of music — **n = 1, a
+workstation, a 640×360 source; x264 scales with cores, so the Linode
+plan sets this ratio and the whole ETA rests on it; it must be
+re-measured on the actual instance before any minute figure is shown
+to a visitor, and `stage_runs` replaces it from the first ten jobs**):
 
-**Small end — `MAX_UPLOAD_GB=0.5`, `MAX_DURATION_MINUTES=15`.** Uploads
-keep going through Flask; the web box puts them in the bucket; no
-direct-to-bucket upload, no resume. Budgets on both axes still replace
-the job count (the count bounds neither). **Is the on-demand singleton
-justified here?** Not by job length. It is justified by price: the
-alternative is *one always-on box big enough to encode* — an 8-core
-dedicated Linode, ~$144/month — against a $12 web Linode plus compute
-billed only while it exists, $5–35/month at "a handful a day" (§11.3).
-What the split costs is engineering (steps 4–6) and a ~2-minute creation
-at the start of each idle gap. **At the small end: ship steps 1–3 on one
-box, measure, and build the split when the bill says so.** Nothing in
-steps 1–3 is discarded by it.
+| Stage | 40-minute job (worst case) | Typical Chopin piece, 8–15 min |
+|---|---|---|
+| extract audio | < 1 min | seconds |
+| identify | ~2 min (duration-independent, `MAX_WINDOWS=8`) | ~2 min |
+| chroma + sync | ~1 min (1.7 s per minute of music) | ~20 s |
+| fetch | ~0.5 min at 4 GB | seconds |
+| encode | ~33 min | 7–12 min |
+| **whole job** | **~36 min** | **~10–16 min** |
 
-**Large end — `MAX_UPLOAD_GB=10`, `MAX_DURATION_MINUTES=90`.** Direct
-browser → bucket upload with resume is **mandatory** (§10.2): 10 GB
-through a $12 Linode is 30 GB of transfer and a disk it does not have.
-Budgets on both axes, weekly. Fetch is a real stage. Lifecycle rules
-matter. Everything else is unchanged.
+**Size = 4 GB.** The pipeline renders to a fixed 1080p canvas whatever
+comes in (`render.py:52`, `ASPECTS`; the source is scaled and cropped
+into it at `:509-514`), so a 4K upload spends the visitor's upload time
+and our transfer on pixels that are thrown away. Forty minutes of 1080p
+at a generous 13 Mbit/s is 3.9 GB; 4 GB therefore accepts anything
+sensibly encoded and refuses 4K, and the refusal message can say
+"export at 1080p". I agree with the figure. Two consequences: the
+decode/size term of the encode is bounded to a few minutes at most, and
+the design sits at the **small end** — uploads can keep going through
+Apache and Flask (§10.2 says what Apache needs for a 4 GB body), and
+direct-to-bucket upload with resume (step 7) becomes an optimisation
+for when the web host's bandwidth or staging disk is the constraint,
+not a requirement.
 
-Because Linode bills an instance whether busy or idle, create/destroy
-is cheaper than always-on at every utilisation below ~90 % (§11.3);
-job length never decides it.
+**Is the on-demand singleton still justified with 36-minute jobs?** Not
+by job length; by price. The alternative is *one always-on box big
+enough to encode* — an 8-core dedicated Linode, ~$144/month — against
+compute billed only while it exists: $3–35/month at "a handful a day"
+(§11.3). What the split costs is engineering (steps 4–6) and a
+~2-minute creation at the start of each idle gap; a session of three
+typical jobs then lives ~45 min plus the grace. Because Linode bills an
+instance whether busy or idle, create/destroy is cheaper at every
+utilisation below ~90 %; job length never decides it. **Ship steps 1–3
+on one box, measure, then build the split.** Nothing in steps 1–3 is
+discarded by it.
 
 ---
 
 ## 2. Topology
 
 ```
- BROWSER                 WEB LINODE — always on, 2 GB shared, ffmpeg                                LINODE OBJECT STORAGE (S3)
+ BROWSER                 WEB — the existing www.weefeen.com Linode (EU): Apache vhost chopin.weefeen.com → gunicorn   LINODE OBJECT STORAGE (S3)
  ───────                 ───────────────────────────────────────────────                            ──────────────────────────
  POST /api/uploads ────▶ Flask: limits.guard(upload_ip) · rights · declared size ≤ MAX_UPLOAD_GB      bucket vsw/
-   (metadata only)       INSERT jobs(state=uploading) · presigned PUT urls (large end)                 uploads/<job>/<name>
+   (metadata only)       INSERT jobs(state=uploading) · presigned PUT urls (step 7, optional)          uploads/<job>/<name>
  PUT parts ─────────────────────────────────────────────────────────────────────────────────────────▶ audio/<job>/audio.wav
  POST …/complete ──────▶ ffprobe (range reads) → duration ≤ MAX_DURATION_MINUTES, has_audio           work/<job>/verdict.json
                          state=uploaded · publish vsw.extract                                          work/<job>/chroma.npy
                                 │                                                                      work/<job>/measures.data
-                         ┌──────▼──── RabbitMQ — Docker on the web Linode, TLS 5671 on the VLAN address ONLY ────┐  work/<job>/<stage>_attempt<N>
+                         ┌──────▼──── RabbitMQ — the EXISTING broker on www, our own vhost "vsw", TLS 5671 on the VLAN address ──┐  work/<job>/<stage>_attempt<N>
                          │  work:   vsw.extract  vsw.identify  vsw.chroma  vsw.sync  vsw.fetch  vsw.embed        │  results/<job>/<stem>_synced.mp4
-                         │  return: vsw.events ◀── every stage, both hosts       web-local: vsw.notify            │
-                         │  dead:   vsw.dead ◀── DLX from every work queue                                        │
+                         │  return: vsw.events ◀── every stage, both hosts: started / log / finished / failed     │  logs/<job>/<stage>.attempt<N>.log
+                         │  dead:   vsw.dead ◀── {task, failure record} published by the failing stage,           │  logs/instances/<instance_id>/*.log
+                         │                       plus DLX for anything rejected before our code ran               │
                          └──┬──────────┬───────────────┬──────────────────────────────────────────────────────────┘
                             │          │               │
-   ┌── web-box processes ───┘          │               └── compute-box processes
-   │  extract   app env   ffmpeg -vn -ac 1 -ar 22050 → audio/<job>/audio.wav                    → vsw.identify
-   │  events    app env   → jobs.sqlite (state, stage, attempt, position, ETA, per-stage timings) → vsw.notify on done / failed
+   ┌── web-box programs ────┘          │               └── compute-box programs
+   │  (supervisord, one log each)      │
+   │  extract   app env   ffmpeg -vn -ac 1 -ar 22050 → audio/<job>/audio.wav  (exact command kept) → vsw.identify
+   │  events    app env   → jobs.sqlite: jobs · stage_runs (inputs, outputs, command, error, stderr tail) · calibration
+   │                      → WORK_DIR/<job>/job.log — one narrative per job, both hosts, all stages       → vsw.notify on done / failed
    │  notify    app env   → SMTP: "queued, ready by ~HH:MM" · "ready" · "failed: why", table-gated
    │  scaler    app env   ONE process. Every 10 s: management API → messages_ready / unacknowledged per vsw.* queue.
    │                      work and no instance → CREATE (lease row + Linode label uniqueness = the singleton lock, §9.4)
-   │                      nothing ready, nothing unacked, for COMPUTE_GRACE_SECONDS → DESTROY, revoke its credentials
+   │                      nothing ready, nothing unacked, for COMPUTE_GRACE_SECONDS → SHUTDOWN (logs flush) → DESTROY → revoke
    │  GET /api/jobs/<id>/status   ◀── browser polls (2 s while identifying, 30 s after submit); no SSE
    │  GET /api/jobs/<id>/download → 302 to a 15-minute presigned GET; the web box never proxies bytes
+   │  tools/queue.py show <job>  ── which stage failed, what it read, what it wrote, the command, the error (§7.6)
+   │  prometheus + grafana  Docker, bound to loopback; scrape targets GENERATED from the stage registry (§14.2);
+   │                        the singleton appears through a file_sd targets file the scaler writes on create, empties on destroy
    │
    │  ═══ Linode VLAN 10.0.0.0/24 (account-isolated L2) ═══  web 10.0.0.2 ◀──▶ compute 10.0.0.3 (fixed at create) ═══
    │      Cloud Firewall on both: public inbound = 22 (admin) + 80/443 (web) only. NEVER Linode's shared "private IP".
 
- COMPUTE LINODE — at most one; CPU only (8 dedicated cores); custom image (~1–2 min to exist); no secrets baked in
-   identify  process    engine env, torch CPU + indexes resident   audio.wav → verdict.json → S           → event identified
-   batch     process    ONE consumer on vsw.chroma + vsw.sync + vsw.fetch + vsw.embed, prefetch 1 = one heavy ticket at a time
-       chroma  engine env   audio.wav → chroma.npy → S                                                   → vsw.sync
-       sync    engine env   chroma.npy + package reference → measures.data → S   (partial-recording check) → vsw.fetch
-       fetch   app env      uploads/<job>/<name> → local disk, retry, size check                          → vsw.embed
-       embed   app env      render.py: bands · strip · libx264 → results/<job>/<stem>_synced.mp4 → S      → event done
+ COMPUTE LINODE — at most one; SAME REGION as www (VLANs do not cross regions); CPU only (8 dedicated cores); custom image; no secrets baked in
+   supervisord: ONE PROGRAM PER STAGE — one log, one restart domain, one queue each; the stage's library imported directly
+   identify   engine env  torch CPU + indexes resident   vsw.identify   audio.wav → verdict.json → S            → event identified
+   chroma     engine env  audio2chroma imported          vsw.chroma     audio.wav → chroma.npy → S               → vsw.sync
+   sync       engine env  wfn_combination_selector       vsw.sync       chroma + package reference → measures → S → vsw.fetch
+   fetch      app env     boto3                          vsw.fetch      uploads/<job>/<name> → local disk         → vsw.embed
+   embed      app env     cairo, ffmpeg                  vsw.embed      THE ONLY CONSUMER, prefetch 1 = one encode at a time → event done
+   logship    app env     every 60 s and at shutdown: /var/log/supervisor/*.log → logs/instances/<instance_id>/
+   each program serves /metrics on its own port (§14.3), scraped over the VLAN; node_exporter on 9100 for the host curves
+   every attempt: PUT logs/<job>/<stage>.attempt<N>.log (full stderr, traceback, exact commands) BEFORE its finished/failed event
    a stage is done when its output is in S (HEAD); the local <stage>_done.flag only caches that fact (§6.1)
 ```
 
 | Host | Runs | Because |
 |---|---|---|
-| Web Linode | Flask, RabbitMQ, the job table, extract, events, notify, scaler | Always on; owns every promise to a visitor. Extract is seconds per minute of video, makes the recogniser and the aligner consume a small file, and the box needs ffmpeg anyway (`routes.py:405` probes there today). |
-| Compute singleton | identify, chroma, sync, fetch, embed | The minutes-to-hours of CPU. Exists only while there is work, plus a grace period. |
-| Object storage | uploads, canonical audio, intermediates, attempt markers, results | The only durable bytes; the singleton's disk dies with it. |
+| www.weefeen.com (existing, EU) | Apache vhost → Flask, our vhost on the existing RabbitMQ, the job table and per-job logs, extract, events, notify, scaler, Prometheus + Grafana | Always on and already paid for; owns every promise to a visitor and every diagnostic. Extract is seconds per minute of video, makes the recogniser and the aligner consume a small file, and the box has ffmpeg duty anyway (`routes.py:405` probes there today). §15.1 says what sits beside the live Symfony site and what is capped. |
+| Compute singleton | identify, chroma, sync, fetch, embed, logship | The minutes-to-hours of CPU. Exists only while there is work, plus a grace period. |
+| Object storage | uploads, canonical audio, intermediates, attempt markers, results, **per-attempt logs and shipped instance logs** | The only durable bytes; the singleton's disk dies with it. |
 
-Two processes on the singleton, not one, is a deliberate reading of
-"one ticket at a time": the heavy chain is strictly sequential (one
-consumer, four queues, prefetch 1 on the channel), while recognition —
-two minutes, and the one step a visitor is watching — must not queue
-behind an hour of someone else's encode. If contention between the two
-is measured to hurt, the identify process sends `SIGSTOP` to the
-running ffmpeg for its two minutes and `SIGCONT` after (Linux, ten
-lines). If recognition moves to the web box (§12 option b), the
-singleton becomes purely sequential and this paragraph disappears.
+**One process per stage, and what that buys.** The owner's two
+requirements — "one at a time" and "debug quickly: which stage, inputs,
+outputs, error" — are both served by the VideoScoreSync arrangement,
+not by a single batch consumer:
+
+- *The one-at-a-time guarantee survives, because it only ever mattered
+  for the encode.* `vsw.embed` has exactly one consumer at prefetch 1,
+  so there is never more than one ffmpeg encode on the box. Chroma
+  (~13 s), sync (~0.5 s) and fetch (network) overlapping someone else's
+  encode cost that encode seconds and let the next job be *ready* the
+  moment the encoder is free; recognition (~1–2 min of multi-threaded
+  torch) overlapping an encode slows both for that minute, which is
+  nothing against an hour — and if it is measured to hurt the
+  interactive step, the identify program sends `SIGSTOP` to the running
+  ffmpeg for its minute and `SIGCONT` after (Linux, ten lines). Memory
+  at the worst overlap — ffmpeg 1–2 GB, torch ~2 GB, a 90-minute chroma
+  ~0.5 GB — fits an 8-core/16 GB plan. Strict global serialisation
+  would only add latency for the second visitor of an evening; I do
+  not think it is needed and do not propose it.
+- *Each stage runs under the interpreter that owns its library*, so
+  `tools/identify_runner.py` and `tools/sync_runner.py` — which exist
+  only because Flask's interpreter cannot import torch or numba — go
+  away, and with them the stderr string-matching that classifies their
+  deaths (§8.1). A failure becomes a Python exception with a real
+  traceback in a real log.
+- *Failure isolation:* an ffmpeg that takes the embed program down does
+  not take chroma with it; supervisord restarts the one that died.
+- *Per-stage logs, per-stage restart, per-stage metrics port* — the
+  pattern the owner already operates.
 
 The broker lives on the web box and never on the singleton: a broker
 destroyed with the machine takes the queue and every in-flight job with
@@ -151,40 +209,40 @@ it.
 
 vhost `vsw`; default direct exchange; classic durable queues (as
 VideoScoreSync declares them, `consumer_base_queue.py:44`);
-`prefetch_count=1`.
+`prefetch_count=1` per consumer; one supervisord program per queue.
 
-| Queue | Host / interpreter | Payload (§4) needs | Does | Publishes | Completion check |
+| Queue | Program / host / interpreter | Reads (recorded as `inputs`) | Does | Writes (recorded as `outputs`) → publishes | Completion check |
 |---|---|---|---|---|---|
-| `vsw.extract` | web / app env | `upload_key`, `upload_bytes` | One ffmpeg pass over the upload (local at the small end, presigned GET stream at the large end): `-vn -ac 1 -ar 22050 -c:a pcm_s16le` → `audio.wav`; PUT `audio/<job>/audio.wav`; event `extracted`. | `vsw.identify` | HEAD `audio/<job>/audio.wav` |
-| `vsw.identify` | singleton / engine env (§12 for the alternative) | `audio_key`, `duration_s` | Torch and both indexes (`data/amt_*_index.pkl`, 9 MB) loaded **once at process start** — the resident "serve mode" `identify.py:17-20` wished for is free with a long-lived consumer, and it is what turns 130 s cold into whatever the warm figure is. GET `audio.wav`; `identify_aggregated`; `verdict.json` → PUT `work/<job>/verdict.json`; event `identified` with the verdict. | nothing — the visitor must choose | HEAD `work/<job>/verdict.json` |
-| `vsw.chroma` | singleton / engine env | `audio_key`, `package` | GET `audio.wav`; `audio2chroma` → `chroma.npy`; PUT. | `vsw.sync` | HEAD `work/<job>/chroma.npy` |
-| `vsw.sync` | singleton / engine env | `package` | `wfn_combination_selector` against the package reference; the column translation and the crowding / span checks exactly as `tools/sync_runner.py:95-210` and `app/sync.py:163-180`; `measures.data` → PUT. **A partial recording fails here, permanently, before gigabytes are fetched.** | `vsw.fetch` | HEAD `work/<job>/measures.data` |
-| `vsw.fetch` | singleton / app env | `upload_key`, `upload_bytes` | GET `uploads/<job>/<name>` → `input/video.<ext>`, the `download_with_retry` shape of `consumer_download_video_queue.py:39-57`; verify size; skip if already present at that size. | `vsw.embed` | local file at the right size — this output *is* local |
-| `vsw.embed` | singleton / app env (cairo) | `package`, `style`, `meta`, `mode` | `render.render()` unchanged in substance; ffmpeg writes `<stem>.attempt<N>.part.mp4`, Python renames on exit 0; PUT `results/<job>/…`; event `done` with key, bytes, elapsed. | nothing — `done` is an event | HEAD `results/<job>/…mp4` |
-| `vsw.events` | web / app env | — | Applies `{job_id, stage, event, attempt, host, started, finished, upload_bytes, duration_s, detail, error, kind}` to `jobs` and `stage_runs`; on `embed.done` / `failed(permanent)` publishes `vsw.notify`; recomputes positions and ETAs (§11.2). | `vsw.notify` | upsert on `(job_id, stage, attempt)` |
-| `vsw.notify` | web / app env | `job_id`, `kind ∈ {queued, ready, failed}` | `notify.send_*` gated by `mail_<kind>_at IS NULL` (§13.2). | — | the table |
-| `vsw.dead` | web; `tools/queue.py` | — | DLX target of every work queue; read by a person. | — | — |
+| `vsw.extract` | `extract` / web / app env | `uploads/<job>/<name>` (the staged file on www; a presigned GET stream once step 7 exists) | One ffmpeg pass: `-vn -ac 1 -ar 22050 -c:a pcm_s16le`; **exact command and full stderr kept** (§7.4) | `audio/<job>/audio.wav` → `vsw.identify` | HEAD `audio/<job>/audio.wav` |
+| `vsw.identify` | `identify` / singleton (§12 for the alternative) / **engine env**, imports `weefeen_id` directly | `audio/<job>/audio.wav`, `duration_s`, the two indexes | Torch and indexes loaded **once at process start** — the resident "serve mode" `identify.py:17-20` wished for; `identify_aggregated`; the too-short / no-audio gates of `identify.py:160-178` as native checks | `work/<job>/verdict.json` → event `identified` with the verdict | HEAD `work/<job>/verdict.json` |
+| `vsw.chroma` | `chroma` / singleton / **engine env**, imports `services.audio_to_chroma` from the read-only VideoScoreSync checkout | `audio/<job>/audio.wav` | `audio2chroma`; a **startup self-test** on a bundled 1-second WAV so a mis-built env fails at program start, not on a visitor's job (§8.1) | `work/<job>/chroma.npy` → `vsw.sync` | HEAD `work/<job>/chroma.npy` |
+| `vsw.sync` | `sync` / singleton / **engine env**, imports `services.audio_synchronization_service` | `work/<job>/chroma.npy`, the package's `performance/chroma.npy` + `measures.data` | `wfn_combination_selector`; the column translation and the crowding / span checks exactly as `tools/sync_runner.py:95-210` and `app/sync.py:163-180`, now raising `PartialRecording` natively. **A partial recording fails here, permanently, before gigabytes are fetched.** | `work/<job>/measures.data` → `vsw.fetch` | HEAD `work/<job>/measures.data` |
+| `vsw.fetch` | `fetch` / singleton / app env | `uploads/<job>/<name>`, `upload_bytes` | `download_with_retry` shape of `consumer_download_video_queue.py:39-57`; verify size; skip if present at that size | `input/video.<ext>` (local; size recorded) → `vsw.embed` | local file at the right size |
+| `vsw.embed` | `embed` / singleton / app env (cairo) — **the only consumer of this queue** | `input/video.<ext>`, `work/<job>/measures.data`, the package's `lines/*`, `export.json`, `style`, `meta` | `render.render()` unchanged in substance; **three commands** (ffprobe, band strip, main encode) each kept verbatim with their stderr (§7.4); ffmpeg writes `<stem>.attempt<N>.part.mp4`, Python renames on exit 0 | `results/<job>/<stem>_synced.mp4` → event `done` with key, bytes, elapsed | HEAD `results/<job>/…mp4` |
+| `vsw.events` | `events` / web / app env | — | Applies `started / log / finished / failed` events to `jobs`, `stage_runs`, `calibration`; appends narrative lines to `WORK_DIR/<job>/job.log`; on `embed.done` / `failed(permanent)` publishes `vsw.notify`; recomputes positions and ETAs (§11.2) | `vsw.notify` | upsert on `(job_id, stage, attempt)` |
+| `vsw.notify` | `notify` / web / app env | `job_id`, `kind ∈ {queued, ready, failed}` | `notify.send_*` gated by `mail_<kind>_at IS NULL` (§13.2) | — | the table |
+| `vsw.dead` | read by `tools/queue.py` | — | `{task, failure}` records published by the failing stage before it acks (§7.5), plus raw DLX rejects with `x-death` headers | — | — |
 
-`identify.py:43`'s semaphore is retired: one identify process with
-prefetch 1 is the same guarantee, across machines. There is no
-`MAX_CONCURRENT_*` anything — one instance, one heavy ticket, by
-construction.
+`identify.py:43`'s semaphore is retired: one identify program with
+prefetch 1 is the same guarantee, across machines.
 
 ### 3.1 What is copied from VideoScoreSync — verified
 
 | File | Verdict |
 |---|---|
 | `workers/consumer_base_queue.py` (92 lines), `workers/publisher_base_queue.py` (73) | **Copy, then change** (§8). Importing is impossible in practice: both `import config`, and `config.py:128-136` does `int(os.getenv("PORT_PREPROCESSOR"))` with no default, so the import needs VideoScoreSync's whole `.env` in our process. They also connect as guest (`consumer_base_queue.py:35-42`) and publish without confirms (`publisher_base_queue.py:48-49`). |
-| `consumer_extract_audio_queue.py`, `_resample_audio_queue.py`, `_generate_chroma_queue.py`, `_sync_video_queue.py` | **Skeleton yes; the bodies already exist here.** Resample is `ffmpeg -y -i IN -ar 22050 OUT` (`:50-55`); chroma is one `audio2chroma` call (`:49`); sync is one `wfn_combination_selector` call plus a write (`:72-83`); extract re-encodes to AAC m4a (`services/audio_extraction_service.py:173-186`). `tools/sync_runner.py` already calls both services with the column translation and the partial-recording checks. Porting is wrapping. |
+| `consumer_extract_audio_queue.py`, `_resample_audio_queue.py`, `_generate_chroma_queue.py`, `_sync_video_queue.py` | **Skeleton yes — one program, one queue, one library call — and the bodies already exist here.** Resample is `ffmpeg -y -i IN -ar 22050 OUT` (`:50-55`); chroma is one `audio2chroma` call (`:49`); sync is one `wfn_combination_selector` call plus a write (`:72-83`); extract re-encodes to AAC m4a (`services/audio_extraction_service.py:173-186`). `tools/sync_runner.py` already calls both services with the column translation and the partial-recording checks; that code moves into the two engine-env programs and the runner is deleted. |
 | `consumer_download_video_queue.py` | **Shape yes, body no.** Keep `download_with_retry` (`:39-57`) and the done-flag idea (`:78-82`); the body becomes a bucket GET. `:84-88` **acks** a message with a missing `score_id` and counts a failure — the job vanishes and nobody is told; §7 replaces that. |
 | `consumer_embed_score_queue.py` | **Not reused**, as the owner said: `ScoreVideoMaker(task)` is shaped for the Dropbox flow and knows nothing of ink colour, crop offset, panel or background; `app/render.py` is ours. |
-| `services/worker_metrics.py` | **The idea, not the file.** `observe_task_duration_per_gb` (`:107-124`) is one axis; we record elapsed, bytes **and** duration per stage (§5). It needs `psutil` and `PROMETHEUS_MULTIPROC_DIR`; Prometheus exposure comes later. |
+| `helpers/task_utils.py::get_logger_for_task` (`:25-48`) | **The idea, not the mechanism.** A logger keyed by job id is right; a `FileHandler` on the local disk is wrong here because the disk is on the wrong host and is destroyed (§7.3). |
+| `services/worker_metrics.py` | **The idea, not the file.** `observe_task_duration_per_gb` (`:107-124`) is one axis; we record elapsed, bytes **and** duration per stage (§5). `start_metrics_server(port)` per program is the pattern to re-add later, with `DISABLE_METRICS=1` until then; the file itself needs `psutil` and `PROMETHEUS_MULTIPROC_DIR`. |
 | `models/task_data.py`, `helpers/task_utils.py::get_job_paths` | **Replaced** (§4): 19 competition fields; ~15 `config.*` constants for a layout that is not ours. |
-| identify consumer | **New.** ~80 lines around `tools/identify_runner.py`'s logic, resident. |
+| identify program | **New.** ~80 lines around the logic of `tools/identify_runner.py`, resident, under the engine interpreter. |
 
 Not inherited: `basic_nack(requeue=False)` on every exception (a
-network blip and a missing audio track treated alike — §7), and the
-done-flag honoured only `if method.redelivered` (§6.2).
+network blip and a missing audio track treated alike — §7), the
+done-flag honoured only `if method.redelivered` (§6.2), and failure
+records that consist of one log line.
 
 ### 3.2 The canonical audio — produced once, consumed twice
 
@@ -241,7 +299,9 @@ class Task:
 ```
 
 `style` and `meta` travel in the message because today they exist only
-as arguments to `Registry.start()` (`jobs.py:143-144`).
+as arguments to `Registry.start()` (`jobs.py:143-144`). Everything a
+stage needs to be **re-run** is either in the `Task` or in the bucket,
+which is what makes replay (§7.5) a one-line publish.
 
 ### 4.2 `app/queue/paths.py`, `app/queue/keys.py`
 
@@ -253,15 +313,17 @@ class JobPaths:                       # WORK_DIR/<job>/ on either host
     audio: Path                       # audio.wav                   (web makes it; singleton caches it)
     chroma: Path; measures: Path; verdict: Path
     result: Path                      # <pipeline._safe(package)>_synced.mp4
-    log: Path
     def part(self, attempt: int) -> Path        # <stem>.attempt<N>.part.mp4
     def flag(self, stage: str) -> Path          # <stage>_done.flag — a cache of "the output is in S"
+    def log(self, stage: str, attempt: int) -> Path   # logs/<stage>.attempt<N>.log, PUT to the bucket at attempt end
 
 def keys(job_id: str) -> Keys:
     uploads/<job>/<name>    audio/<job>/audio.wav
     work/<job>/verdict.json  work/<job>/chroma.npy  work/<job>/measures.data
     work/<job>/<stage>_attempt<N>                    # zero-byte attempt markers (§6.3)
     results/<job>/<stem>_synced.mp4
+    logs/<job>/<stage>.attempt<N>.log                # the full per-attempt log (§7.3)
+    logs/instances/<instance_id>/<program>.log       # shipped supervisord logs (§7.7)
 ```
 
 The score library must exist on the singleton (sync reads
@@ -271,7 +333,7 @@ bucket at start.
 
 ---
 
-## 5. The job table — companion to the broker
+## 5. The job table — companion to the broker, and the diagnostic record
 
 `WORK_DIR/jobs.sqlite` on the web box, WAL, `busy_timeout=5000`,
 stdlib `sqlite3`. Several processes on the web box write it (Flask,
@@ -289,20 +351,46 @@ CREATE TABLE jobs (
   created REAL, uploaded REAL, submitted REAL, finished REAL,
   mail_state TEXT, mail_queued_at REAL, mail_ready_at REAL, mail_failed_at REAL
 );
-CREATE TABLE stage_runs (                                       -- the calibration record
-  job_id TEXT, stage TEXT, attempt INTEGER, host TEXT,
-  started REAL, finished REAL, ok INTEGER, error TEXT,
-  upload_bytes INTEGER, duration_s REAL,                        -- both axes, every row
+
+CREATE TABLE stage_runs (                       -- one row per attempt of a stage: the answer to "what happened"
+  job_id TEXT, stage TEXT, attempt INTEGER,
+  host TEXT,                                    -- web | compute
+  instance_id TEXT,                             -- Linode id; where logs/instances/<id>/ came from
+  pid INTEGER,
+  state TEXT,                                   -- started | done | failed | interrupted
+  queued_at REAL,                               -- when the message was published: queue wait = started − queued_at
+  started REAL, ended REAL, elapsed_s REAL,
+  inputs TEXT,                                  -- JSON: what it read — bucket keys / local paths with byte sizes and mtimes
+  outputs TEXT,                                 -- JSON: what it wrote — keys / paths with byte sizes
+  bytes_in INTEGER, bytes_out INTEGER,          -- the size axis: GB/s = bytes_in / elapsed for byte-bound stages (§14.7)
+  media_s REAL,                                 -- the duration axis: realtime factor = media_s / elapsed for encode-like stages
+  peak_rss_mb REAL, cpu_s REAL,                 -- this PROCESS and its children (psutil.Process), never the whole host (§14.5)
+  disk_read_mb REAL, disk_write_mb REAL,        -- psutil.Process().io_counters() deltas over the attempt
+  commands TEXT,                                -- JSON list of {argv (shlex-joined), returncode, elapsed_s, stderr_tail}
+                                                --   for every subprocess the attempt ran; NULL for pure-Python stages
+  error_kind TEXT,                              -- transient | permanent | config | exhausted | interrupted
+  error_class TEXT,                             -- e.g. app.sync.PartialRecording, subprocess.CalledProcessError
+  error_message TEXT,                           -- the user-safe message, or the exception's str()
+  stderr_tail TEXT,                             -- last 200 lines of the failing child's stderr, or the full traceback
+  log_key TEXT,                                 -- logs/<job>/<stage>.attempt<N>.log in the bucket (the whole story)
   PRIMARY KEY (job_id, stage, attempt)
 );
+
 CREATE TABLE calibration (stage TEXT PRIMARY KEY, k0 REAL, k_d REAL, k_g REAL, samples INTEGER, updated REAL);
-CREATE TABLE compute (                                          -- the scaler's lease (§9.4); at most one live row
+
+CREATE TABLE compute (                          -- the scaler's lease (§9.4); at most one live row
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  state TEXT,                                                   -- creating | running | destroying
+  state TEXT,                                   -- creating | running | draining | destroying
   instance_id TEXT, vlan_ip TEXT, created REAL, ready REAL, idle_since REAL,
   broker_user TEXT, store_key_id TEXT, lease_until REAL
 );
 ```
+
+Beside the table, `WORK_DIR/<job>/job.log` on the web box is the
+**narrative**: one file per job, both hosts, all stages, in arrival
+order, each line stamped with its origin (`2026-09-09 10:35:41 compute
+li-4821 sync a1 INFO 412 measures placed`). It is written only by the
+events consumer (§7.3).
 
 `Job` / `Registry` (`app/jobs.py`) become a thin layer over this;
 `Job.public()` keeps its shape (both front-ends read it) and gains
@@ -314,9 +402,10 @@ CREATE TABLE compute (                                          -- the scaler's 
 | Question | Owner | Never asked of |
 |---|---|---|
 | What should happen next for job J? | **the broker** — a message in `vsw.X` is an obligation to make stage X happen | the table |
-| Has stage X already happened? | **the bucket** — HEAD on the stage's output; the local flag is a cache | the table (singleton processes never read it) |
+| Has stage X already happened? | **the bucket** — HEAD on the stage's output; the local flag is a cache | the table (singleton programs never read it) |
 | Where are the bytes? | **the bucket** | local disks |
-| What state is J in, where in line, when ready, was it mailed, how long do stages take? | **the table**, derived from `vsw.events` | the broker |
+| What state is J in, where in line, when ready, was it mailed? | **the table**, derived from `vsw.events` | the broker |
+| What did stage X of J read, write, run and say, on attempt N? | **`stage_runs`** for the record, **`logs/<job>/…` in the bucket** for the whole story, **`job.log`** for the narrative | the singleton's disk |
 | Does a compute instance exist? | **the Linode API** (label `vsw-compute`); the `compute` row is the lease for *intent* | — |
 
 The table may lag by the latency of `vsw.events`; it never decides
@@ -361,22 +450,31 @@ stateDiagram-v2
     uploaded --> abandoned: no submit within UPLOAD_TTL_DAYS
 ```
 
-One protocol for every stage:
+One protocol for every stage — the diagnostic record is part of it,
+not an afterthought:
 
 ```
 on message (task):
     if output_in_bucket(stage) or flag(stage).exists():     # every message, not only redelivered ones — §6.2
         publish next(task); ack; return                     # safe: the next stage has the same guard
     n = count_markers_in_bucket(stage) + 1                  # crash-attempt counting that survives destroy — §6.3
+    if n > 1 and no stage_run(stage, n−1) ended:            # the previous attempt died without reporting
+        event interrupted(stage, n−1, "process died; see logs/instances/<id>/")
     PUT work/<job>/<stage>_attempt<n>
-    if n > cap(stage): event failed(exhausted); nack(requeue=False); return
-    event started
-    do the work locally
+    if n > cap(stage): publish dead{task, failure(exhausted)}; event failed(exhausted); ack; return
+    open per-attempt log  logs/<stage>.attempt<n>.log       # everything below is written to it
+    event started(inputs = what will be read, with sizes)
+    do the work locally — every subprocess through shell.run(), which records argv, rc, elapsed, stderr (§7.4)
     PUT outputs to the bucket                               # the point of no return
+    PUT the per-attempt log
     touch flag(stage)
     publish next(task) | event done/identified
-    event finished(elapsed, upload_bytes, duration_s)
+    event finished(outputs with sizes, commands, elapsed, bytes_in, bytes_out, media_s, rss/cpu/io of this process, log_key)
     ack
+on exception:
+    classify (§7.1); PUT the per-attempt log (with traceback)
+    transient and n < cap → sleep; republish task(attempt=n+1); ack
+    else → publish dead{task, failure}; event failed(kind, class, message, stderr_tail, commands, log_key); ack
 ```
 
 ### 6.2 The ordering fix
@@ -391,9 +489,9 @@ Both windows close with two changes: **check for completion on every
 message**, and **when already complete, re-publish the next stage before
 acking**. A duplicate downstream message is absorbed by the downstream's
 own unconditional check; a lost one is re-created by the redelivery.
-Order: outputs → bucket → flag → publish → ack. With one batch process
-and prefetch 1, a duplicate that arrives during the work simply waits
-and then finds the output.
+Order: outputs → bucket → flag → publish → ack. With one consumer per
+queue at prefetch 1, a duplicate that arrives during the work simply
+waits and then finds the output.
 
 ### 6.3 Crash matrix — including the singleton being destroyed under the job
 
@@ -406,9 +504,9 @@ destroyed). A raised exception is a *failure*, §7.
 | uploaded / extracting | web box | upload; maybe `audio.wav` | Durable message; on restart the consumer HEADs `audio.wav` and skips or redoes. |
 | identifying | singleton destroyed | audio | Heartbeat requeues the unacked message within ~2 min (§8.2); the scaler's tick sees `ready > 0`, creates a new instance; re-run. The page keeps polling; copy says "still listening". |
 | queued | anything | messages in `vsw.chroma` | Nothing ran. Position recomputed. |
-| running: chroma / sync / fetch | singleton destroyed | outputs of finished stages | Requeue; new instance; finished stages skipped by HEAD; fetch re-downloads (the disk is gone). |
-| **running: embed, ffmpeg dies with the box** | singleton destroyed | `chroma.npy`, `measures.data`, markers | New instance: chroma/sync skipped by HEAD, fetch redone (k_fetch·G), **embed re-run from the encode only**; marker `embed_attempt2` in the bucket; a partial `.part` never became a result because only Python renames, only on exit 0. |
-| running: embed, ffmpeg dies but the consumer lives | — | as above | A failure → §7. |
+| running: chroma / sync / fetch | one program dies, or the singleton is destroyed | outputs of finished stages | Program death: supervisord restarts it, the broker requeues on the dropped connection, the next attempt records `interrupted` for the last one. Destroy: new instance; finished stages skipped by HEAD; fetch re-downloads (the disk is gone). |
+| **running: embed, ffmpeg dies with the box** | singleton destroyed | `chroma.npy`, `measures.data`, markers | New instance: chroma/sync skipped by HEAD, fetch redone (k_fetch·G), **embed re-run from the encode only**; marker `embed_attempt2` in the bucket; a partial `.part` never became a result because only Python renames, only on exit 0. The half-written per-attempt log of attempt 1 is on the dead disk; the shipped supervisord log (§7.7) has its last 60 s. |
+| running: embed, ffmpeg dies but the program lives | — | as above | A failure → §7, with the exact command and stderr. |
 | done, mail not sent | web box | result; `mail_ready_at NULL` | `vsw.notify` durable; sent once on restart (§13.2). |
 | done, mail `sending` | web box | `mail_state='sending'` | **Not resent**; `uncertain`, WARNING. A duplicate to a stranger's typed address is worse than a missing one when the page shows the link. |
 
@@ -418,13 +516,22 @@ the consumer counts markers rather than trusting the payload.
 
 ---
 
-## 7. Failure policy
+## 7. Failure policy and diagnostics
+
+The owner's requirement, verbatim: *"sometimes some issues happens at
+one stage. We need to be able to debug very quickly. Which stage fails,
+what is the inputs and outputs and error message."* This section is
+that feature. Everything in it survives the destruction of the machine
+that produced it (§7.7).
+
+### 7.1 Classification
 
 | Kind | Examples (all already produce user-safe messages) | Action |
 |---|---|---|
-| **permanent** | no audio (`identify.py:163`), too short (`:175`), partial recording (`sync.py:168-180`), no measures (`sync_runner.py:159`), "the alignment doesn't cover this video" (`render.py:426`), unknown package, ffmpeg rejecting the input | event `failed(permanent, message)`; `basic_nack(requeue=False)` → `vsw.dead`; the visitor is **mailed why** (§13.2) |
-| **config** | runner `kind: "config"` (`identify_runner.py:31`, `sync_runner.py:38`), missing interpreter or index, LLVM/SVML abort (`sync.py:210-214`) | as permanent, plus ERROR log; the mail says "our side" |
-| **transient** | bucket GET/PUT errors, broker publish errors, ffmpeg killed by signal / exit 137 / "Cannot allocate memory", `RENDER_TIMEOUT` | `sleep(RETRY_DELAY_SECONDS)` in the consumer, republish with `attempt+1`, ack the original; at the cap → `exhausted` |
+| **permanent** | no audio (`identify.py:163`), too short (`:175`), partial recording (`sync.py:168-180`), no measures (`sync_runner.py:159`), "the alignment doesn't cover this video" (`render.py:426`), unknown package, ffmpeg rejecting the input | dead record + event `failed(permanent)`; ack; the visitor is **mailed why** (§13.2) |
+| **config** | an import that fails at program start, a missing index, the SVML abort (`sync.py:210-214`) — now caught by the startup self-test (§8.1), so it never reaches a job | program exits non-zero at start; supervisord shows `FATAL` after its retries; `tools/queue.py compute` shows it; nothing is consumed, nothing is lost |
+| **transient** | bucket GET/PUT errors, broker publish errors, ffmpeg killed by signal / exit 137 / "Cannot allocate memory", `RENDER_TIMEOUT` | `sleep(RETRY_DELAY_SECONDS)`, republish with `attempt+1`, ack the original; at the cap → `exhausted` |
+| **interrupted** | the previous attempt's program died without reporting (kill, OOM, native abort, instance destroyed) — detected by the next attempt from the attempt markers | recorded against the dead attempt with a pointer to the shipped instance log; counted toward the cap like any attempt |
 
 ```ini
 RETRY_DELAY_SECONDS=60
@@ -436,29 +543,276 @@ A cap of three on an hour-long render is indefensible only if a retry
 repeats the hour of *everything*. It does not: chroma and sync are kept
 in the bucket, so an embed retry is the encode (plus a re-fetch if the
 instance was destroyed). Two attempts is right for that — a second
-identical failure is a signal. ffmpeg can resume nothing; segmented
-encoding is not proposed (§15).
+identical failure is a signal, and the signal now comes with the
+command that failed. ffmpeg can resume nothing; segmented encoding is
+not proposed (§17).
 
 | Situation | Visitor | Operator |
 |---|---|---|
-| transient, retry scheduled | `/status`: `queued`, "Something went wrong on our side; trying again in a minute (attempt 2 of 2)"; no mail | WARNING; `tools/queue.py` shows the attempt |
-| permanent | `failed` + the stage's message; **a mail** saying the same, because they were told to walk away | INFO; message in `vsw.dead` with headers `x-job`, `x-stage`, `x-kind` |
-| config | as permanent; the mail says it is our fault | ERROR; `vsw.dead` |
-| exhausted | "The render failed twice and has been stopped. Your upload is kept for N days." | ERROR; `vsw.dead` |
+| transient, retry scheduled | `/status`: `queued`, "Something went wrong on our side; trying again in a minute (attempt 2 of 2)"; no mail | WARNING in the program log; `tools/queue.py show <job>` lists the attempt with its error |
+| permanent | `failed` + the stage's message; **a mail** saying the same, because they were told to walk away | INFO; the dead record in `vsw.dead`; `show <job>` |
+| config | never reaches a visitor | ERROR at program start; `compute` view |
+| exhausted | "The render failed twice and has been stopped. Your upload is kept for N days." | ERROR; the dead record; `show <job>` prints both attempts side by side |
 
-`tools/queue.py`: read-only listing of the table, the queue depths and
-`vsw.dead`, in the style of `tools/doctor.py`; one explicit write
-action, `--republish <job> <stage>`.
+### 7.2 The failure record — what every attempt writes
+
+Every attempt, successful or not, produces one `stage_runs` row (§5)
+through `started` / `finished` / `failed` events. What goes into
+`inputs` and `outputs` is fixed per stage so the operator always knows
+what to expect:
+
+| Stage | `inputs` | `outputs` | `commands` |
+|---|---|---|---|
+| extract | `{"upload": key or path, "bytes": …, "duration_s": …}` | `{"audio": "audio/<job>/audio.wav", "bytes": …, "seconds": …}` | 1 × ffmpeg |
+| identify | `{"audio": key, "bytes": …, "duration_s": …, "pitch_index": path+mtime, "chord_index": path+mtime}` | `{"verdict": key, "mode": …, "winner": …, "consensus": …, "n_windows": …}` | none |
+| chroma | `{"audio": key, "bytes": …}` | `{"chroma": key, "frames": …, "bytes": …}` | none |
+| sync | `{"chroma": key, "package": name, "ref_chroma": path+frames, "ref_measures": path+count}` | `{"measures": key, "measures": …, "first": …, "last": …, "crowding": …, "span_ratio": …}` | none |
+| fetch | `{"upload": key, "bytes": …}` | `{"video": local path, "bytes": …}` | none |
+| embed | `{"video": path+bytes, "measures": key, "package": name, "bands": count, "style": {...}, "meta_keys": [...]}` | `{"result": key, "bytes": …, "part": path}` | 3 × (ffprobe, ffmpeg strip, ffmpeg encode) |
+
+`error_class` is the Python class (`app.sync.PartialRecording`,
+`subprocess.CalledProcessError`, `botocore.exceptions.ClientError`);
+`error_message` is what the visitor may be shown; `stderr_tail` is the
+last 200 lines of the failing child's stderr, or the full traceback for
+a native exception. `log_key` points at the complete per-attempt log.
+
+### 7.3 One story per job, across stages and both hosts
+
+VideoScoreSync's `get_logger_for_task` (`helpers/task_utils.py:25-48`)
+gives each job a logger with a `FileHandler` at
+`<job>/<job>.log`. The idea is right — a logger keyed by job — and the
+mechanism is wrong for two hosts and a disposable disk: the file would
+be on the singleton, and gone with it. Two tiers instead:
+
+1. **The narrative** — INFO and above, a few dozen lines per job
+   ("sync a1 started: chroma 4132 frames, reference 288 measures";
+   "embed a1: ffmpeg encode `…` (rc 0, 5m52s)"; "embed a1 failed:
+   RenderError …"). Each program's `JobLogger(job_id, stage, attempt)`
+   emits these as `log` events on `vsw.events`; the events consumer
+   appends them to `WORK_DIR/<job>/job.log` on the web box. One file,
+   both hosts, all stages, arrival order, origin-stamped.
+2. **The whole story** — the same logger's DEBUG stream, the complete
+   stderr of every subprocess, and tracebacks, written to the local
+   per-attempt file `logs/<stage>.attempt<N>.log` and **PUT to the bucket
+   at `logs/<job>/<stage>.attempt<N>.log` before the attempt's
+   `finished` or `failed` event** (§6.1). Sizes are small — an hour of
+   ffmpeg stderr with `-nostats -loglevel warning` is kilobytes; the
+   progress stream goes to `-progress` on a separate local file and is
+   not shipped.
+
+The narrative answers "what happened to this job" in one `cat`; the
+per-attempt log answers "show me everything" for one stage; both exist
+after the singleton is gone.
+
+### 7.4 Exact commands — the one artefact worth the most
+
+For every stage that shells out, the record must let the owner paste
+the command into a terminal on the same image and watch it fail. Today
+`render._run` (`render.py:412-417`) keeps **six lines of stderr and
+discards `cmd` entirely**. The filter graph it ran (`render.py:503-536`)
+is hundreds of characters assembled from the visitor's aspect, crop
+offset, colours, opacity, band position and panel choices; without the
+command a failed render is not reproducible, and with it the owner can
+re-run it on the same image in a minute. **Preserving that command line
+is the single highest-value debugging change in the codebase**, and it
+lands in step 1. `probe` (`:271-282`) raises on a failed ffprobe with no
+stderr at all; `extract` does not exist yet. One helper replaces them:
+
+```python
+# app/workers/shell.py
+def run(argv: list[str], *, log: JobLogger, timeout: float | None,
+        cwd: Path | None = None, stderr_file: Path | None = None) -> Completed:
+    """Run one command, keep everything a person needs to run it again."""
+    log.info("$ %s", shlex.join(argv))                 # the reproducible line, in the narrative AND the attempt log
+    ... Popen; stderr tee'd to stderr_file and to a 200-line ring buffer; wall time measured ...
+    completed = Completed(argv=argv, returncode=rc, elapsed_s=…, stderr_tail=ring.text(), stderr_path=stderr_file)
+    log.attempt.commands.append(completed.record())   # lands in stage_runs.commands
+    if rc != 0: raise CommandFailed(completed)         # carries all of the above; classify() reads rc and the tail
+    return completed
+```
+
+`RenderError` and the new `ExtractError` wrap `CommandFailed` and
+expose `command`, `returncode`, `stderr_tail`, `stderr_path`. Three
+commands in embed (ffprobe, the band strip, the encode) and one in
+extract are recorded whether they succeed or fail, so a *slow* encode
+is as inspectable as a failed one. `shlex.join` produces a POSIX-quoted
+line; on the Windows dev box the same record is printed with
+`subprocess.list2cmdline` by `tools/queue.py --windows`.
+
+### 7.5 Dead tickets — inspectable and replayable
+
+Two things arrive in `vsw.dead`:
+
+- **Our records.** A failing stage does not merely nack; it publishes
+  `{"task": <Task as sent>, "failure": <the stage_runs row>, "job": {upload_key, audio_key, package, style, meta}}`
+  to `vsw.dead` and then acks the original. The dead message is
+  self-contained: the exact payload that ran, what it read, what it
+  wrote before failing, the command, the error, and the key of the full
+  log.
+- **Raw rejects** via DLX (`x-dead-letter-exchange: vsw.dlx`) for
+  anything rejected before our code ran — an unparseable body, a
+  program crashing in `from_json`. They carry RabbitMQ's `x-death`
+  headers and the original body.
+
+Replay, after the bug is fixed:
+
+```
+tools/queue.py replay <job> <stage> [--invalidate-downstream] [--set key=value ...]
+```
+
+rebuilds the `Task` from the `jobs` row (everything a stage needs is
+there or in the bucket, §4.1), deletes that stage's attempt markers in
+the bucket so the count starts at 1, publishes the task to `vsw.<stage>`
+with `attempt=1`, and sets the job back to `running:<stage>`. Because
+completion is checked by HEAD on each stage's output, **replaying
+`embed` re-runs only the encode; replaying `sync` re-runs sync and the
+chain continues (fetch → embed) by itself**. `--invalidate-downstream`
+deletes the outputs of later stages first, for the case where the fix
+changes an earlier stage's result (a sync fix must produce a new
+render). `--set style.band_fg=#000000` overrides a payload field for
+"was it the style?" experiments. The scaler sees `ready > 0` and
+creates the singleton if needed. The dead message stays until
+`tools/queue.py dead --ack <id>` or its 30-day TTL, so a replayed job
+and its dead record can be compared.
+
+For a debugger rather than a re-run: `tools/queue.py run <job> <stage>`
+executes the same handler inline on the operator's machine against the
+bucket, under the right interpreter (`ID_PYTHON` / `SYNC_PYTHON` from
+`.env`), with the same inputs. Same code, no broker.
+
+### 7.6 The operator view — exactly what was asked
+
+`tools/queue.py`, read-only except `replay`, `dead --ack` and `--gc`, in
+the style of `tools/doctor.py`:
+
+```
+tools/queue.py list [--state failed|running|queued] [--since 24h]
+tools/queue.py show <job> [--full] [--windows]
+tools/queue.py logs <job> [<stage> [<attempt>]]        # fetch from the bucket and print
+tools/queue.py dead [--show <id>] [--ack <id>]
+tools/queue.py replay <job> <stage> [...]
+tools/queue.py queues                                  # depths, ready / unacked, from the management API
+tools/queue.py compute [--gc]                          # the singleton row, program states, orphaned credentials
+```
+
+`show` prints the job's stage runs in order, then the narrative:
+
+```
+job 3263f4b50583   Op.39 Scherzo (Breitkopf)   visitor 203.0.113.7   state failed (exhausted at embed)
+upload  uploads/3263f4b50583/perf.mp4   16.4 MB   7.25 min   640x360
+
+stage     att  host             started   elapsed  state        error
+extract   1    web              10:31:02  0m09s    done
+identify  1    compute li-4821  10:33:40  1m38s    done         → matched, consensus 1.00, 8 windows
+chroma    1    compute li-4821  10:35:41  0m13s    done
+sync      1    compute li-4821  10:35:54  0m01s    done         → 412 measures, crowding 0.000, span 1.00
+fetch     1    compute li-4821  10:35:55  0m02s    done
+embed     1    compute li-4821  10:35:57  4m10s    failed       transient  CommandFailed: Rendering the video failed
+embed     2    compute li-4821  10:41:12  4m08s    failed       exhausted  CommandFailed: Rendering the video failed
+
+embed attempt 2
+  inputs   video input/video.mp4 (16.4 MB)  measures work/3263f4b50583/measures.data (412 rows)
+           package Op.39_…  bands 71  style {aspect 16/9, band bottom, bg none, ink #1c1622}
+  outputs  none
+  commands
+    $ ffprobe -v error -print_format json -show_format -show_streams input/video.mp4          rc 0   0.2s
+    $ ffmpeg -y -f concat -safe 0 -i /tmp/videosync-x/bands.txt -vf scale=1306:244,… band.mp4  rc 0   31.4s
+    $ ffmpeg -y -f lavfi -i color=c=0x141019:s=1920x1080:r=25 -i input/video.mp4 -i band.mp4 \
+        -filter_complex "[0:v]scale=…" -map "[out]" -map 1:a:0 -c:a aac -b:a 192k \
+        -c:v libx264 -crf 20 -preset medium -pix_fmt yuv420p -t 435.096 Op.39_….attempt2.part.mp4   rc 137  3m36s
+  error    CommandFailed (transient→exhausted): Rendering the video failed
+  stderr   … [libx264 @ 0x55d] frame= 5391 fps=24 q=28.0 size= 61440kB time=00:03:35.64 bitrate=2333.6kbits/s
+           Killed
+  log      logs/3263f4b50583/embed.attempt2.log   (tools/queue.py logs 3263f4b50583 embed 2)
+  dead     vsw.dead #17  — tools/queue.py replay 3263f4b50583 embed
+
+narrative (job.log, 41 lines) — tools/queue.py show --full
+```
+
+An HTTP twin, `GET /internal/jobs/<id>/diagnostics` returning the same
+as JSON, is bound to loopback and the VLAN only, for `curl` from the web
+box; no public admin surface (§17).
+
+### 7.7 What survives the singleton
+
+| Artefact | Where it lives | Written when |
+|---|---|---|
+| `stage_runs` rows, `jobs` state | web box, SQLite | every `started` / `finished` / `failed` / `interrupted` event, at once |
+| the narrative `job.log` | web box | every `log` event, at once |
+| per-attempt logs with full stderr and tracebacks | bucket `logs/<job>/…` | PUT at the end of every attempt, before its final event |
+| the dead record | broker (durable queue, on the web box) | published before the failing stage acks |
+| supervisord per-program logs — the only trace of a program that **died without raising** (OOM, native abort, `kill -9`, destroy) | bucket `logs/instances/<instance_id>/` | `logship` program: every 60 s, and once more at shutdown |
+| ffmpeg's partial `.part` output | the singleton's disk | not preserved; it is an incomplete encode and its stderr already says why |
+
+To make the last shipment happen, the scaler does not `DELETE` a running
+instance: it issues Linode's `shutdown`, waits for `offline` (SIGTERM
+reaches supervisord → each program's `handle_shutdown_signal` → the
+broker requeues at once; `logship` runs its final sync), then `DELETE`
+(§9.4). The window in which a program dies *and* its last minute of log
+is lost is therefore a hard kill of the instance by the provider, not a
+normal destroy.
 
 ---
 
 ## 8. Consumer mechanics — what changes in the copied base classes
 
-### 8.1 Copy, do not import
+### 8.1 One program per stage, each under the interpreter that owns its library
 
-§3.1: `import config` at `config.py:128` fails without VideoScoreSync's
-`.env`; guest credentials; no confirms. Copy both into
-`app/queue/amqp.py` (~150 lines after the edits below).
+Today three interpreters exist because no single environment can hold
+cairo, torch and numba together; Flask's process therefore reaches
+recognition and alignment through **runner scripts** it spawns with the
+right interpreter and talks to through JSON files and exit codes:
+
+| Today | What it costs the owner when something breaks |
+|---|---|
+| `tools/identify_runner.py`, driven by `app/identify.py:206-262` | `_run` waits on a child, `_failure` (`:254-262`) reconstructs a reason from the **last line of stderr** and a substring match on `"No module named"` |
+| `tools/sync_runner.py`, driven by `app/sync.py:118-158` | `_status` (`:197-218`) substring-matches `"LLVM ERROR"` / `"Symbol not found"` in the child's output to guess a config problem, otherwise reports "exited with code N: <last line>" |
+
+With one program per stage, **each program runs under the interpreter
+that can import its library**, so both runners are deleted and the
+string-matching with them:
+
+| Program | Interpreter | Imports directly | Replaces |
+|---|---|---|---|
+| `identify` | engine env (`ID_PYTHON`) | `weefeen_id.aggregate.identify_aggregated`, `load_v6_indexes` — once, at start | `tools/identify_runner.py`; `identify.py:206-262`. `app/identify.py` keeps `Identification`, `Candidate`, the `outcome` rule and the too-short / no-audio gates as plain functions used by the program. |
+| `chroma`, `sync` | engine env (`SYNC_PYTHON`) | `services.audio_to_chroma.audio2chroma`, `services.audio_synchronization_service.wfn_combination_selector` from `VSS_ROOT` on `sys.path`, read-only, `PYTHONDONTWRITEBYTECODE` as today | `tools/sync_runner.py`; `sync.py:118-158` and `_status` at `:197-218`. `app/sync.py` keeps `Alignment`, `PartialRecording`, `MAX_CROWDING`, `SPAN_RANGE` and the checks as a pure function over the rows. |
+| `extract`, `fetch`, `embed`, `events`, `notify`, `scaler` | app env | ffmpeg via `shell.run`, boto3, pika, `render.render()` | nothing to delete; `render._run` and `probe` gain the command record (§7.4) |
+
+What replaces `_status()`'s guesses, case by case:
+
+- **A wrong environment** (the `"No module named"` and `"Symbol not
+  found"` cases) fails at **program start**: the import raises with a
+  full traceback in the program's own stderr log, or — for the SVML
+  abort, which cannot be caught — a **startup self-test** runs
+  `audio2chroma` on a bundled one-second WAV before the program
+  connects to the broker. An abort there is a crash loop that
+  supervisord reports as `FATAL` after its retries, visible in
+  `tools/queue.py compute`, with the LLVM line in `chroma_err.log`. No
+  message is ever consumed by a broken program. The same self-test runs
+  in `deploy/compute-image.sh` before the image is baked.
+- **A failure on a particular file** is a Python exception in the
+  program that ran the library: class, message and traceback go into
+  `stage_runs` and the per-attempt log. `PartialRecording` is raised by
+  the sync program itself, not reconstructed from a JSON field.
+- **A native abort on a particular file** (the rare segfault in a
+  codec) kills the program. supervisord restarts it; the broker
+  requeues on the dropped connection; the next attempt records the
+  previous one as `interrupted` with a pointer to the shipped program
+  log, which holds the abort's last words; the cap turns a repeat into
+  `exhausted`. If such aborts ever become common, the escalation is to
+  run the library call in a child *process of the same interpreter*
+  (`multiprocessing`, `spawn`) so the program survives and captures the
+  signal — no runner script, no second interpreter, just a fork
+  boundary — but that is not proposed now.
+
+**A fact to act on before step 2, outside this repo:** the engine
+interpreter (`2026liszt`: torch 2.11, librosa) has **no `pika`** and no
+`boto3`; the app interpreter (VideoScoreSync env: pika 1.3.2, librosa)
+has no torch. The engine-env programs need both installed there — one
+line the owner runs himself (`<ID_PYTHON> -m pip install pika boto3`);
+the webapp never modifies that environment. On the Linux image it is
+moot: `deploy/compute-image.sh` builds the `engine` env from a lock file
+that lists them.
 
 ### 8.2 The hour-long callback vs the heartbeat
 
@@ -474,7 +828,8 @@ day on redelivery. It works by accident.
 The connection thread loops `connection.process_data_events(time_limit=1)`
 while a worker thread runs the handler; the worker hands `ack` / `nack` /
 `publish` back through `connection.add_callback_threadsafe(...)`
-(pika's `BlockingConnection` is not thread-safe). About 40 lines.
+(pika's `BlockingConnection` is not thread-safe). About 40 lines, in the
+one copied base class every program shares.
 
 **Why not `heartbeat=0`:** it disables dead-peer detection. When the
 scaler destroys the singleton mid-job, the unacked message stays bound
@@ -496,8 +851,11 @@ encode. In `rabbitmq.conf`:
 consumer_timeout = 10800000     # 3 h, ms; longer than the longest embed at MAX_DURATION_MINUTES
 ```
 
-(3.12+ also takes a per-queue `x-consumer-timeout`.) Verify the
-installed version before step 4.
+On www this is the **shared** broker's setting (§15.1): it applies to
+the PHP consumers too, and only loosens — they ack in seconds and never
+notice. If the broker is ≥ 3.12, prefer the per-queue
+`x-consumer-timeout` on `vsw.embed` and leave the global alone. Verify
+the installed version before step 4.
 
 ### 8.4 Other changes to the copies
 
@@ -506,16 +864,22 @@ installed version before step 4.
   error on failure, replacing "publish without confirmation, trust the
   broker" (`publisher_base_queue.py:48-49, 63`). A consumer that cannot
   publish its successor must not ack.
-- One long-lived publishing channel per process instead of a connection
+- One long-lived publishing channel per program instead of a connection
   per message with a `sleep(0.1)` (`:35-59`).
-- DLX on every work queue: `x-dead-letter-exchange: vsw.dlx` → `vsw.dead`.
+- DLX on every work queue: `x-dead-letter-exchange: vsw.dlx` → `vsw.dead`;
+  plus the explicit dead record of §7.5.
 - The unconditional completion check and re-publish-on-complete (§6.2).
-- The batch process consumes four queues on one channel with a
-  channel-level `prefetch_count=1` (`global=True`), which is what makes
-  "one heavy ticket at a time" structural rather than conventional.
+- The stage shell is **one function** shared by every program —
+  `serve(queue, handler, interpreter_selftest)` — so the protocol of
+  §6.1 exists once and a program file is ~30 lines: import the library,
+  define `handle(task, paths, store, log)`, call `serve`.
 - Keep `handle_shutdown_signal` (`consumer_base_queue.py:90-93`): a
   Linode shutdown becomes SIGTERM via supervisord, the connection closes
   cleanly, the unacked message is requeued at once.
+- One supervisord `[program:<stage>]` per queue, `autorestart=true`,
+  `stdout_logfile` / `stderr_logfile` per program as
+  `supervisord_embed_score.conf:5-12` does; the `.conf` files are
+  generated from `.env` by `deploy/`.
 
 ### 8.5 The local-development escape hatch
 
@@ -526,20 +890,27 @@ while the broker path calls `process_sync_video` in
 `consumer_sync_video_queue.py:45-97` — two copies of one body, the
 inline one without flags or acks.
 
-Keep **one** escape hatch, structured so it cannot diverge:
+Keep **one** escape hatch, structured so it cannot diverge, and keep
+the per-interpreter split even without a broker — a thread pool in one
+process cannot import cairo and torch together, so "inline" here means
+**the same per-stage programs reading a directory instead of a queue**:
 
 ```ini
-QUEUE_TRANSPORT=amqp | inline
+QUEUE_TRANSPORT=amqp | files
 ```
 
-Every stage is a pure function `handle_<stage>(task, paths, store) -> Task | Event`.
-The AMQP consumer is a 30-line shell around it; the inline transport is
-a different 30-line shell running the same handler on a thread pool in
-one process, same flags, same events into the same table. The bodies
-exist once. Inline is also **the single-machine deployment of steps
-1–3**, so it is not dead code; Docker Desktop runs the real broker on
-Windows for the integration test before each release (the owner already
-has `windows.docker` in `config.py:17`).
+`files`: `WORK_DIR/queue/<stage>/<ts>-<job>.json`, claimed by
+`os.replace` into `claimed/` (atomic on both OSes), acked by delete,
+dead-lettered by move into `dead/`; events written straight into
+`jobs.sqlite` and `job.log` by the program (same machine). ~60 lines.
+`tools/workers.py` starts the programs with their interpreters on
+Windows the way supervisord does on Linux. The handler bodies, the
+protocol of §6.1, the logs and the records are identical in both modes;
+only the transport and the events sink are adapters. `files` is also
+**the single-machine deployment of steps 1–3**, so it is not dead code;
+Docker Desktop runs the real broker on Windows for the integration test
+before each release (the owner already has `windows.docker` in
+`config.py:17`).
 
 Testing the CPU path on a machine with a GPU: set
 `CUDA_VISIBLE_DEVICES=-1`. The empty string is **not** equivalent — it
@@ -561,7 +932,7 @@ CUDA:
 
 | Image | Contents | Size | Fits the custom-image limit (~6 GB compressed — **verify**) |
 |---|---|---|---|
-| CPU-only, everything | Debian; ffmpeg; an `app` env (Pillow, cairosvg + cairo, boto3, pika, this repo); an `engine` env (torch **CPU** wheel ~200 MB, the 165 MB transcription checkpoint, librosa, soundfile, numba **with SVML** — `icc_rt` from conda or pip numba; the abort at `sync.py:210` is exactly this condition, test `audio2chroma` before baking); checkouts of VideoScoreSync (`api_audio` + two services) and music_finrgerprint (`src/weefeen_id`, 9 MB indexes); the score library; supervisord | ~2.5–3.5 GB | yes |
+| CPU-only, everything | Debian; ffmpeg; an `app` env (Pillow, cairosvg + cairo, boto3, pika, this repo); an `engine` env (torch **CPU** wheel ~200 MB, the 165 MB transcription checkpoint, librosa, soundfile, numba **with SVML** — `icc_rt` from conda or pip numba; the abort at `sync.py:210` is exactly this condition, and the chroma program's self-test runs in the image build); checkouts of VideoScoreSync (`api_audio` + two services) and music_finrgerprint (`src/weefeen_id`, 9 MB indexes); the score library; supervisord with one program per stage plus `logship` | ~2.5–3.5 GB | yes |
 | with CUDA (not chosen) | + torch+cu12x ~2.5 GB + CUDA libraries + driver | 5–10 GB | no, or barely |
 
 Two interpreters on the singleton rather than three: `2026liszt`
@@ -578,7 +949,19 @@ today. The `app` env stays separate for cairo.
 The image is built by `deploy/compute-image.sh` in this repo — the
 owner's "deployment in the webapp" — from the two lock files, and
 rebuilt when they change; an image-version tag on the instance lets the
-scaler refuse a stale one.
+scaler refuse a stale one. **The build fails unless the image proves
+itself**, in this order, before it is captured: every module each stage
+imports, imported under that stage's interpreter (`weefeen_id`,
+`services.audio_to_chroma`, `services.audio_synchronization_service`,
+`app.render`, `pika`, `boto3`); `audio2chroma` on a bundled 1-second WAV
+(the SVML abort); `identify_aggregated` on a bundled 30-second clip;
+`render.render()` on a 2-second fixture through the real ffmpeg; and
+every program's `/metrics` answering on its port. A broken image then
+fails at build, in front of a person, rather than at three in the
+morning under a visitor's job. VideoScoreSync's `embed_score_err.log`
+ending in `ImportError: libGL.so.1` is the kind of thing this catches —
+that file is dated 2025-04-22, sixteen months old, evidence that it
+broke once, not of the current state; the check stands on its own.
 
 ### 9.2 Isolation — Linode's "private IP" is not private to the account
 
@@ -588,11 +971,14 @@ shared with strangers. The boundary is a **Linode VLAN** (account-
 isolated Layer 2; region-dependent — **verify the region**) plus a
 **Cloud Firewall** on each box.
 
-- Web box: VLAN interface `10.0.0.2/24` (adding one to an existing
-  Linode needs a reboot); RabbitMQ bound to `10.0.0.2` only — never
-  `0.0.0.0`, never the shared private IP; management API on loopback.
-  Cloud Firewall: public inbound 22 from the admin address, 80/443 from
-  anywhere, drop the rest.
+- Web box (www): VLAN interface `10.0.0.2/24` (adding one to the
+  existing Linode needs a reboot — schedule it with the site's owner).
+  The existing broker gets **one additional TLS listener on
+  `10.0.0.2:5671`** for us; its current listener for the PHP consumers
+  is untouched, and nothing of ours listens on `0.0.0.0` or the shared
+  private IP; management API on loopback. Cloud Firewall: public inbound
+  22 from the admin address, 80/443 from anywhere, drop the rest —
+  checked against what the Symfony site already needs before applying.
 - Singleton: created **with** a VLAN interface at the fixed
   `ipam_address 10.0.0.3/24`. Cloud Firewall: public inbound 22 from the
   admin address only. Its public IP changes on every create and
@@ -617,10 +1003,10 @@ Better, and not much more work:
 1. **Per-instance, short-lived credentials created by the scaler at
    create time and revoked at destroy.** RabbitMQ: `PUT /api/users/vsw_c_<id>`
    with a random password; permissions read on the work queues, write
-   on `^vsw\.(sync|fetch|embed|events)$`. Object storage:
+   on `^vsw\.(sync|fetch|embed|events|dead)$`. Object storage:
    `POST /v4/object-storage/keys` with `bucket_access` limited to the
-   `vsw` bucket. Both deleted on destroy; `tools/queue.py --gc` sweeps
-   any left by a crashed destroy.
+   `vsw` bucket. Both deleted on destroy; `tools/queue.py compute --gc`
+   sweeps any left by a crashed destroy.
 2. **Delivered through cloud-init `user_data`** on the create call
    (Linode Metadata; region-dependent — **verify**). The image holds no
    secrets; first boot writes `/etc/vsw/env` and starts supervisord.
@@ -657,19 +1043,24 @@ Behaviour on the awkward paths:
 |---|---|
 | Scaler restarts while the row says `creating` | On start it reconciles against the API: instance labelled `vsw-compute` exists → adopt (row → `running`, wait for the VLAN address to answer); none and `lease_until` passed → delete the row, next tick creates afresh. |
 | Create fails halfway (API accepted, then provisioning error) | The API call returns an instance id first; the row records it immediately. On error the scaler destroys that id if it exists and clears the row. Reconciliation on the next start does the same for anything it does not remember. |
-| Destroy fires just as a ticket is published | Immediately before `DELETE`, one last management-API read; if anything is ready or unacked, abort the destroy. The remaining window is that read's latency. If a message still lands inside it: not yet consumed → stays `ready`, the next tick creates again (~2–3 min of latency, nothing lost); consumed and unacked → SIGTERM on shutdown requeues it at once, or the heartbeat does within ~2 min. |
-| Destroy call fails | Row stays `destroying`; retried each tick; `tools/queue.py --gc` for the rest. |
-| Web box down for an hour | The singleton keeps draining (it talks to the broker, which is down too — no: the broker is on the web box, so consumers reconnect with backoff as `consumer_base_queue.py:64-70` already does, and finish what they hold when it returns). Unacked work is requeued by the reconnect and skipped by HEAD. |
+| Destroy fires just as a ticket is published | Immediately before the shutdown, one last management-API read; if anything is ready or unacked, abort. The remaining window is that read's latency. If a message still lands inside it: not yet consumed → stays `ready`, the next tick creates again (~2–3 min of latency, nothing lost); consumed and unacked → SIGTERM on shutdown requeues it at once. |
+| Destroy call fails | Row stays `destroying`; retried each tick; `tools/queue.py compute --gc` for the rest. |
+| Web box down for an hour | The broker is on the web box, so the singleton's programs reconnect with backoff as `consumer_base_queue.py:64-70` already does, and finish what they hold when it returns; unacked work is requeued by the reconnect and skipped by HEAD. `logship` keeps shipping to the bucket meanwhile, so nothing diagnostic is lost either. |
 
 The loop, every `COMPUTE_POLL_SECONDS`:
 
 ```
 depths = management API: messages_ready, messages_unacknowledged per vsw.{identify,chroma,sync,fetch,embed}
 row    = compute (or none)
-if any ready > 0 and row is none:                        → claim lease; CREATE (image, type, region, VLAN .3,
-                                                           firewall, user_data with fresh credentials, label)
+if any ready > 0 and row is none:                        → claim lease; CREATE (image, type, REGION = www's region — a VLAN
+                                                           does not cross regions, so this is a hard requirement — VLAN .3,
+                                                           firewall, user_data with fresh credentials, label);
+                                                           write deploy/targets/compute.json so Prometheus scrapes it (§14.4)
 if row.running and all ready == 0 and all unacked == 0:  → idle_since = idle_since or now
-                                                           if now − idle_since ≥ COMPUTE_GRACE_SECONDS: re-read; DESTROY; revoke
+                                                           if now − idle_since ≥ COMPUTE_GRACE_SECONDS:
+                                                               re-read; row → draining; POST …/shutdown;
+                                                               wait for offline (≤ 90 s; logship's final sync happens here);
+                                                               DELETE; revoke credentials; empty targets/compute.json; delete row
 else:                                                    → idle_since = null
 write compute.state into the table for /status ("compute": none | creating | running)
 ```
@@ -730,19 +1121,28 @@ dependency.
 
 ### 10.2 Upload — parametric in the caps
 
-**Small end (≤ ~2 GB):** as today — browser → Flask (`MAX_CONTENT_LENGTH`)
-→ the web box PUTs to `uploads/<job>/` and deletes its copy after
-extract. Scratch disk equal to the cap.
+**At 4 GB (§1.1) — the path we ship:** browser → Apache → gunicorn →
+Flask (`MAX_CONTENT_LENGTH` raised to 4 GB) → a staging file on the block
+volume (§15.1) → PUT to `uploads/<job>/`, local copy deleted after
+extract. What Apache needs for that body: `ProxyTimeout 3600` (the
+default is 60 s; 4 GB at 20 Mbit/s takes ~27 min) and a matching
+gunicorn `--timeout`; nothing for the size itself — `LimitRequestBody`
+defaults to unlimited. Werkzeug streams a multipart body to a temp
+file, so RAM is not the limit; staging disk is: 4 GB × concurrent
+uploads, bounded by `LIMIT_UPLOADS_PER_HOUR` and a new
+`MAX_CONCURRENT_UPLOADS=2` that answers 503 beyond. Acceptable at this
+volume on a box with a block volume; the moment uploads contend with
+the Symfony site for bandwidth, step 7 removes the bytes from the box.
 
-**Large end:** the browser talks to the bucket directly; the web box
-sees only metadata:
+**Direct-to-bucket (step 7, optional at 4 GB):** the browser talks to
+the bucket directly; the web box sees only metadata:
 
 ```
 POST /api/uploads        {name, bytes, rights: true}
     limits.guard("upload_ip") · rights asserted here (moves from routes.py:381)
     bytes ≤ MAX_UPLOAD_GB · provisional weekly-GB budget check
     INSERT jobs(state=uploading) · CreateMultipartUpload → {job_id, upload_id, part_size: 64 MiB, parts: N}
-GET  /api/uploads/<id>/part/<n>   → one presigned PUT (presigned lazily; 10 GB = 160 parts)
+GET  /api/uploads/<id>/part/<n>   → one presigned PUT (presigned lazily; 4 GB = 64 parts)
 GET  /api/uploads/<id>/parts      → ListParts, so a reloaded page resumes
 POST /api/uploads/<id>/complete   {etags}
     CompleteMultipartUpload · HEAD confirms size
@@ -769,15 +1169,18 @@ promises.
 ### 10.4 Lifecycle, and what dies with the singleton
 
 ```
-uploads/ 7 days      audio/ work/ 30 days      results/ 30 days
+uploads/ 7 days      audio/ work/ 30 days      results/ 30 days      logs/ 90 days
 ```
 
-Every stage's output reaches the bucket before its flag, so a destroyed
-instance loses exactly the stage that was running. Its disk is a cache.
-Storage at the large end: a 60-minute result at today's output bitrate
-(1.9 Mbit/s) is ~0.85 GB, ten a day for 30 days ≈ 250 GB; uploads at
-10 GB × 7 days dominate, ten a day ≈ 700 GB — a few dollars a month
-either way; egress is the visitors' downloads, cents.
+Every stage's output reaches the bucket before its flag, and every
+attempt's log before its final event, so a destroyed instance loses
+exactly the stage that was running and at most the last minute of its
+program log. Its disk is a cache. Storage at the caps of §1.1: a
+40-minute result at today's output bitrate (1.9 Mbit/s) is ~0.57 GB,
+ten a day for 30 days ≈ 170 GB; uploads at ≤ 4 GB × 7 days, ten a day
+≤ 280 GB and typically a tenth of that — inside Linode Object Storage's
+250 GB base plan or cents of overage; logs are kilobytes; egress is the
+visitors' downloads, cents.
 
 ---
 
@@ -795,8 +1198,8 @@ workstation.
 
 ### 11.2 Position and ETA — exactly
 
-One instance drains sequentially, so "ahead" is everything unfinished,
-in queue order:
+One embed consumer drains sequentially, so "ahead" is every unfinished
+job, in queue order:
 
 ```
 est(J)      = Σ_stage (k0 + k_d·D_J + k_g·G_J)  over the stages J has not completed
@@ -823,30 +1226,32 @@ consumer). ~20 lines; skip in step 1, add with the rank in step 3.
 
 ### 11.3 Capacity, and where create/destroy pays
 
-Compute-hours per week = jobs × est / 60, with est at 1 GB per job
-(add 7 min per extra GB while the owner's per-GB term stands) plus the
-cold start and grace **once per session** — here assumed at one session
-per five jobs (2 min create + 30 min grace ≈ 6.4 min per job).
+With the 40-minute ceiling every job costs `≈ 3 + 0.82·D` minutes of
+compute (identify 2, chroma/sync/extract ~1, encode 0.82 per minute of
+music, fetch seconds at ≤ 4 GB) plus the cold start and grace **once per
+session** — assumed here at one session per five jobs (2 min create +
+30 min grace ≈ 6.4 min per job). Rows are real Chopin lengths; the last
+is the ceiling.
 
 | min/job ↓ · jobs/week → | 5 | 20 | 50 | 100 | 200 |
 |---|---|---|---|---|---|
-| **5** | 1.6 h | 6.3 h | 16 h | 32 h | 63 h |
-| **15** | 2.3 h | 9.0 h | 23 h | 45 h | 90 h |
-| **30** | 3.3 h | 13 h | 33 h | 65 h | 130 h |
-| **60** | 5.3 h | 21 h | 53 h | 107 h | 213 h ✗ |
-| **90** | 7.4 h | 29 h | 74 h | 148 h | 295 h ✗ |
+| **8** (a nocturne) | 1.3 h | 5.4 h | 14 h | 27 h | 54 h |
+| **15** (a ballade) | 1.8 h | 7.3 h | 18 h | 37 h | 73 h |
+| **25** (a sonata's half) | 2.5 h | 10 h | 25 h | 50 h | 100 h |
+| **40** (the ceiling) | 3.5 h | 14 h | 35 h | 71 h | 141 h |
 
-✗ = more than a week holds; a bigger plan (the singleton stays one).
 Dollars: ~$0.216/h → **$/month ≈ h/week × 0.94**; always-on the same
-plan is $144/month ≈ 150 h/week. Every cell but ✗ is cheaper created on
-demand; the owner's "handful a day" (≤ 50/week, mostly ≤ 30 min) is
-**$3–35/month** of compute plus $12 for the page. Prices are
+plan is $144/month ≈ 150 h/week, which no cell reaches. The owner's
+"handful a day" (≤ 50/week, typically 8–15 min) is **$5–17/month** of
+compute; the page itself now costs nothing extra (§15.1). Prices are
 placeholders for the current list.
 
-Saturation of the current limits: 3 jobs/week/IP × 90 min = 270 min per
-visitor per week; **37 visitors** at full allowance fill the singleton
-24/7; at typical 10-minute pieces, 336. Under create/destroy
-"saturation" means a growing queue and bill, which §11.5 caps.
+Saturation: at the worst case, 3 renders × 36 min = 108 compute-minutes
+per visitor per week, so **93 visitors** all at the ceiling fill the
+singleton 24/7; at typical 12-minute pieces (~13 compute-minutes each),
+~260. Under create/destroy "saturation" means a growing queue and bill,
+which §11.5 caps. A session of three typical jobs keeps the singleton
+alive ~45 min plus the 30-min grace; one full-length job, ~36 + 30.
 
 ### 11.4 Budgets on both axes — replacing the job count
 
@@ -855,37 +1260,38 @@ or 4½ hours, 50 MB or 30 GB; the count bounds neither axis. Replace it:
 
 ```ini
 # Per visitor (by address, and by email), sliding week, as limits.py already counts.
-LIMIT_DURATION_MINUTES_PER_WEEK=60    # three 20-minute pieces, or one recital
-LIMIT_UPLOAD_GB_PER_WEEK=6            # 3 × MAX_UPLOAD_GB at the small end; bites at the large end
-LIMIT_RENDERS_PER_WEEK=10             # kept only as a floor: every job pays a fixed ~2 min that neither axis
+LIMIT_DURATION_MINUTES_PER_WEEK=120   # three full-length pieces, or ten nocturnes
+LIMIT_UPLOAD_GB_PER_WEEK=12           # 3 × MAX_UPLOAD_GB
+LIMIT_RENDERS_PER_WEEK=10             # kept only as a floor: every job pays a fixed ~3 min that neither axis
                                       # captures; 10 never binds for a person
-# Per job (§1)
-MAX_UPLOAD_GB=2
-MAX_DURATION_MINUTES=90
+# Per job (§1.1)
+MAX_UPLOAD_GB=4
+MAX_DURATION_MINUTES=40
 ```
 
-Arithmetic: 60 video-minutes ≈ 2 + 0.8 × 60 ≈ 50 processing-minutes ≈
-$0.18 of compute per visitor per week; 6 GB ≈ 42 minutes more if the
-per-GB term holds, ≈ $0.15; plus ≤ 6 GB × 7 days in the bucket. Ten
-such visitors a week: **under $20/month**. The duration budget is
-checked at `POST /render` against `duration_s` (exact) and both budgets
-provisionally at `POST /api/uploads`. A permanent failure still spends
-the budget — refunding it would make "upload a partial recording" a
-free way to burn compute; the visitor is told why and the upload is
-kept.
+Arithmetic, worst case: 120 video-minutes ≈ 3 × (3 + 0.82 × 40) ≈ 108
+compute-minutes ≈ **$0.39 per visitor per week**, plus ≤ 12 GB × 7 days
+in the bucket. Typical case, three 12-minute pieces: ~39 compute-minutes
+≈ $0.14. Ten visitors a week at the worst case: under $17/month. The
+duration budget is checked at `POST /render` against `duration_s`
+(exact) and both budgets provisionally at `POST /api/uploads`. A
+permanent failure still spends the budget — refunding it would make
+"upload a partial recording" a free way to burn compute; the visitor is
+told why and the upload is kept.
 
 ### 11.5 Admission control in minutes
 
 ```ini
-MAX_QUEUE_MINUTES=600     # accepted-but-unfinished processing minutes, all visitors
+MAX_QUEUE_MINUTES=240     # accepted-but-unfinished processing minutes, all visitors
 ```
 
 At submit, if `cold + remaining(R) + Σ est(ahead) + est(new) > MAX_QUEUE_MINUTES`,
 refuse with `503` + `Retry-After`: "The queue is about N hours long
-right now. Your upload is kept for 7 days — try again after HH:MM." Ten
-hours rather than four because delivery is by mail (§13.2): "by
-tomorrow morning", said honestly, is served; the cap bounds the bill and
-the bucket, not the visitor's patience.
+right now. Your upload is kept for 7 days — try again after HH:MM." Four
+hours is six full-length jobs or about twenty typical ones ahead — an
+evening's burst — and with the 36-minute ceiling no honest ETA inside
+it is "tomorrow". Delivery is by mail (§13.2), so the cap bounds the
+bill and the bucket, not the visitor's patience; it is easy to raise.
 
 ---
 
@@ -902,7 +1308,7 @@ promise; the copy changes regardless.
 | Option | First visitor of an idle gap | Visitor while the singleton is up | Money | Side effects |
 |---|---|---|---|---|
 | **(a) on the singleton** (default) | ~2 min create + warm recognition on 8 dedicated cores (est. 60–110 s; the 130 s cold figure minus ~20 s of import/load, on a stronger CPU — **measure**) ≈ **3–4 min** | warm recognition only ≈ **1–2 min** | none extra | Recognition and an in-flight encode share the cores (§2's `SIGSTOP` if it matters). The singleton is created at `…/complete`, so an abandoned upload costs one create + grace ≈ $0.12. |
-| **(b) on the web box** | recognition on the small plan's CPU, no create: est. **2–5 min** on 2 shared vCPUs, less on a dedicated plan — **measure** | same | web plan 2 GB → 4 GB, +$12/month shared or +$24 dedicated (torch CPU + checkpoint need ~2 GB resident) | A recognition can make the site sluggish; serialise with the existing `identify.py:43` semaphore (kept, on the web box) and a queue depth of one or two, refusing beyond with "busy, try in a minute". The singleton becomes purely batch and strictly sequential, created at submit rather than at upload. |
+| **(b) on the web box** | recognition on the small plan's CPU, no create: est. **2–5 min** on 2 shared vCPUs, less on a dedicated plan — **measure** | same | web plan 2 GB → 4 GB, +$12/month shared or +$24 dedicated (torch CPU + checkpoint need ~2 GB resident) | **www is the live Symfony host (§15.1)**: torch's 2 GB resident and minutes of multi-threaded CPU per recognition would land beside their site. If tried anyway: serialise with the existing `identify.py:43` semaphore (kept, on the web box), a queue depth of one or two, refusing beyond with "busy, try in a minute", `nice -n 10`. The singleton becomes purely batch, created at submit rather than at upload. The identify program is the same file either way; only its supervisor host changes. |
 | (d) non-blocking: accept, recognise with everything else, mail "we think it is X — confirm or choose" | never waits | never waits | cheapest | A product change: the visitor returns once. **Decision E, the owner's.** |
 | (e) a torch-free first guess on the web box | seconds | seconds | nothing | music_finrgerprint's librosa-only pipelines (`pipeline.py`, `pipeline_v4.py`; indexes `data/index.pkl`, `chord_index.pkl`, `pitch_index.pkl` present). **I do not know why AMT superseded them; the owner does.** If their accuracy was acceptable, this alone keeps "a few seconds" literally true, with AMT confirming later on the singleton. A day's experiment. |
 
@@ -962,7 +1368,7 @@ inverted and the docstring must say so. Three mails per job through
 |---|---|---|
 | `queued` | at submit | position, ETA as a clock time (§11.2), "you can close this page", the link that will work later |
 | `ready` | on `embed.done` | the link (`notify.py:37-73`, unchanged in substance), how long it is kept |
-| `failed` | on `failed(permanent | config | exhausted)` | the stage's own message; for config, "our side" |
+| `failed` | on `failed(permanent | exhausted)` | the stage's own message; for anything that is our fault, say so |
 
 Guarantees:
 
@@ -977,97 +1383,499 @@ Guarantees:
   skipped result mail is now a visitor who never learns. The
   per-address cap counts **jobs**, not mails; `mail_total` (200/day)
   **defers** `ready`/`failed` to the next window and drops only `queued`.
-- No address verification (§15); the render limits already gate the
+- No address verification (§17); the render limits already gate the
   address, and a typed address remains the abuse vector `limits.py:73`
   describes.
 
 ---
 
-## 14. Migration path — each step shippable and verified; step 1 is one machine
+## 14. Observability — designed fresh, and verified at every step
 
-**Step 1 — job table and one-at-a-time rendering, one machine, no broker
-(~250 lines).** `jobs.sqlite` with `jobs`, `stage_runs`, `calibration`;
-`Job`/`Registry` over it; state `queued`; one render worker thread with
-a FIFO; `position` and `eta_at` exactly as §11.2 with `cold = 0` and
-§1's defaults; `routes.py:459` refuses `queued` too; both UIs show "N in
-line, ready by about HH:MM"; SSE removed, `/status` polled;
-`MAX_DURATION_MINUTES` enforced at upload beside the existing byte cap.
+The owner: *"visualize the performance of our tool chain — time spent by
+each worker, memory used, access disk"*, with Prometheus and Grafana;
+and of his existing setup: *"I have it, but it was not working."* So
+this is not "copy VideoScoreSync's"; it is a small set of metrics each
+of which comes with the query that proves it is arriving.
+
+**Division of responsibility, stated once.** The **job table**
+(`stage_runs`, fed by `vsw.events`) is the system of record for "how
+long did stage X take on job Y, on what input, with what result" —
+durable, per job, queryable after the machine is gone; it answers the
+debugging question of §7. **Prometheus** holds resource curves and
+aggregates — quantiles, rates, queue depths, host CPU/memory/disk — and
+Grafana draws them. Neither replaces the other, and Grafana never
+answers "which stage failed with which inputs".
+
+### 14.1 Why the existing one never worked — findings, not changes
+
+VideoScoreSync is read-only; these are noted for the owner and fixed in
+the webapp's own files.
+
+1. **No worker was ever scraped.** `prometheus.yml:4-39` lists
+   `prometheus`, `dropbox_webhook`, `node_exporter_linode`,
+   `node_exporter`, `rabbitmq`, `cadvisor`, `node_exporter_local` — and
+   no job for preprocessor, extract_audio, resample_audio,
+   generate_chroma, sync_video, embed_score, upload_video or
+   postprocessor. Every `@track_task` observation and every
+   `start_metrics_server(port=PORT_*)` published to a port nothing read.
+   This alone explains "time spent by each worker" never appearing.
+2. **`worker_metrics.py` cannot be imported without `PROMETHEUS_MULTIPROC_DIR`.**
+   Lines 18-19 run `multiprocess.MultiProcessCollector(CollectorRegistry())`
+   at module import, which raises when the variable is unset. It is not
+   set in `Dockerfile`, `Dockerfile.cpu`, `Dockerfile.gpu`,
+   `docker-compose.yml` or any supervisord conf; `.env`/`.env.base`
+   were unreadable to me, so **near-certain, not verified** —
+   `prometheus_client` is not installed in the app env to reproduce it.
+   If unset, every consumer importing the module died at start. The
+   related defect: in multiprocess mode a `Gauge` needs
+   `multiprocess_mode=`; `CPU_USAGE`/`MEM_USAGE_MB`/`CURRENT_JOBS`
+   (`:28-34`) do not set it.
+3. **Host-wide numbers labelled per worker.** `CPU_USAGE` uses
+   `psutil.cpu_percent()` and `MEM_USAGE_MB` uses
+   `psutil.virtual_memory().used` (`:65-66`) — both system-wide — under
+   `worker=<pid>`. Every worker reports the same curve, which defeats
+   exactly the question being asked.
+4. **RabbitMQ scraped on the wrong port.** `prometheus.yml:27` targets
+   `15672`, the management UI; Prometheus-format metrics come from the
+   `rabbitmq_prometheus` plugin on `15692`. That scrape has been failing
+   silently.
+5. **The dashboard answers a different question.** The 699 KB
+   `dashboard_template.json` is the stock node_exporter host dashboard
+   (Network Traffic, Disk IOps, Sockstat, Systemd, TCP Stat, …): "how is
+   the machine", not "how is the tool chain".
+
+### 14.2 One stage registry, from which every artefact is rendered
+
+Root cause 1 is structural: a hand-maintained scrape file drifted from
+the worker list. The fix is that the list exists **once**, in code:
+
+```python
+# app/stages.py — the only place a stage is declared
+STAGES = (
+    Stage("extract",  queue="vsw.extract",  host="web",     env="app",    port=9301, next="identify"),
+    Stage("identify", queue="vsw.identify", host="compute", env="engine", port=9302, next=None),
+    Stage("chroma",   queue="vsw.chroma",   host="compute", env="engine", port=9303, next="sync"),
+    Stage("sync",     queue="vsw.sync",     host="compute", env="engine", port=9304, next="fetch"),
+    Stage("fetch",    queue="vsw.fetch",    host="compute", env="app",    port=9305, next="embed"),
+    Stage("embed",    queue="vsw.embed",    host="compute", env="app",    port=9306, next=None),
+    Stage("events",   queue="vsw.events",   host="web",     env="app",    port=9307),
+    Stage("notify",   queue="vsw.notify",   host="web",     env="app",    port=9308),
+    Stage("scaler",   queue=None,           host="web",     env="app",    port=9309),
+)
+```
+
+Rendered from it by `deploy/render.py` (run by the deploy script and by
+the image build): the supervisor programs for the web host and for the
+compute image; the queue declarations (`amqp.declare_all()`); the
+Prometheus static targets for the web-side programs and the shape of
+the file_sd entry for the compute side; the `.env.example` port block;
+and the expectation list of `tools/doctor.py --monitoring`. A stage
+cannot exist without a scrape target, a supervisor program and a doctor
+check, because they are the same line.
+
+### 14.3 The minimum that answers the questions — each with its proof
+
+`app/metrics.py`: **the default `CollectorRegistry`, no multiprocess
+collector, no `PROMETHEUS_MULTIPROC_DIR`** — one process per stage makes
+multiprocess mode unnecessary and removes that class of failure.
+`prometheus_client.start_http_server(stage.port)` in every program.
+
+| Metric | Type, labels | Emitted by | Proof it arrives — query, and what you should see |
+|---|---|---|---|
+| `vsw_stage_seconds` | Histogram `{stage}`, buckets 5 · 15 · 30 · 60 · 120 · 300 · 600 · 1200 · 1800 · 2700 s | each program, on `finished`/`failed` | `histogram_quantile(0.5, sum by (le, stage) (rate(vsw_stage_seconds_bucket[6h])))` → after one job, one value per stage; `embed` in the hundreds |
+| `vsw_stage_runs_total` | Counter `{stage, outcome=done|failed|retried|interrupted}` | each program | `sum by (stage, outcome) (increase(vsw_stage_runs_total[24h]))` → `done` counts equal the jobs run today |
+| `vsw_stage_media_seconds_total`, `vsw_stage_bytes_in_total`, `vsw_stage_bytes_out_total` | Counter `{stage}` | each program, on `finished` | realtime factor: `rate(vsw_stage_media_seconds_total{stage="embed"}[6h]) / rate(vsw_stage_seconds_sum{stage="embed"}[6h])` → ≈ 1.2 on the dev laptop (§14.7); GB/s: `rate(vsw_stage_bytes_in_total{stage="fetch"}[6h]) / rate(vsw_stage_seconds_sum{stage="fetch"}[6h]) / 1e9` |
+| `vsw_process_rss_bytes`, `vsw_process_cpu_seconds_total`, `vsw_process_io_read_bytes_total`, `vsw_process_io_write_bytes_total` | Gauge / Counter `{stage}` | a 5-second sampler thread in each program — **this process plus its children** (§14.5) | `max_over_time(vsw_process_rss_bytes{stage="embed"}[1h])` → > 500 MB while an encode runs (ffmpeg is a child); `rate(vsw_process_io_write_bytes_total{stage="embed"}[5m])` → non-zero during an encode |
+| `vsw_jobs_waiting`, `vsw_eta_seconds_max` | Gauge | `events` (owns the table) | `vsw_jobs_waiting` → equals `tools/queue.py list --state queued` |
+| `vsw_calibration_k` | Gauge `{stage, axis=k0|k_d|k_g}` | `events` | `vsw_calibration_k{stage="embed", axis="k_d"}` → 0.8 until ten jobs, then the measured value — the drift the owner asked to see |
+| `vsw_compute_up`, `vsw_compute_seconds_total`, `vsw_compute_creates_total` | Gauge / Counter | `scaler` | `increase(vsw_compute_seconds_total[30d]) / 3600 * 0.216` → the month's compute bill; `vsw_compute_up` → 1 while the singleton exists |
+| queue depth per queue | — | **RabbitMQ's own plugin** (§14.6), nothing to emit | `rabbitmq_detailed_queue_messages_ready{vhost="vsw"}` and `…_unacked{vhost="vsw"}` → one series per `vsw.*` queue |
+| host CPU, memory, disk I/O, filesystem | — | `node_exporter` on both hosts | `node_cpu_seconds_total`, `node_memory_MemAvailable_bytes`, `node_disk_io_time_seconds_total`, `node_filesystem_avail_bytes` |
+
+Nine application series per stage; nothing speculative. Anything the
+owner asks for later is added to `app/metrics.py` **with its proof
+query** or not at all.
+
+### 14.4 Metrics from a machine that exists only sometimes
+
+`prometheus.yml` in VideoScoreSync is all `static_configs`; the
+singleton has no fixed existence and gets its address at create.
+
+| Option | Verdict |
+|---|---|
+| **file-based service discovery** — the scaler writes `deploy/targets/compute.json` (`[{"targets": ["10.0.0.3:9302", …, "10.0.0.3:9100"], "labels": {"host": "compute", "instance_id": "li-4821"}}]`) once the VLAN address answers, and writes `[]` on destroy; Prometheus re-reads it (`refresh_interval: 30s`), no restart | **Adopt.** Keeps the pull model, and the scaler already owns the lifecycle and knows the address. |
+| Pushgateway | Rejected: metrics persist after the process dies and must be deleted explicitly; histograms lose meaning; it inverts the model for a box that is reachable over the VLAN anyway. |
+| `remote_write` from the compute box | Rejected: an agent on the machine that dies, pushing to the machine that lives — more parts on the ephemeral side for no gain. |
+
+The last seconds before a destroy: the scrape interval is 15 s and the
+shutdown path of §9.4 takes ≥ 30 s (`shutdown`, wait for `offline`), so
+the final samples are normally scraped; at worst one interval is lost.
+The per-job truth is in the table regardless. After destroy the
+compute targets vanish from `up`; the singleton's lifetime panel reads
+`vsw_compute_up` from the scaler, which does not vanish.
+
+### 14.5 Memory and CPU per worker — per process, plus children
+
+`psutil.Process(os.getpid())` for RSS and CPU time, `io_counters()` for
+disk, and **`children(recursive=True)` summed in** — ffmpeg is a child of
+the embed program and holds the memory and the I/O; without the
+children the embed program would report 50 MB while the encode used
+two gigabytes. Sampled every 5 s into the gauges of §14.3. This replaces
+`worker_metrics.py:61-72`'s host-wide `cpu_percent()` and
+`virtual_memory().used`.
+
+### 14.6 RabbitMQ's numbers
+
+Enable the `rabbitmq_prometheus` plugin on the existing broker (a
+broker-wide, harmless change, §15.1), bound to loopback
+(`prometheus.tcp.ip = 127.0.0.1`), and scrape
+`127.0.0.1:15692/metrics/detailed?vhost=vsw&family=queue_coarse_metrics`
+— the plain `/metrics` endpoint **aggregates across queues** unless
+`prometheus.return_per_object_metrics` is set, and per-queue depth is
+the whole point. The scaler keeps reading the management API's JSON for
+its create/destroy decision (§9.4); both come from the same broker
+state, so the dashboard and the scaler cannot disagree.
+
+### 14.7 Per-file time and throughput — the rates that do not lie
+
+The owner: *"how much time spent for each file and Go/s speed."* Per
+stage per job, `stage_runs` records `elapsed_s`, `bytes_in`,
+`bytes_out`, `media_s` and `queued_at` (§5). Two derived rates, each
+attributed only to the stages it characterises:
+
+| Stage | Bound by | The stable figure | A GB/s figure here would… |
+|---|---|---|---|
+| embed (encode) | media duration | **realtime factor** = `media_s / elapsed_s` — the job on disk: 435 s of music in 356 s = **1.22× realtime**; the standard way to state encoder throughput, and what a regression shows up in | measure the *input's bitrate*: a 4K source and a phone clip of the same length take the same time and show GB/s ten times apart |
+| chroma, sync, identify | media duration (identify flat) | realtime factor (identify: seconds per job) | mislead the same way |
+| fetch, extract's demux, the result PUT | bytes | **GB/s** = `bytes_in / elapsed_s` (fetch, extract) or `bytes_out / elapsed_s` (PUT) | — this is where it belongs |
+
+No single global "GB/s" is shown anywhere. The per-**file** roll-up,
+because "it was slow" and "it waited" are different complaints:
+
+```
+tools/queue.py show <job>            (the time section)
+                          queued   work     realtime   GB/s
+  extract    0m01s        0m09s    —        0.18
+  identify   2m10s ← waited for the singleton to be created
+             0m00s        1m38s
+  chroma     0m00s        0m13s    33×
+  sync       0m00s        0m01s
+  fetch      0m00s        0m02s    —        0.9
+  embed      0m00s        5m56s    1.22×
+  ─────────────────────────────────────────
+  uploaded → done   10m10s   =  2m11s waiting  +  7m59s working
+```
+
+The same roll-up is a Grafana panel ("last 20 jobs: waiting vs working,
+stacked") and the same rows feed `calibration` (§11.1). **One mechanism —
+`stage_runs` — serves debugging (§7), monitoring (this section) and
+estimation (§11); there is no second timing system.**
+
+### 14.8 The dashboard — `deploy/grafana/dashboards/vsw-pipeline.json`
+
+Hand-authored, small, about the pipeline; provisioned by the compose
+file. Twelve panels:
+
+| # | Panel | Query |
+|---|---|---|
+| 1 | Time per stage, p50 / p90 / max (bar gauge) | `histogram_quantile(0.5|0.9, sum by (le, stage) (rate(vsw_stage_seconds_bucket[24h])))` |
+| 2 | Time per stage over time (p50 lines) | same, `[1h]`, time series |
+| 3 | Realtime factor, embed and chroma | §14.3's ratio, per stage |
+| 4 | GB/s, fetch and extract | §14.3's ratio, per stage |
+| 5 | Last 20 jobs: waiting vs working (stacked bars) | from the table via Grafana's SQLite datasource plugin, or `vsw_job_*` gauges the events program exposes for the last N jobs — choose the plugin; it reads `stage_runs` directly |
+| 6 | Queue depth per `vsw.*` queue, ready and unacked | `rabbitmq_detailed_queue_messages_ready{vhost="vsw"}`, `…_unacked` |
+| 7 | Jobs waiting and current max ETA | `vsw_jobs_waiting`, `vsw_eta_seconds_max` |
+| 8 | Failures and retries per stage (24 h) | `increase(vsw_stage_runs_total{outcome!="done"}[24h])` by stage, outcome |
+| 9 | Singleton: up / creating timeline, creates this month, hours and $ | `vsw_compute_up`, `vsw_compute_creates_total`, `increase(vsw_compute_seconds_total[30d])/3600 * $price` |
+| 10 | Memory per program (RSS incl. children) | `vsw_process_rss_bytes` by stage |
+| 11 | Disk I/O per program | `rate(vsw_process_io_{read,write}_bytes_total[5m])` by stage |
+| 12 | Calibration constants vs defaults | `vsw_calibration_k` by stage, axis, with the §1 defaults as thresholds |
+
+A host dashboard sits beside it: import "Node Exporter Full"
+(grafana.com ID 1860) by ID for both hosts rather than vendoring 699 KB.
+
+### 14.9 Containers and cAdvisor — no
+
+cAdvisor reports per-container use, so it helps only if the workers run
+in containers. The compute image runs **bare supervisord, no Docker**:
+one fewer layer on a machine that must be useful ninety seconds after
+it exists, and §14.5's per-process metrics answer the per-worker
+question more precisely than per-container ones would. On www,
+Prometheus, Grafana and node_exporter run under Docker because Docker
+is already there; cAdvisor is not needed for our question and is not
+run.
+
+### 14.10 Where it runs, and what it costs a production box
+
+On www (§15.1), in `deploy/docker-compose.yml`: Prometheus bound to
+`127.0.0.1:9090`, Grafana to `127.0.0.1:3000` and reached through the
+Apache vhost at `https://chopin.weefeen.com/grafana/` (`GF_SERVER_ROOT_URL`,
+`serve_from_sub_path`, Grafana's own login, admin password from `.env`),
+node_exporter on `127.0.0.1:9100`. Retention
+`--storage.tsdb.retention.time=30d`. Volume: ~4 000 series (nine
+programs × ~60, node_exporter ~1 500 × 2 hosts, RabbitMQ ~300) at 15 s
+≈ 35 MB/day ≈ **1–1.5 GB for 30 days**, on the block volume. RAM:
+Prometheus 200–400 MB, Grafana ~100 MB. Check `free -m` on www before
+step 4; if the plan is 2 GB, this is the item that argues for the next
+size up, not the app itself.
+
+### 14.11 "Is monitoring actually working" — `tools/doctor.py --monitoring`
+
+One command, run after every deploy, that would have caught every item
+of §14.1:
+
+```
+target               expected   up   last sample
+web/extract   :9301  yes        1    12 s ago     vsw_stage_seconds_count{stage="extract"} = 41
+web/events    :9307  yes        1    12 s ago
+web/notify    :9308  yes        1    12 s ago
+web/scaler    :9309  yes        1    12 s ago     vsw_compute_up = 0
+compute/*     file_sd  not expected (vsw_compute_up = 0) — skipped
+rabbitmq      :15692 yes        1    12 s ago     8 queues in vhost vsw
+node_exporter :9100  yes        1    12 s ago
+grafana       :3000  yes        ok   dashboard vsw-pipeline provisioned
+```
+
+It reads the registry for what *should* be up, queries Prometheus's
+`up` and one application series per program, expects compute targets
+only while `vsw_compute_up == 1`, and exits non-zero on any gap.
+"It is instrumented" is not a state this tool can report.
+
+### 14.12 What exists at each migration step
+
+| Step | Timing per stage | Resource use | Curves and dashboard |
+|---|---|---|---|
+| 1 | `stage_runs` with elapsed, bytes, media; `show` with realtime factor and GB/s | `peak_rss_mb`, `cpu_s`, disk deltas per attempt in the table | none — one machine, no Prometheus |
+| 2 | + one `/metrics` per program | + per-process gauges | Prometheus + Grafana under Docker Desktop, scrape file rendered from the registry, dashboard v1 (panels 1–4, 8, 10, 11); `doctor --monitoring` |
+| 4 | same, on www | same | on www; panel 6 from the broker; §14.10 |
+| 6 | + `compute` labels | + node_exporter on the image | file_sd for the singleton; panels 9, 12 |
+
+---
+
+## 15. Deployment — the host, and where every file lives
+
+Everything deployment-related is in `VideoSync_webapp/deploy/`. The
+weefeen (Symfony) repository is read-only to us like the other two;
+nothing in it is modified, and nothing in VideoScoreSync's compose,
+prometheus, grafana or supervisord files is used or referenced.
+
+### 15.1 The host: the existing www.weefeen.com Linode
+
+| Fact | Consequence |
+|---|---|
+| `172.104.249.66`, an EU region; `vss.weefeen.com` is `45.33.126.124`, US | **The singleton is created in www's region** — VLANs do not cross regions (§9.4). |
+| Apache 2.4.41, not nginx | Our vhost `chopin.weefeen.com`, mounted at `/` — no path prefix, no `SCRIPT_NAME`, no URL rewriting in the browser code: `ProxyPass / http://127.0.0.1:5057/`, `ProxyPassReverse`, `ProxyTimeout 3600`, `ProxyPreserveHost On`, `ProxyAddHeaders Off` + `RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}s"` — **overwrite, never append**, or a client-supplied header becomes free quota; `mod_remoteip` for Apache's own logs. `LimitRequestBody` stays at its unlimited default. `/grafana/` proxied to `127.0.0.1:3000`. |
+| Certificate: GoDaddy, CN `weefeen.com`, SANs `weefeen.com`, `www.weefeen.com`, no wildcard, expires 2026-10-08 | `certbot --apache -d chopin.weefeen.com` — free, auto-renewing, coexists with the GoDaddy cert on its own vhost. |
+| RabbitMQ already running, with supervisor-managed PHP consumers (`etc/supervisor/weefeen_prod.ini`: `weefeen_create_chroma`, `weefeen_sync_performance`, `weefeen_detect_measures`, `messenger-consume`) | **We add a vhost, not a broker.** `vsw` vhost; users `vsw_web` and the per-instance `vsw_c_<id>` (§9.3) with permissions scoped to `vsw`; three additive broker-wide changes: a TLS listener on the VLAN address (`listeners.ssl.default = 10.0.0.2:5671`; their existing listener untouched), `consumer_timeout = 10800000` (§8.3 — a **global** setting that only loosens; their consumers ack in seconds and never notice; use the per-queue argument instead if the broker is ≥ 3.12), and the `rabbitmq_prometheus` plugin on loopback (§14.6). |
+| What a vhost isolates, and what it does not | Separate queue namespace, users, permissions and policies — **not** a separate process, memory or disk. If our queues grew without bound, the broker's memory alarm would block **every** publisher, theirs included. Our messages are < 4 KB of JSON (the bytes live in the bucket) and `MAX_QUEUE_MINUTES` bounds the count to a few dozen, so the realistic risk is low — and it is made structural: a policy `max-length = 1000` on `^vsw\.`, and `rabbitmqctl set_vhost_limits -p vsw '{"max-connections": 20, "max-queues": 20}'`. |
+| Supervisor installed, established pattern (`directory` / `command` / `autostart` / `autorestart` / `stdout_logfile` / `stderr_logfile`), running as root | Ours match the pattern — `deploy/supervisor/vsw.conf`, symlinked into `/etc/supervisor/conf.d/`, program names `vsw_extract`, `vsw_events`, `vsw_notify`, `vsw_scaler`, `vsw_web` (gunicorn) — and run as a dedicated unprivileged user **`vsw`**: these programs handle visitor-uploaded files and pass visitor-derived arguments to ffmpeg; a bug in that path should be bounded by a user that owns nothing but `/mnt/volume_1/vsw`. |
+| Docker available | Prometheus, Grafana, node_exporter in `deploy/docker-compose.yml` (§14.10). Not the broker, not the workers. |
+| Block storage at `/mnt/volume_1`; Symfony deploys to `/mnt/volume_1/weefeen/current/` | Ours under **`/mnt/volume_1/vsw/`**: `releases/<sha>/` and `current` (the app), `work/` (`WORK_DIR`: job dirs, `jobs.sqlite`, `job.log`s), `staging/` (uploads in flight, ≤ 2 × 4 GB), `prometheus/`, `grafana/`. Space: staging 8 GB, work ~20 GB (audio, logs, transient measures — results live in the bucket), Prometheus 1.5 GB, headroom to 40 GB. |
+| Deployment is GitHub Actions → Capistrano over rsync | Ours: **GitHub Actions → `deploy/deploy.sh` over ssh** — clone the tag into `releases/<sha>`, build the venv from the lock file, run `deploy/render.py`, migrate `jobs.sqlite`, flip `current`, `supervisorctl restart vsw:*`, `apachectl graceful`, then `tools/doctor.py --monitoring`. The same releases/current shape as Capistrano, without a Ruby toolchain for a Python app. |
+| It is their **production** box | What we run beside Symfony: gunicorn (idle unless serving), extract (ffmpeg demux + resample, one core for 10–40 s per upload), mail, the scaler (an HTTP call every 10 s), Prometheus + Grafana (~0.5 GB RAM). Caps: extract is one program at prefetch 1 (structural) and runs under `nice -n 10`; `MAX_CONCURRENT_UPLOADS=2`; `LIMIT_UPLOADS_PER_HOUR` stays. **Recognition does not run here** — option (b) of §12 would put torch's 2 GB and minutes of CPU on a live site, which tilts decision D firmly toward (a) unless www is a large plan. |
+
+`.env` on www, beyond what `.env.example` already documents:
+
+```ini
+PUBLIC_BASE_URL=https://chopin.weefeen.com
+TRUST_PROXY=true                 # MANDATORY behind Apache: without it limits.py:181-185 sees 127.0.0.1 for every
+                                 # request and the whole internet shares one bucket. Apache must OVERWRITE
+                                 # X-Forwarded-For (above), never append a client-supplied one.
+WORK_DIR=/mnt/volume_1/vsw/work
+UPLOAD_STAGING_DIR=/mnt/volume_1/vsw/staging
+RABBITMQ_URL=amqps://vsw_web:…@10.0.0.2:5671/vsw
+RABBITMQ_MANAGEMENT_URL=http://127.0.0.1:15672
+PROMETHEUS_URL=http://127.0.0.1:9090
+METRICS_PORT_EXTRACT=9301 … METRICS_PORT_SCALER=9309     # rendered from app/stages.py; listed for the operator
+```
+
+### 15.2 File layout — every artefact, one place to look
+
+`VideoSync_webapp` today tracks `app/`, `tools/`, `run.py`,
+`requirements.txt`, `.env.example`, `README.md` and this document; it
+has no deployment files. Everything below is new.
+
+| Path | Contains | Step |
+|---|---|---|
+| `app/stages.py` | the single stage registry (§14.2) | 2 |
+| `app/queue/task.py`, `paths.py`, `keys.py` | `Task`, `JobPaths`, bucket keys (§4) | 1 |
+| `app/queue/transport.py` | `files` and `amqp` transports behind one interface (§8.5) | 1 (`files`), 4 (`amqp`) |
+| `app/queue/amqp.py` | the copied and corrected consumer/publisher base (§8) | 4 |
+| `app/queue/store.py` | `jobs.sqlite` access: `jobs`, `stage_runs`, `calibration`, `compute` (§5) | 1 |
+| `app/queue/sink.py` | events sink: direct-to-table (`files`) or publish-to-`vsw.events` (`amqp`) | 1 / 4 |
+| `app/workers/__init__.py` (`serve()`), `shell.py`, `joblog.py` | the one stage shell (§6.1), `shell.run` (§7.4), `JobLogger` (§7.3) | 1 |
+| `app/workers/render.py` | step 1's single stage (today's `pipeline.run`) — folded into `embed` in step 2 | 1 |
+| `app/workers/extract.py`, `identify.py`, `chroma.py`, `sync.py`, `fetch.py`, `embed.py` | one program per stage (§3) | 2 |
+| `app/workers/events.py`, `notify.py` | the web-side programs (§3, §13.2) | 3 (inline), 4 |
+| `app/workers/logship.py` | supervisord logs → `logs/instances/<id>/` (§7.7) | 6 |
+| `app/metrics.py` | plain registry, per-process psutil with children, `start_http_server` (§14.3, §14.5) | 2 |
+| `app/scaler.py` | Linode create/destroy, lease row, credentials, `targets/compute.json` (§9.4, §14.4) | 6 |
+| `app/store/` (`object_store.py`) | boto3 wrapper: PUT/GET/HEAD, presign, multipart (§10) | 5 |
+| `tools/queue.py` | `list`, `show`, `logs`, `dead`, `replay`, `run`, `queues`, `compute` (§7.6) | 1 (`list`, `show`, `logs`), 3 (`dead`, `replay`, `run`), 4 (`queues`), 6 (`compute`) |
+| `tools/workers.py` | starts the stage programs with their interpreters on Windows (§8.5) | 2 |
+| `tools/doctor.py --monitoring` | the check of §14.11 | 2 |
+| `deploy/render.py` | renders supervisor confs, `prometheus.yml`, the port block, from `app/stages.py` | 2 |
+| `deploy/docker-compose.yml` | Prometheus, Grafana, node_exporter — **web host only**; loopback bindings | 2 (dev), 4 (www) |
+| `deploy/prometheus.yml` | **generated**, never hand-maintained; static web targets + `file_sd_configs` for `targets/compute.json` | 2 |
+| `deploy/targets/compute.json` | written by the scaler; `[]` when no singleton | 6 |
+| `deploy/grafana/dashboards/vsw-pipeline.json`, `deploy/grafana/provisioning/` | the twelve-panel dashboard (§14.8), datasource and dashboard provisioning | 2 |
+| `deploy/supervisor/vsw.conf` | web-host programs in the weefeen_prod.ini style, user `vsw` (§15.1) — generated | 4 |
+| `deploy/supervisord/compute.conf` | compute-image programs: one per stage + `logship` — generated | 6 |
+| `deploy/apache/chopin.weefeen.com.conf` | the vhost of §15.1 | 4 |
+| `deploy/rabbitmq/vhost.sh` | vhost, users, permissions, policies, vhost limits, TLS listener snippet, plugin (§15.1) | 4 |
+| `deploy/deploy.sh`, `.github/workflows/deploy.yml` | releases/current deploy over ssh, then `doctor --monitoring` (§15.1) | 4 |
+| `deploy/compute-image.sh`, `deploy/compute/` (lock files, fixtures, self-test) | bakes the Linode custom image with the build-time checks of §9.1 | 6 |
+| `deploy/tls/` | CA generation and the server cert request for 5671 (public material only in git) | 6 |
+| `.env.example` | every knob in this document, with its default and one line of why — as today | each step adds its own |
+
+---
+
+## 16. Migration path — each step shippable and verified; step 1 is one machine; diagnostics from step 1
+
+**Step 1 — job table, one embed worker, the diagnostic record
+(~350 lines).** `jobs.sqlite` with `jobs`, the full `stage_runs` schema
+of §5, `calibration`; `Job`/`Registry` over it; `Task`, `JobPaths`; the
+`files` transport (§8.5); **one worker program** (app env) consuming
+`queue/embed/` and running today's `pipeline.run` as a single stage
+called `render`; `shell.run` (§7.4) replacing `render._run` and `probe`,
+so every ffmpeg/ffprobe command and its stderr tail are recorded;
+per-attempt logs under `WORK_DIR/<job>/logs/`; `tools/queue.py list`,
+`show`, `logs`; `position` and `eta_at` exactly as §11.2 with `cold = 0`;
+`routes.py:459` refuses `queued`; both UIs show "N in line, ready by
+about HH:MM"; SSE removed; `MAX_DURATION_MINUTES` enforced at upload.
 *Verify:* two submits → one ffmpeg; restart with two queued → both
-resume in order; `stage_runs` has a row with elapsed, bytes **and**
-duration; the ETA shown at submit is within the quoted range of the
-actual.
+resume in order; `stage_runs` has a row with elapsed, bytes in and
+out, media seconds and the process's peak RSS, and `show` prints the
+realtime factor and the waiting/working split (§14.7); **kill ffmpeg
+mid-encode and `tools/queue.py show` prints the exact command, `rc -9`,
+and the stderr tail**; paste the command into a terminal and it runs.
 
-**Step 2 — extract-audio and the stage handlers (~300 lines).** `Task`,
-`JobPaths`, `handle_*` as pure functions; completion checks, attempt
-markers, `.attemptN.part` outputs; transient/permanent classification
-and caps; the runners take `audio.wav`; `QUEUE_TRANSPORT=inline` runs the
-chain in-process (interpreters still reached through the existing
-runner subprocesses); recognition on CPU with `CUDA_VISIBLE_DEVICES=-1`
-in the test.
+**Step 2 — stages, per-interpreter programs, extract-audio (~400
+lines).** `handle_extract/identify/chroma/sync/fetch/embed` as pure
+functions; `serve()` as the one stage shell; **`identify`, `chroma`,
+`sync` programs under the engine interpreter importing their libraries
+directly; `tools/identify_runner.py` and `tools/sync_runner.py`
+deleted; `identify.py:206-262` and `sync.py:118-158, 197-218` deleted**;
+the chroma self-test; completion checks, attempt markers, `interrupted`
+detection, `.attemptN.part` outputs; transient/permanent classification
+and caps; `tools/workers.py` starting the programs on Windows;
+`job.log` narrative; `CUDA_VISIBLE_DEVICES=-1` in the CPU test. The
+owner installs `pika` and `boto3` into the engine env first (§8.1).
+**Observability arrives here, with the programs:** `app/stages.py` and
+`deploy/render.py`; `app/metrics.py` with one `/metrics` per program
+(plain registry, per-process psutil with children); Prometheus +
+Grafana under Docker Desktop from `deploy/docker-compose.yml`, the
+scrape file **generated** from the registry, dashboard v1 (panels 1–4,
+8, 10, 11 of §14.8); `tools/doctor.py --monitoring`.
 *Verify:* verdict and `measures.data` identical to before
 (`tools/compare_alignments.py`, byte for byte, per `README.md`); kill
 ffmpeg mid-encode → retried once, **no re-align**; a no-audio upload
-fails permanently with no retry.
+fails permanently with no retry; **a partial recording fails in `sync`
+with `PartialRecording` as `error_class` and a real traceback in the
+attempt log**; `kill -9` the chroma program mid-job → the next attempt
+records `interrupted` for the first; point `SYNC_PYTHON` at the wrong
+env → the chroma program refuses to start and says why; **`doctor
+--monitoring` shows every program `up`, `vsw_stage_seconds_count`
+grows after a job, panel 1 shows one bar per stage and panel 10 shows
+ffmpeg's memory under `embed`** — the proof that VideoScoreSync's setup
+never had.
 
-**Step 3 — mail as delivery, budgets on both axes, admission (~200
+**Step 3 — mail as delivery, budgets, admission, replay (~250
 lines).** Three mail kinds with the table gate and backoff; `notify.py`
 docstring; `LIMIT_DURATION_MINUTES_PER_WEEK`, `LIMIT_UPLOAD_GB_PER_WEEK`,
-`MAX_QUEUE_MINUTES`; fairness rank; per-job mail counting.
+`MAX_QUEUE_MINUTES`; fairness rank; per-job mail counting; the `dead/`
+directory with `{task, failure}` records; **`tools/queue.py dead` and
+`replay`**, including `--invalidate-downstream`; `tools/queue.py run`
+for the debugger.
 *Verify:* kill between done and mail → exactly one `ready`; kill during
 `sending` → none, `uncertain`; over-budget on either axis refused with
-the right copy; A with three uploads and B with one → B second in line.
+the right copy; A with three uploads and B with one → B second in line;
+**break the embed on purpose, fix it, `replay <job> embed` → only the
+encode re-runs and the visitor gets a `ready` mail**.
 
 **At the small end (§1.1) one always-on box stops here. Below is
 contingent on wanting the compute box to exist only while working.**
 
-**Step 4 — RabbitMQ on the same machine (~350 lines).** Copy and fix
-the base classes (§8); the identify process and the four-queue batch
-process under supervisord; DLX and `vsw.dead`; `vsw.events` → the
-table; `consumer_timeout` raised; `QUEUE_TRANSPORT=amqp`. Docker Desktop
-on Windows for development.
-*Verify:* `kill -9` the batch process mid-encode → requeued after the
-heartbeat, finished stages skipped, `embed_attempt2` marker present; a
-permanent failure lands in `vsw.dead` **and** the visitor gets the
-`failed` mail; a 40-minute sleep in embed does not trip the
-acknowledgement timeout; two jobs submitted together run their heavy
-stages strictly one after the other.
+**Step 4 — RabbitMQ, and the app live on www.weefeen.com (~450 lines +
+the deploy files of §15.2).** Copy and fix the base classes (§8);
+`QUEUE_TRANSPORT=amqp`; one supervisor program per stage; `vsw.events`
+carrying `started / log / finished / failed / interrupted` into the
+table and `job.log`; DLX plus the explicit dead record on `vsw.dead`.
+First against Docker Desktop's broker on Windows, then on www:
+`deploy/rabbitmq/vhost.sh` (vhost `vsw`, users, policies, vhost limits,
+`consumer_timeout` or the per-queue argument, the `rabbitmq_prometheus`
+plugin); `deploy/apache/chopin.weefeen.com.conf` and `certbot --apache`;
+`deploy/supervisor/vsw.conf` as user `vsw`; `deploy/deploy.sh` with the
+Actions workflow; Prometheus + Grafana from `deploy/docker-compose.yml`
+on www behind `/grafana/`; `TRUST_PROXY=true`, `MAX_CONCURRENT_UPLOADS`,
+extract under `nice`. The compute-side programs still run on the same
+machine at this step (or on the dev box against www's broker over a
+temporary TLS listener); the singleton is step 6.
+*Verify:* `kill -9` the embed program mid-encode → requeued after the
+heartbeat, finished stages skipped, `embed_attempt2` marker present, the
+first attempt shows `interrupted` in `show`; a permanent failure lands
+in `vsw.dead` with its full record **and** the visitor gets the `failed`
+mail; `dead --show` prints the payload that ran; a 40-minute sleep in
+embed does not trip the acknowledgement timeout; two jobs submitted
+together: their chroma/sync overlap, their encodes do not. On www:
+`curl -I https://chopin.weefeen.com/` from outside → 200 with the
+certbot certificate; two visitors on different networks get two rate
+buckets (`TRUST_PROXY` and the overwritten header work); a 4 GB upload
+completes through Apache; `rabbitmqctl list_queues -p vsw` shows only
+ours and `supervisorctl status` shows their consumers untouched;
+`doctor --monitoring` on www is green, including `rabbitmq :15692` and
+the per-queue depth series.
 
-**Step 5 — object storage, still one machine (~250 lines).** Keys,
-PUT/GET/HEAD in every handler, markers in the bucket, download `302`,
-lifecycle rules.
-*Verify:* delete the local job directory after `done` → download still
-works; delete `chroma.npy` locally and republish sync → fetched from the
-bucket, not recomputed.
+**Step 5 — object storage, still one machine (~300 lines).** Keys,
+PUT/GET/HEAD in every handler, markers in the bucket, **per-attempt
+logs PUT to `logs/<job>/` before the final event**, `log_key` in
+`stage_runs`, `tools/queue.py logs` reading from the bucket, download
+`302`, lifecycle rules.
+*Verify:* delete the local job directory after `done` → download and
+`logs` still work; delete `chroma.npy` locally and replay sync → fetched
+from the bucket, not recomputed.
 
-**Step 6 — the second Linode and the scaler (~400 lines + the image
-script).** VLAN, Cloud Firewalls, broker rebound to the VLAN address
-with TLS; per-instance credentials via user_data; `deploy/compute-image.sh`;
-`app/scaler.py` with the lease row and label guard; `COMPUTE_MODE=auto`;
-**measure recognition on both plans and settle decision D**; the copy
-of §12.
+**Step 6 — the singleton and the scaler (~450 lines + the image
+script).** VLAN in www's region, Cloud Firewalls, the TLS listener on
+the VLAN address of the existing broker; per-instance credentials via
+user_data; `deploy/compute-image.sh` with the full build-time checks of
+§9.1 and node_exporter on the image; `app/scaler.py` with the lease
+row, the label guard, **shutdown-before-delete**, and
+`targets/compute.json` for file_sd (§14.4); `logship`; `instance_id` on
+every event; `vsw_compute_*` metrics and panels 9 and 12;
+`COMPUTE_MODE=auto`; **measure recognition on the compute plan and
+settle decision D** (option (b) is now a production-box question,
+§15.1); the copy of §12.
 *Verify:* destroy the singleton by hand mid-embed → a new one within
-~3 minutes and the job resumes at the encode; grace-period destroy
-observed; an upload completed with no instance has one running before
-extract finishes; start a second scaler by mistake → it stands down; the
+~3 minutes and the job resumes at the encode, and **`show` names the
+dead instance and `logs/instances/<id>/embed_err.log` holds its last
+minute**; grace-period destroy observed with a final log shipment; an
+upload completed with no instance has one running before extract
+finishes; start a second scaler by mistake → it stands down; the
 destroyed instance's broker user and storage key are gone; two uploads
-completing in the same second → exactly one instance.
+completing in the same second → exactly one instance; `doctor
+--monitoring` lists the compute targets `up` while `vsw_compute_up == 1`
+and skips them after the destroy; panel 9 shows the session's hours and
+dollars.
 
-**Step 7 — large end only: direct-to-bucket upload with resume (~300
+**Step 7 — optional at 4 GB: direct-to-bucket upload with resume (~300
 lines, mostly browser JS).** §10.2 endpoints; `UPLOAD_DIRECT=true`;
 ffprobe over a presigned GET.
 *Verify:* a 5 GB upload interrupted at 60 % resumes after a reload
 without re-sending parts; a declared 20 GB is refused before any byte.
 
-**Contingent:** Prometheus exposure on the consumers; `SIGSTOP` priority
-for recognition if contention is measured; the librosa-only first guess
-(§12 e).
+**Contingent:** `start_metrics_server` per program with a Prometheus
+port each, as VideoScoreSync does; `SIGSTOP` priority for recognition
+if contention is measured; the librosa-only first guess (§12 e); the
+in-interpreter child-process boundary for native aborts if they ever
+recur (§8.1).
 
 ---
 
-## 15. Explicitly not proposed
+## 17. Explicitly not proposed
 
 - Publishing into VideoScoreSync's queues, or importing its consumers.
-- A broker on the singleton.
+- One batch consumer over several queues; a broker on the singleton.
 - Powering off instead of destroying; a GPU anywhere; more than one
   compute instance.
 - Binding anything to Linode's shared private IP.
@@ -1076,18 +1884,26 @@ for recognition if contention is measured; the librosa-only first guess
 - Segmented / resumable encoding.
 - Refunding budget on a permanent failure.
 - Address verification before mailing.
-- An operator web UI or auth; `tools/queue.py` on the box.
+- An operator web UI or auth; a log-aggregation service (Loki, ELK);
+  `tools/queue.py` on the box and the bucket are the operator surface.
 - A cancel endpoint; the grace period and lifecycle rules bound the cost
   of an abandoned job.
-- Merging or further splitting `vsw.chroma` / `vsw.sync`: they mirror
-  the two consumers being reused and already share one process.
+- Merging `vsw.chroma` and `vsw.sync` into one program: they mirror the
+  two consumers being reused and one log per stage is the point.
 - A per-visitor "one at a time" refusal; the fairness rank does the same
   job without refusing anyone.
-- Quorum queues, Prometheus/Grafana in the first seven steps.
+- Pushgateway, `remote_write`, cAdvisor, Docker on the compute image
+  (§14.4, §14.9).
+- Vendoring the 699 KB host dashboard; it is imported by ID (§14.8).
+- Recognition on www (§12 b) unless it measures under ~90 s on a plan
+  that can spare 2 GB beside the Symfony site.
+- A second broker on www; Capistrano for our deploy; any change to the
+  weefeen repository.
+- Quorum queues.
 
 ---
 
-## 16. What I am not sure about
+## 18. What I am not sure about
 
 - **Every CPU constant** — 130 s recognition, 0.8 min/min encode — is
   n=1 on a workstation. The calibration loop and the "re-measure on the
@@ -1099,16 +1915,35 @@ for recognition if contention is measured; the librosa-only first guess
 - **Linode specifics not verified against current documentation:** the
   custom-image size limit (~6 GB compressed), which regions offer VLANs
   and the Metadata service, whether Cloud Firewalls leave VLAN traffic
-  unfiltered, whether partial hours are billed in full, and whether
-  label uniqueness is enforced at create time as I expect. Each has a
-  fallback in §9; none changes the shape.
-- **`ffprobe` over a presigned GET on a non-faststart 10 GB MP4** —
+  unfiltered, whether partial hours are billed in full, whether label
+  uniqueness is enforced at create time as I expect, and whether
+  `shutdown` reliably delivers SIGTERM to supervisord before `offline`.
+  Each has a fallback in §9 or §7.7; none changes the shape.
+- **`ffprobe` over a presigned GET on a non-faststart 4 GB MP4** —
   unmeasured; fallback: probe on the singleton in `fetch`.
 - **`consumer_timeout`** depends on the broker version installed.
 - **Whether every ffmpeg OOM presents recognisably**; the embed cap of 2
-  bounds a wrong guess.
-- **The SVML condition** for the `engine` env (`sync.py:210-214`); test
-  `audio2chroma` in the image before baking.
+  bounds a wrong guess, and the record now shows the command and `rc`
+  either way.
+- **The SVML condition** for the `engine` env (`sync.py:210-214`); the
+  chroma self-test exists so it is found at build or start, never on a
+  job.
+- **Whether `weefeen_id` and the two VideoScoreSync services import
+  cleanly as long-lived residents** — the runners were one-shot; a
+  resident process may hold file handles or global state across jobs.
+  Step 2's verification (ten jobs through one program) is where that
+  shows.
+- **`PROMETHEUS_MULTIPROC_DIR`** is absent from every VideoScoreSync
+  file I could read; `.env` / `.env.base` were unreadable and
+  `prometheus_client` is not installed in the app env, so root cause 2
+  of §14.1 is near-certain, not reproduced.
+- **www's plan and free memory** — unknown; §14.10 and §15.1 assume
+  ≥ 4 GB. `free -m` before step 4.
+- **Whether www's region offers VLANs and the Metadata service**, and
+  whether `mod_proxy`, `mod_headers` and `mod_remoteip` are enabled
+  (`a2enmod` is a minute; the VLAN is not negotiable).
+- **RabbitMQ's version on www** — decides `/metrics/detailed` (3.9+)
+  and the per-queue `x-consumer-timeout` (3.12+).
 - **`Job.save()` / `rehydrate()`** (`jobs.py:66-79, 250-284`) landed in
   `c718193` at 10:43 today and the only job on disk finished at 10:41
   without a manifest; step 1 replaces both with the table.
