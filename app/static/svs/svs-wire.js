@@ -167,7 +167,7 @@ recognise = function(){
     if(browse) browse.disabled = true;
     const copy = $('#dropcopy');
     if(copy) copy.innerHTML = `
-      <h2>Uploading your <em>video</em></h2>
+      <h2>Uploading and checking your <em>video</em></h2>
       <span class="uprail"><i id="listenbar" style="width:0%"></i></span>
       <span class="lab">${esc(S.file || '')} &middot; please wait a few seconds</span>`;
     listenTick();
@@ -214,7 +214,7 @@ recognise = function(){
 
     const top = W(CANDS[0][0]);
     $('#recogbody').innerHTML = `
-      <p class="heard">We heard <b>${esc(top ? top.t + ', ' + top.op : 'this piece')}</b>.<br>
+      <p class="heard">We heard <b>${esc(top ? top.t + ', ' + top.op : 'this piece')}</b>.
       It is selected${alts.length ? ' &mdash; confirm it, or pick another below.' : '.'}</p>
       <div role="radiogroup" aria-label="Choose the piece">
         <div class="candhead"><span class="lab">Most likely</span>
