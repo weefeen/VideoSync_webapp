@@ -924,9 +924,9 @@ trimFreeLine();
 document.addEventListener('DOMContentLoaded', trimFreeLine);
 
 /* ── how many videos have actually been made ─────────────────────────── */
-/* The server counts finished renders and nothing else. At zero the line
- * says nothing at all: an empty tally on a landing page is worse than no
- * tally, and inventing a flattering one is not on the table. */
+/* The server counts finished renders and nothing else — never an
+ * estimate, and never a flattering guess. It is shown from zero upwards,
+ * so what is on the page is always the real number. */
 async function showCount(){
   const badge = document.querySelector('.artifact .badge');
   if(!badge) return;
@@ -935,7 +935,6 @@ async function showCount(){
     const r = await fetch('/api/stats');
     made = (await r.json()).videos | 0;
   }catch(err){ return; }
-  if(made < 1) return;
   const caption = document.querySelector('.artifact figcaption');
   if(!caption || caption.dataset.counted) return;
   caption.dataset.counted = '1';
@@ -943,6 +942,7 @@ async function showCount(){
   line.className = 'lab';
   line.style.color = 'var(--soft)';
   line.textContent = made === 1 ? '1 video made' : `${made} videos made`;
+  line.title = 'Finished videos, counted — not an estimate';
   caption.insertBefore(line, caption.firstChild);
 }
 showCount();
