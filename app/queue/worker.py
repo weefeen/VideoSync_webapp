@@ -107,11 +107,13 @@ def main() -> int:
     import sys
 
     from ..settings import settings
+    from . import transport as transport_module
     from .transport import transport
     from . import webside
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    transport_module.quiet_pika()
     if not settings.rabbitmq_url:
         print("RABBITMQ_URL is not set. A separate worker process needs a "
               "broker to take work from; with the in-process queue the web "

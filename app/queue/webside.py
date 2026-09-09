@@ -31,7 +31,7 @@ import time
 from .. import store
 from . import ledger, worker
 from .messages import Event, RenderTask
-from .transport import Transport, transport
+from .transport import Transport, quiet_pika, transport
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ def start_threads() -> int:
             f"until a render can prove it has not already been done by "
             f"another consumer; see docs/broker-slice.md §5.")
 
+    quiet_pika()
     bus = transport()
     _recover(bus)
 

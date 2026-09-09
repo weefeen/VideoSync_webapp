@@ -343,6 +343,17 @@ _transport: Transport | None = None
 _transport_lock = threading.Lock()
 
 
+def quiet_pika() -> None:
+    """Stop pika narrating every connection and channel at INFO.
+
+    It logs six lines per connection, and this app opens a short-lived one
+    per publish, so the four lines a render actually produces are buried.
+    Its warnings are the part worth reading — a dropped connection, a
+    refused declaration — and those still come through.
+    """
+    logging.getLogger("pika").setLevel(logging.WARNING)
+
+
 def transport() -> Transport:
     """The one transport this process uses.
 
