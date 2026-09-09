@@ -1197,7 +1197,7 @@ function creditCliburn(){
          'width="38" height="38"/>' +
     '<span class="fbmeta">' +
       '<span class="fbname">Cliburn 2025</span>' +
-      '<span class="fbsub">System used during the competition</span>' +
+      '<span class="fbsub">Used during the competition</span>' +
     '</span>';
   bands.appendChild(a);
 }

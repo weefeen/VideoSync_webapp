@@ -116,3 +116,35 @@
   /* Hover states that stick on touch are worse than none. */
   .piece:hover { padding-left: 26px; }
 }
+
+/* ── the partner row, now that there are three ───────────────────────── */
+/* The row was drawn for two: `.fbwrap` caps at 640px and `.pbands` is
+ * `nowrap`, so a third band makes flex compress all three. Their names and
+ * captions are `white-space: nowrap`, so the text does not reflow — it
+ * overflows its own grid cell and paints across the next band.
+ *
+ * Two rules fix it and neither restyles anything: the bands refuse to
+ * shrink below what their content needs, and the row is allowed to take a
+ * second line instead of overflowing. Wrapping is what the phone
+ * breakpoint above already does; this just stops the desktop being the one
+ * width where it cannot. */
+.fbwrap { max-width: 960px; }
+.pbands { flex-wrap: wrap; row-gap: 16px; }
+.pband  { flex: 0 0 auto; }
+
+/* A band that wraps onto a new line is first on that line, so the divider
+ * inherited from `.pband + .pband` would hang off its left edge with
+ * nothing before it. Anchoring the rule to the flex line is not something
+ * CSS can express, so the separator is drawn on the right of every band
+ * except the last instead — same look, and correct on every line. */
+.pband + .pband { border-left: 0; padding-left: 0; }
+.pband:not(:last-child) { border-right: 1px solid var(--hair-2); padding-right: 30px; }
+.pband:not(:first-child) { padding-left: 30px; }
+
+/* Those two rules sit outside a media query and later in the file than the
+ * phone block above, so they would quietly win there too and undo its
+ * tighter spacing. Restated at the small size with matching specificity. */
+@media (max-width: 600px) {
+  .pband:not(:last-child)  { padding-right: 18px; }
+  .pband:not(:first-child) { padding-left: 18px; }
+}
