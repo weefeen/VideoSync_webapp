@@ -2,9 +2,10 @@
 
 Design for review. Nothing here is implemented yet.
 
-**Status: two open questions, in §12 and §13. This document contradicts
-`queue-design.md` on two points and must not be implemented until the owner
-says which document wins.**
+**Status: step 1 of §14 is done and proved (see `deployment-log.md` §12).
+§12's contradictions are settled — the development page is retired and there
+is no files transport. §13 still holds one unknown: the production broker's
+RabbitMQ version, which only matters at step 3.**
 
 Scope of this slice: split the worker out of the Flask process **on a single
 node**, with RabbitMQ between them. One host, same storage, same code paths.
@@ -490,11 +491,21 @@ points is enough.
 
 ## 14. Order of work — four steps, each with its own proof
 
-1. **The contract without the broker.** `messages.py`, `ledger.py`, the store
-   columns, `Job.stages` derived, the `.part` rename; the existing in-process
-   worker rewired to emit events through `ledger.apply` instead of writing
-   state itself. *Proof:* selftest green on both platforms; a local render on
-   Windows looks identical in both pages.
+1. ~~**The contract without the broker.**~~ **DONE.** `messages.py`,
+   `ledger.py`, the four store columns with `_migrate()`, `Job.stages`
+   derived, the in-process worker rewired to report through `ledger.apply`
+   instead of writing state itself. *Proved:* 12 checks green on both
+   platforms, and a real render driven through the API on the dev node
+   advanced `align → strip → encode → done` at 1.299 s/s against 1.292
+   before the change — see `deployment-log.md` §12.
+
+   Two deviations from this document, both deliberate. The `.part` rename is
+   **not** in: it guards against a crashed ffmpeg being mistaken for a
+   result, which only matters once a delivery can be redelivered, so it goes
+   with the attempt record in step 3. And the SSE shim of §4 was never
+   written, because §12's open question was settled the other way — the
+   development page is retired, `/` redirects to `/app/`, and `/events`,
+   `stream()`, `subscribe`/`_emit` and the in-memory queues are all gone.
 2. **The transport seam.** `transport.py` with `LocalTransport` only,
    `worker.handle_task`, `webside.py`, `Registry` shrunk, `resume()`'s
    statement gone. *Proof:* the end-to-end selftest check; restart mid-queue on

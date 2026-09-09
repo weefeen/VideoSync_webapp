@@ -346,6 +346,69 @@ exercised here; it was proven on the workstation instead.
 
 ---
 
+## 12. The queue slice, step 1 — proven on this node
+
+`docs/broker-slice.md` step 1: the worker stops writing the job table and
+reports instead, through `app/queue/ledger.py`. Both halves are still one
+process; only the contract changed.
+
+Driven through the real API on the node — `POST /api/upload`, then
+`POST /api/jobs/<id>/render`, then polling `/api/jobs/<id>/status`, so the
+whole path ran, not a stubbed piece of it:
+
+     elapsed  state     stage    detail
+          0s  running   -
+          5s  running   align    matching the recording to the score
+         20s  running   strip    timing bands to the performance
+         45s  running   encode   1920x1080 · band 1916x358 bottom
+        555s  done      done
+
+    final stages   all six done        error  None
+    output         131,321,451 bytes
+    stage record   render, attempt 1, done, elapsed 550.8 s
+
+**550.8 s for 424 s of music is 1.299 s/s**, against 1.292 measured before
+the change (§8). The rewiring costs nothing measurable, which is the point:
+it moved where facts are written, not what the work does.
+
+`bands` passed inside one five-second poll because that package's bands were
+already rasterised on disk from the earlier run. A score being rendered for
+the first time will sit there for about half a minute.
+
+### What this actually fixes
+
+`stages` was a dict on the in-memory `Job`. Every `/status` poll rebuilds
+the `Job` from the table, so it read all-pending for the whole render and
+then jumped to complete — the progress indicator in `svs-wire.js:1153-1157`
+has never moved. The stage now lives in a column and the row above is what
+the page sees.
+
+### Checks
+
+Twelve now, still on both platforms, still needing no ffmpeg, cairo, torch
+or network:
+
+    win32  python 3.12.7  os.pathsep ';'   all 12 passed   sqlite 3.53.4
+    linux  python 3.12.3  os.pathsep ':'   all 12 passed   sqlite 3.45.1
+
+Two of the five new ones are worth naming. `old databases gain the new
+columns` exists because every statement in `SCHEMA` is
+`CREATE TABLE IF NOT EXISTS`, which does nothing to a table that already
+exists: without `_migrate()` the first write naming `stage` would fail here,
+against the only copy of the queue that matters. `ledger is idempotent` was
+verified by removing the guard in `_done` and watching it fail with "a
+redelivered 'done' changed the row a second time" — that guard is what stops
+a redelivered completion sending a second email about one video.
+
+### Also gone
+
+The development page at `/` and its 380-line `app.js`, the SSE endpoint it
+was the only user of, and `/api/options` and `/api/scores`, which nothing
+else called. `/` redirects to `/app/`. The remaining routes are exactly the
+API the designed interface calls, and nothing more.
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;
