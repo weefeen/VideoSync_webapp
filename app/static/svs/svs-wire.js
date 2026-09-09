@@ -1257,8 +1257,10 @@ function handNote(){
   // Beside the sample, not beside the dropzone: it describes what comes
   // out, and the figure's own caption already says 16:9 · 1920x1080 — the
   // note is the same claim said out loud.
-  const figure = document.querySelector('.hero .artifact');
-  if(!figure || figure.querySelector('[data-hand]')) return;
+  // Written across the top-right of the sample itself, like a note on a
+  // photograph. The badge holds the top-left, so this corner is free.
+  const frame = document.querySelector('#sampleFrame');
+  if(!frame || frame.querySelector('[data-hand]')) return;
 
   if(!document.querySelector('link[data-caveat]')){
     const link = document.createElement('link');
@@ -1272,7 +1274,7 @@ function handNote(){
   note.className = 'handnote';
   note.dataset.hand = '1';
   note.textContent = 'Full HD video compatible, high quality score';
-  figure.insertBefore(note, figure.firstElementChild);
+  frame.appendChild(note);
 }
 handNote();
 
