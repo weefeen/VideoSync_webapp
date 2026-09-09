@@ -19,6 +19,7 @@ from . import jobs, package as pkg, panel, pipeline
 from . import identify as ident
 from . import library
 from . import limits
+from . import notify
 from . import render as rnd
 from . import retention
 from . import stats
@@ -507,6 +508,15 @@ def api_render(job_id: str):
 
     body = request.get_json(silent=True) or {}
     address = str(body.get("email", "")).strip().lower()
+    # Checked here as well as before sending, so somebody who mistypes is
+    # told now rather than waiting out a render for a mail that never comes
+    # — and so a string carrying several recipients never reaches the queue.
+    if address:
+        try:
+            address = notify.one_address(address)
+        except notify.MailError:
+            return jsonify({"error": "That email address does not look right. "
+                                     "Please check it and try again."}), 400
     try:
         limits.guard("render_ip", limits.client_key(request))
         if address:
@@ -530,7 +540,7 @@ def api_render(job_id: str):
     except (rnd.RenderError, pipeline.PipelineError) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    job.email = str(body.get("email", "")).strip()
+    job.email = address
     jobs.registry.start(job, package.name, mode, style, body.get("meta") or {})
     return jsonify({"job": job.public()})
 

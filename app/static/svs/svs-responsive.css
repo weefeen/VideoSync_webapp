@@ -128,7 +128,7 @@
  * second line instead of overflowing. Wrapping is what the phone
  * breakpoint above already does; this just stops the desktop being the one
  * width where it cannot. */
-.fbwrap { max-width: 960px; }
+.fbwrap { max-width: 1040px; }
 .pbands { flex-wrap: wrap; row-gap: 16px; }
 .pband  { flex: 0 0 auto; }
 
@@ -144,9 +144,21 @@
 /* Those two rules sit outside a media query and later in the file than the
  * phone block above, so they would quietly win there too and undo its
  * tighter spacing. Restated at the small size with matching specificity. */
-@media (max-width: 600px) {
-  .pband:not(:last-child)  { padding-right: 18px; }
-  .pband:not(:first-child) { padding-left: 18px; }
+/* Stacked, the bands are rows rather than a row of columns, and the
+ * dividers have to change with them: a vertical rule belongs between
+ * things side by side, and a horizontal one between things above and
+ * below. Without this the separator sat to the right of each band, the
+ * paddings meant for horizontal spacing pushed every band in by a
+ * different amount, and the marks no longer lined up down the left. */
+@media (max-width: 700px) {
+  .pbands { flex-direction: column; align-items: stretch; row-gap: 0; }
+  .pband  { width: 100%; padding: 12px 0; }
+  .pband:not(:last-child)  { border-right: 0; padding-right: 0;
+                             border-bottom: 1px solid var(--hair-2); }
+  .pband:not(:first-child) { padding-left: 0; }
+  /* One column position for every mark, so the names start on one line. */
+  .pband  { grid-template-columns: 38px minmax(0, 1fr); }
+  .pband .fbname, .pband .fbsub { white-space: normal; }
 }
 
 /* ── the handwritten note, above the sample ──────────────────────────── */

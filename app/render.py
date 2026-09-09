@@ -279,8 +279,17 @@ def probe(video: pathlib.Path) -> dict:
         out = subprocess.run(
             [settings.ffprobe, "-v", "error", "-print_format", "json",
              "-show_format", "-show_streams", str(video)],
-            capture_output=True, text=True, check=True).stdout
+            capture_output=True, text=True, check=True,
+            # A malformed file can make ffprobe hunt for a stream header
+            # indefinitely. Without a bound that hangs a request thread at
+            # the upload gate, where anyone can reach it — and enough of
+            # them stop the app answering at all.
+            timeout=60).stdout
         info = json.loads(out)
+    except subprocess.TimeoutExpired as exc:
+        raise RenderError(
+            "That file could not be read within a reasonable time. It may "
+            "be damaged, or not really a video.") from exc
     except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         raise RenderError(f"Could not read {video.name}: {exc}") from exc
 

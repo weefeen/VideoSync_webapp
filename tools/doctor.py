@@ -62,6 +62,8 @@ def main() -> int:
                 skipped.setdefault(path.name, reason)
     skipped = {k: v for k, v in skipped.items() if k not in usable}
 
+    raster_only: list[str] = []
+    carrying_png: list[tuple[str, int, int]] = []
     for name, (p, root_kind) in sorted(usable.items()):
         vec = sum(1 for b in p.bands if b.is_vector)
         kind = "digital" if (p.options.get("is_digital") or vec) else root_kind
@@ -69,12 +71,43 @@ def main() -> int:
         print(f"[{OK}] {name[:44]:44} {kind:7} "
               f"{len(p.bands):>3} bands ({vec} svg) {w}x{h} "
               f"m1..{p.last_measure} {p.duration / 60:.1f}min")
+        if not vec:
+            raster_only.append(name)
+        # Bitmaps beside the vectors are dead weight: nothing reads them
+        # once cairo works, and they are four fifths of what has to be
+        # copied to a machine that renders.
+        bitmaps = [f for f in p.root.rglob("lines/*")
+                   if f.suffix.lower() in (".png", ".jpg", ".jpeg")]
+        if bitmaps and vec:
+            carrying_png.append(
+                (name, len(bitmaps), sum(f.stat().st_size for f in bitmaps)))
 
     for name, reason in sorted(skipped.items()):
         print(f"[{WARN}] {name[:44]:44} {reason}")
 
     found = len(usable)
     print(f"\n{found} usable, {len(skipped)} skipped")
+
+    # The library is meant to be SVG throughout: vectors recolour, scale to
+    # any frame, and compress about tenfold, so a package is a couple of
+    # megabytes rather than a hundred. These two checks say when a folder
+    # has drifted from that, which is otherwise invisible until a render
+    # looks wrong or a machine spends a minute copying pictures nothing reads.
+    if raster_only:
+        print(f"\n[{WARN}] {len(raster_only)} package(s) have NO svg bands.")
+        print("         They cannot be recoloured or scaled cleanly, and the")
+        print("         result will be softer than the rest of the library:")
+        for name in raster_only[:8]:
+            print(f"           {name}")
+
+    if carrying_png:
+        total = sum(size for _, _, size in carrying_png)
+        print(f"\n[{WARN}] {len(carrying_png)} package(s) carry bitmap bands "
+              f"beside their svg — {total / 1e6:.0f} MB that nothing reads.")
+        for name, n, size in sorted(carrying_png, key=lambda r: -r[2])[:8]:
+            print(f"           {name[:44]:44} {n:>3} files  {size / 1e6:6.1f} MB")
+        print("         Deleting them costs nothing and makes each package "
+              "roughly forty times smaller.")
     if not found:
         print(f"[{WARN}] no packages found under the configured roots")
         print("         A package is a folder with lines/, measures.data and export.json.")

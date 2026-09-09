@@ -16,9 +16,11 @@ page shows the link itself; the mail is a convenience on top of that.
 from __future__ import annotations
 
 import logging
+import re
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import getaddresses
 
 from . import retention
 from .settings import settings
@@ -35,14 +37,48 @@ def _link(job_id: str) -> str:
     return f"{base}/api/jobs/{job_id}/download"
 
 
+# Deliberately strict rather than clever. Anything unusual but valid gets
+# refused, which costs one person an email; anything permissive gets this
+# server used to deliver mail to strangers, which costs the domain its
+# reputation. RFC 5321 caps the whole address at 254 characters.
+_ADDRESS = re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]{1,64}"
+                      r"@[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                      r"(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
+
+
+def one_address(raw: str) -> str:
+    """Exactly one deliverable address, or raise.
+
+    `"@" in address` was not validation, and the gap it left was not
+    theoretical: "a@x.com, b@y.com" satisfied it, `send_message` reads its
+    recipients from the To header, and so one submission delivered to every
+    address in the string — counted once against the per-address cap. That
+    is a mail relay with our domain on the envelope.
+
+    So the string must parse to a single address, and it must look like an
+    address rather than merely contain an @.
+    """
+    raw = (raw or "").strip()
+    if not raw or len(raw) > 254:
+        raise MailError("That is not an address we can send to.")
+    # Rejected before parsing: a header is one line, and a comma or a
+    # semicolon is how a second recipient gets in.
+    if any(c in raw for c in ",;\r\n\t<>\"") :
+        raise MailError("That is not an address we can send to.")
+    found = [addr for _, addr in getaddresses([raw]) if addr]
+    if len(found) != 1 or found[0] != raw:
+        raise MailError("That is not an address we can send to.")
+    if not _ADDRESS.match(raw):
+        raise MailError("That is not an address we can send to.")
+    return raw
+
+
 def send_ready(job_id: str, address: str, piece: str = "",
                finished: float | None = None) -> None:
     """Send one "it's ready" message. Raises MailError if it cannot."""
     if not settings.can_email:
         raise MailError(settings.why_cannot_email())
-    address = (address or "").strip()
-    if "@" not in address:
-        raise MailError(f"Not an address: {address!r}")
+    address = one_address(address)
 
     # The deadline goes in the message that carries the link, with the date
     # spelled out. "As long as the file is kept" told the reader nothing and
@@ -80,7 +116,10 @@ def send_ready(job_id: str, address: str, piece: str = "",
                 server.starttls(context=ssl.create_default_context())
             if settings.smtp_user:
                 server.login(settings.smtp_user, settings.smtp_password)
-            server.send_message(message)
+            # Recipients named explicitly rather than read back out of
+            # the header, so the envelope cannot grow past what was
+            # validated even if the header is later built differently.
+            server.send_message(message, to_addrs=[address])
     except (OSError, smtplib.SMTPException) as exc:
         raise MailError(f"{type(exc).__name__}: {exc}") from exc
 
