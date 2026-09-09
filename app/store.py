@@ -73,7 +73,21 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- Which worker took it. Useless with one worker and necessary with two,
     -- which is the point: the second one should need no schema change.
     worker      TEXT,
-    lease_until REAL
+    lease_until REAL,
+    -- Where the render has got to, and the line under it. These were held
+    -- on the in-memory Job and so were visible only inside the process
+    -- doing the work: every status poll rebuilt the Job from this table and
+    -- got "nothing has started yet" for the whole render. Once the worker
+    -- is a separate process there is nowhere else for them to live.
+    stage       TEXT,
+    detail      TEXT NOT NULL DEFAULT '',
+    -- Bumped when the same job is submitted again, so a late message from
+    -- the previous run cannot be mistaken for this one's.
+    attempt     INTEGER NOT NULL DEFAULT 1,
+    -- When the work was handed to the queue. NULL on a queued row means the
+    -- handover has not been confirmed, which is what lets a lost message be
+    -- noticed rather than waited on forever.
+    published_at REAL
 );
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(state, priority DESC, queued_at);
 
@@ -130,8 +144,38 @@ def connect() -> sqlite3.Connection:
             _conn.execute("PRAGMA journal_mode=WAL")
             _conn.execute("PRAGMA synchronous=NORMAL")
             _conn.executescript(SCHEMA)
+            _migrate(_conn)
             _conn.commit()
         return _conn
+
+
+# Columns added after the table already existed somewhere. They are in
+# SCHEMA as well, so a new database gets them from the CREATE and this does
+# nothing; an existing one gets them here.
+_ADDED = (
+    ("jobs", "stage", "TEXT"),
+    ("jobs", "detail", "TEXT NOT NULL DEFAULT ''"),
+    ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
+    ("jobs", "published_at", "REAL"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring an older database up to the current columns.
+
+    Every statement in SCHEMA is `CREATE TABLE IF NOT EXISTS`, which does
+    nothing at all to a table that already exists — so a database written
+    before a column was added never gains it. `ALTER TABLE ADD COLUMN` is
+    the only way in and SQLite has no `IF NOT EXISTS` for it, hence reading
+    `table_info` first. Cheap: it runs once per process, on first connect.
+    """
+    for table in dict.fromkeys(t for t, _, _ in _ADDED):
+        have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for owner, column, definition in _ADDED:
+            if owner == table and column not in have:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                logger.info("added %s.%s to an existing database", table, column)
 
 
 def close() -> None:
@@ -306,6 +350,24 @@ def renew(job_id: str, lease_seconds: float = 3600.0) -> None:
     update_job(job_id, lease_until=time.time() + lease_seconds)
 
 
+def set_progress(job_id: str, stage: str | None, detail: str,
+                 lease_seconds: float = 3600.0) -> None:
+    """Where the work has got to, and that it is still going.
+
+    One statement rather than a `set_stage` and a `renew`, because these two
+    facts are the same fact: a stage that moved is a worker that is alive,
+    and writing them apart would let a status poll land between them and
+    read a job that had advanced but looked abandoned.
+    """
+    update_job(job_id, stage=stage, detail=detail,
+               lease_until=time.time() + lease_seconds)
+
+
+def mark_published(job_id: str) -> None:
+    """The queue has taken the work. Until this, a lost handover is possible."""
+    update_job(job_id, published_at=time.time())
+
+
 # ---------------------------------------------------------------------------
 # stage_runs — the debugging record, and the calibration data
 # ---------------------------------------------------------------------------
@@ -329,14 +391,24 @@ def stage_end(run_id: int, *, state: str = DONE,
               command: str | None = None,
               returncode: int | None = None,
               error: BaseException | None = None,
+              error_class: str | None = None,
+              error_message: str | None = None,
               stderr_tail: str | None = None) -> None:
     """Close a stage row.
 
     `command` and `stderr_tail` matter more than they look: a render's ffmpeg
     invocation is assembled from the visitor's own crop, colours and panel
     choices, so without the exact command a failure cannot be reproduced.
+
+    The failure arrives either as the exception itself, from a caller in the
+    same process, or as the two strings, from one that heard about it from
+    somewhere else — an exception does not cross a process boundary, and the
+    record must read the same either way.
     """
     now = time.time()
+    if error is not None:
+        error_class = error_class or type(error).__name__
+        error_message = error_message or str(error)
     with write() as conn:
         started = conn.execute("SELECT started FROM stage_runs WHERE id = ?",
                                (run_id,)).fetchone()
@@ -346,10 +418,7 @@ def stage_end(run_id: int, *, state: str = DONE,
             " command=?, returncode=?, error_class=?, error_message=?,"
             " stderr_tail=? WHERE id = ?",
             (state, now, elapsed, json.dumps(outputs or []), command,
-             returncode,
-             type(error).__name__ if error else None,
-             str(error) if error else None,
-             stderr_tail, run_id))
+             returncode, error_class, error_message, stderr_tail, run_id))
 
 
 def stage_runs(job_id: str) -> list[sqlite3.Row]:

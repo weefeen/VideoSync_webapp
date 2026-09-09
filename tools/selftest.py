@@ -127,6 +127,204 @@ def check_job_store_round_trips() -> str:
     return f"queued, claimed and staged (sqlite {__import__('sqlite3').sqlite_version})"
 
 
+def check_old_databases_gain_the_new_columns() -> str:
+    """`CREATE TABLE IF NOT EXISTS` does nothing to a table that exists.
+
+    So a database written before a column was added never gets it, and the
+    first write naming that column fails with "no such column" — on the
+    server, against the only copy of the queue that matters.
+    """
+    import sqlite3
+    from app import store
+
+    with tempfile.TemporaryDirectory(prefix="svs_migrate_") as tmp:
+        path = pathlib.Path(tmp) / "old.sqlite"
+        conn = sqlite3.connect(str(path))
+        conn.row_factory = sqlite3.Row
+        # A jobs table from before any of this existed.
+        conn.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, state TEXT)")
+        conn.commit()
+
+        store._migrate(conn)
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+        missing = sorted({c for _, c, _ in store._ADDED} - have)
+
+        # Running it again must be silent, because it runs on every connect.
+        store._migrate(conn)
+        conn.close()
+
+    if missing:
+        raise Failed(f"_migrate did not add: {missing}")
+    return f"{len(store._ADDED)} columns added to an old table, twice safely"
+
+
+# --------------------------------------------------------------------------
+# the worker's report becomes the row, and only once
+# --------------------------------------------------------------------------
+def _queued(job_id: str, **over) -> None:
+    """Put one job in the table, queued, ready to be reported on."""
+    from app import store
+    row = {"id": job_id, "created": time.time(), "name": f"{job_id}.mp4",
+           "upload": f"/tmp/{job_id}.mp4", "state": store.QUEUED,
+           "queued_at": time.time(), "email": "", "attempt": 1,
+           "duration": 120.0, "size_bytes": 1024}
+    row.update(over)
+    store.put_job(row)
+
+
+def check_ledger_applies_a_run_in_order() -> str:
+    """started -> progress -> done leaves the row and the record right."""
+    from app import store
+    from app.queue import ledger
+    from app.queue.messages import Event
+
+    jid = "ledger_order"
+    _queued(jid)
+    ledger.apply(Event(job_id=jid, type="started", worker="w1"))
+    row = store.get_job(jid)
+    if row["state"] != store.RUNNING or row["worker"] != "w1":
+        raise Failed(f"'started' left the row {row['state']!r}/{row['worker']!r}")
+
+    ledger.apply(Event(job_id=jid, type="progress", stage="bands",
+                       detail="10/83", worker="w1"))
+    row = store.get_job(jid)
+    if (row["stage"], row["detail"]) != ("bands", "10/83"):
+        raise Failed(f"progress did not land: {row['stage']!r} {row['detail']!r}")
+
+    # `probe` is real work but not a milestone: it moves the detail line
+    # without advancing the stage.
+    ledger.apply(Event(job_id=jid, type="progress", stage="probe",
+                       detail="looking at the file", worker="w1"))
+    if store.get_job(jid)["stage"] != "bands":
+        raise Failed("a non-milestone stage moved the stage")
+
+    ledger.apply(Event(job_id=jid, type="done", result="/tmp/out.mp4",
+                       mode="reference", elapsed=12.5, worker="w1"))
+    row = store.get_job(jid)
+    if row["state"] != store.DONE or row["result"] != "/tmp/out.mp4":
+        raise Failed(f"'done' left the row {row['state']!r}")
+    if row["worker"] is not None or row["lease_until"] is not None:
+        raise Failed("a finished job still holds a worker or a lease")
+
+    runs = [r for r in store.stage_runs(jid) if r["stage"] == "render"]
+    if len(runs) != 1 or runs[0]["ended"] is None or runs[0]["elapsed"] is None:
+        raise Failed(f"the stage record is not one closed row: {runs}")
+    return "running, staged, finished, one closed record"
+
+
+def check_ledger_is_idempotent() -> str:
+    """Every rule here is a message arriving twice, late, or out of turn.
+
+    A broker redelivers on any doubt, and a lease can be reclaimed a moment
+    before a slow worker's next word lands. The expensive one is `done`
+    twice: the second would send a second email about the same video.
+    """
+    from app import stats, store
+    from app.queue import ledger
+    from app.queue.messages import Event
+
+    jid = "ledger_twice"
+    _queued(jid)
+    ledger.apply(Event(job_id=jid, type="started", worker="w1"))
+
+    before = stats.videos()
+    ledger.apply(Event(job_id=jid, type="done", result="/tmp/a.mp4"))
+    if ledger.apply(Event(job_id=jid, type="done", result="/tmp/a.mp4")):
+        raise Failed("a redelivered 'done' changed the row a second time")
+    if stats.videos() - before != 1:
+        raise Failed(f"one render counted {stats.videos() - before} times")
+
+    # A late word from a superseded attempt must not drag the row back.
+    if ledger.apply(Event(job_id=jid, type="progress", attempt=0,
+                          stage="bands", detail="stale")):
+        raise Failed("an older attempt's progress was applied")
+
+    # A reclaim that fired while the worker was merely slow.
+    jid2 = "ledger_reclaim"
+    _queued(jid2)
+    ledger.apply(Event(job_id=jid2, type="started", worker="w1"))
+    store.update_job(jid2, state=store.QUEUED, worker=None)
+    ledger.apply(Event(job_id=jid2, type="heartbeat", worker="w1"))
+    if store.get_job(jid2)["state"] != store.RUNNING:
+        raise Failed("a heartbeat did not undo a premature reclaim")
+
+    # A crash and a redelivery: the abandoned record must be closed, not
+    # left looking like it is still running.
+    ledger.apply(Event(job_id=jid2, type="started", worker="w2"))
+    runs = [r for r in store.stage_runs(jid2) if r["stage"] == "render"]
+    closed = [r for r in runs if r["error_class"] == "Interrupted"]
+    if len(runs) != 2 or len(closed) != 1:
+        raise Failed(f"the interrupted run was not closed: "
+                     f"{[(r['state'], r['error_class']) for r in runs]}")
+    return "one mail, one count, stale dropped, reclaim undone, run closed"
+
+
+def check_stages_are_derived_from_the_row() -> str:
+    """The picture both front-ends draw must survive a process boundary.
+
+    It was a dict on the in-memory Job, so a status poll — which rebuilds
+    the Job from the table — saw all-pending for the whole render. The
+    progress indicator sat at zero and then jumped to complete.
+    """
+    from app import jobs, pipeline, store
+
+    jid = "stages"
+    _queued(jid)
+    store.update_job(jid, state=store.RUNNING, stage="strip")
+    stages = jobs.Job.from_row(store.get_job(jid)).stages
+    order = list(pipeline.STAGES)
+    at = order.index("strip")
+    wrong = [s for s in order[:at] if stages[s] != "done"]
+    if wrong or stages["strip"] != "active":
+        raise Failed(f"mid-render picture is wrong: {stages}")
+    if any(stages[s] != "pending" for s in order[at + 1:]):
+        raise Failed(f"stages after the current one are not pending: {stages}")
+
+    store.update_job(jid, state=store.ERROR)
+    if jobs.Job.from_row(store.get_job(jid)).stages["strip"] != "failed":
+        raise Failed("a failed job does not mark the stage it failed in")
+
+    store.update_job(jid, state=store.DONE)
+    if set(jobs.Job.from_row(store.get_job(jid)).stages.values()) != {"done"}:
+        raise Failed("a finished job does not show every stage done")
+    return f"{len(order)} stages, before/at/after, plus failed and finished"
+
+
+def check_messages_round_trip() -> str:
+    """Both shapes survive JSON, and a message from another build is refused."""
+    from app.queue import messages
+
+    task = messages.RenderTask(
+        job_id="abc", upload=r"C:\work\abc.mp4", package="Op.39_Scherzo",
+        attempt=2, mode="reference", duration=424.3,
+        style={"aspect": "16/9", "crf": 20}, meta={"performer": "Zoé"})
+    if messages.RenderTask.from_json(task.to_json()) != task:
+        raise Failed("a RenderTask did not survive the round trip")
+
+    event = messages.Event(job_id="abc", type="failed", attempt=2, seq=9,
+                           error="ffmpeg said no", error_class="ToolFailed",
+                           returncode=-9, stderr_tail="…")
+    if messages.Event.from_json(event.to_json()) != event:
+        raise Failed("an Event did not survive the round trip")
+
+    # A field this build has never heard of is ignored, so the two sides
+    # need not be deployed in the same instant.
+    grown = task.to_json().replace('"kind": "render"',
+                                   '"kind": "render", "invented": 1')
+    if messages.RenderTask.from_json(grown) != task:
+        raise Failed("an unknown field was not ignored")
+
+    # A different version is refused rather than guessed at.
+    future = task.to_json().replace(f'"v": {messages.VERSION}', '"v": 99')
+    try:
+        messages.RenderTask.from_json(future)
+    except messages.UnknownVersion:
+        pass
+    else:
+        raise Failed("a message from version 99 was accepted")
+    return f"both shapes, v{messages.VERSION}, unknown fields ignored"
+
+
 # --------------------------------------------------------------------------
 # recognition resolves to a score, whatever wrote the pair list
 # --------------------------------------------------------------------------
@@ -273,6 +471,11 @@ def main() -> int:
         check_every_module_imports,
         check_limits_are_sane,
         check_job_store_round_trips,
+        check_old_databases_gain_the_new_columns,
+        check_messages_round_trip,
+        check_ledger_applies_a_run_in_order,
+        check_ledger_is_idempotent,
+        check_stages_are_derived_from_the_row,
         check_piece_ids_resolve,
         check_pair_list_is_read_without_the_dependency,
         check_linux_configuration_leaves_no_gaps,

@@ -27,6 +27,7 @@ Three things follow from the queue living on disk rather than in memory:
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
 import logging
 import os
@@ -38,14 +39,12 @@ import traceback
 import uuid
 from typing import Any
 
-from . import limits
-from . import notify
 from . import paths as jobpaths
 from . import pipeline
 from . import render as rnd
-from . import stats
 from . import store
 from .settings import settings
+from .queue import ledger, messages
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +81,11 @@ class Job:
     queued_at: float | None = None
     started: float | None = None
     finished: float | None = None
-    stages: dict[str, str] = dataclasses.field(
-        default_factory=lambda: {s: "pending" for s in pipeline.STAGES})
+    # Where the render has got to. `stages` is derived from it rather than
+    # stored: two of them held the same truth, and the copy that lived on
+    # this object was the one nothing outside the working process could see.
+    stage: str | None = None
+    attempt: int = 1
 
     # -- the store -------------------------------------------------------
     def row(self, style: rnd.Style | None = None,
@@ -105,6 +107,10 @@ class Job:
             "finished": self.finished,
             "style": json.dumps(dataclasses.asdict(style)) if style else None,
             "meta": json.dumps(meta or {}),
+            # Written explicitly because put_job is INSERT OR REPLACE: a
+            # column left out of this dict is not left alone, it is reset.
+            "stage": self.stage, "detail": self.detail,
+            "attempt": self.attempt,
         }
 
     @classmethod
@@ -121,9 +127,34 @@ class Job:
         job.created = row["created"]
         job.queued_at, job.started = row["queued_at"], row["started"]
         job.finished = row["finished"]
-        done = job.state == store.DONE
-        job.stages = {s: ("done" if done else "pending") for s in pipeline.STAGES}
+        keys = row.keys()
+        job.stage = row["stage"] if "stage" in keys else None
+        job.detail = (row["detail"] if "detail" in keys else "") or ""
+        job.attempt = (row["attempt"] if "attempt" in keys else 1) or 1
         return job
+
+    @property
+    def stages(self) -> dict[str, str]:
+        """The per-stage picture both front-ends draw, derived from the row.
+
+        Everything before the current stage is finished, the current one is
+        active, the rest have not started. Held as state until now, which
+        meant it only existed inside the process doing the work: a status
+        poll rebuilt the Job from the table and got all-pending for the
+        whole render, so the progress indicator sat at zero and then jumped.
+        """
+        if self.state == store.DONE:
+            return {s: "done" for s in pipeline.STAGES}
+        if self.stage not in pipeline.STAGES:
+            return {s: "pending" for s in pipeline.STAGES}
+        out, reached = {}, False
+        for name in pipeline.STAGES:
+            if name == self.stage:
+                reached = True
+                out[name] = "failed" if self.state == store.ERROR else "active"
+            else:
+                out[name] = "pending" if reached else "done"
+        return out
 
     def save(self, style: rnd.Style | None = None,
              meta: dict | None = None) -> None:
@@ -234,6 +265,14 @@ class Registry:
         job.mode = mode
         job.state = store.QUEUED
         job.queued_at = time.time()
+        # Submitting a finished or failed job again starts a new attempt, so
+        # a message still in flight from the previous one cannot be mistaken
+        # for this one's and overwrite what this run produces.
+        previous = store.get_job(job.id)
+        if previous is not None and previous["state"] in (store.DONE, store.ERROR):
+            job.attempt = (previous["attempt"] or 1) + 1
+        job.stage, job.detail, job.error = None, "", None
+        job.result, job.finished, job.started = None, None, None
         job.save(style, meta)
         with self._lock:
             self._live.pop(job.id, None)
@@ -267,101 +306,73 @@ class Registry:
                 traceback.print_exc()
 
     def _run(self, job: Job, row) -> None:
+        """Do the work, and report it. The reporting is the point.
+
+        Nothing here writes the job table. Every fact leaves as an `Event`
+        and `ledger.apply` decides what it means for the row — the same
+        function that will apply those events when the two halves are
+        separate processes, so the rules cannot come to differ between the
+        one arrangement and the other.
+
+        The work is driven off a `RenderTask` rather than off the row for
+        the same reason: what the worker is allowed to know is exactly what
+        fits in a message, and on the next machine that is all it will get.
+        """
+        seq = itertools.count(1)
+        me = threading.current_thread().name
+
+        def emit(kind: str, **fields) -> None:
+            ledger.apply(messages.Event(job_id=job.id, type=kind,
+                                        attempt=job.attempt, seq=next(seq),
+                                        worker=me, **fields))
+
         try:
-            style = rnd.Style(**json.loads(row["style"])) if row["style"] else None
-            meta = json.loads(row["meta"] or "{}")
+            task = messages.RenderTask(
+                job_id=job.id, upload=row["upload"],
+                package=row["score"] or "", attempt=job.attempt,
+                mode=row["mode"], duration=row["duration"],
+                style=json.loads(row["style"]) if row["style"] else {},
+                meta=json.loads(row["meta"] or "{}"),
+                queued_at=row["queued_at"] or 0.0)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            self._fail(job, f"The stored settings could not be read: {exc}")
+            emit("started")
+            emit("failed", error=f"The stored settings could not be read: {exc}",
+                 error_class=type(exc).__name__)
+            self._wake.set()
             return
 
-        lease = max(600.0, settings.sync_timeout * 4)
-
-        def on_progress(stage: str, detail: str = "") -> None:
-            if stage in job.stages:
-                for name in pipeline.STAGES:
-                    if name == stage:
-                        break
-                    if job.stages[name] == "pending":
-                        job.stages[name] = "done"
-                job.stages[stage] = "active"
-            job.detail = detail
-            # Say we are still here, so nothing reclaims a job that is only
-            # slow rather than abandoned.
-            store.renew(job.id, lease)
-
-        run = store.stage_begin(job.id, "render",
-                                inputs=[str(job.upload_path)],
-                                bytes_in=job.size_bytes,
-                                media_seconds=job.duration)
+        emit("started")
+        began = time.time()
         try:
-            package = pipeline.find_package(job.score or "")
+            package = pipeline.find_package(task.package)
             if package is None:
                 raise pipeline.PipelineError(
-                    f"No score package named {job.score!r}.")
-
-            result = pipeline.run(package, job.upload_path, job.id,
-                                  style, job.mode, meta, on_progress)
-            job.result, job.mode = result.output, result.mode
-            job.state, job.finished = store.DONE, time.time()
-            for name in job.stages:
-                job.stages[name] = "done"
-            store.update_job(job.id, state=store.DONE, finished=job.finished,
-                             result=str(job.result), mode=job.mode,
-                             worker=None, lease_until=None)
-            store.stage_end(run, state=store.DONE, outputs=[str(job.result)])
-            # Counted here rather than at submit, so the tally means
-            # delivered and not attempted.
-            stats.record_video()
-            self._tell_them(job)
+                    f"No score package named {task.package!r}.")
+            style = rnd.Style(**task.style) if task.style else None
+            result = pipeline.run(
+                package, pathlib.Path(task.upload), task.job_id, style,
+                task.mode, task.meta,
+                lambda stage, detail="": emit("progress", stage=stage,
+                                              detail=detail))
+            emit("done", result=str(result.output), mode=result.mode,
+                 output_bytes=(result.output.stat().st_size
+                               if result.output.is_file() else None),
+                 elapsed=round(time.time() - began, 1))
 
         except pipeline.PipelineError as exc:
             # A tool failure carries the command that produced it; anything
-            # else has only its message. Both are recorded, so "which stage,
+            # else has only its message. Both are reported, so "which stage,
             # what inputs, what error" has an answer without a log dig.
-            store.stage_end(
-                run, state=store.ERROR, error=exc,
-                command=shlex.join(getattr(exc, "command", []) or []) or None,
-                returncode=getattr(exc, "returncode", None),
-                stderr_tail=(getattr(exc, "stderr", "") or "")[-4000:] or None)
-            self._fail(job, str(exc))
-        except Exception as exc:                 # noqa: BLE001 - never die silently
+            emit("failed", error=str(exc), error_class=type(exc).__name__,
+                 command=shlex.join(getattr(exc, "command", []) or []),
+                 returncode=getattr(exc, "returncode", None),
+                 stderr_tail=(getattr(exc, "stderr", "") or "")[-4000:])
+        except Exception as exc:             # noqa: BLE001 - never die silently
             traceback.print_exc()
-            store.stage_end(run, state=store.ERROR, error=exc)
-            self._fail(job, f"Unexpected failure: {exc}")
+            emit("failed", error=f"Unexpected failure: {exc}",
+                 error_class=type(exc).__name__)
         finally:
-            self._wake.set()                     # someone may be next
-
-    @staticmethod
-    def _tell_them(job: Job) -> None:
-        """Send the "it is ready" message, if we can and were asked to.
-
-        Never fatal: the video exists, the page shows the link, and a mail
-        server having a bad day is not a failed render.
-        """
-        if not job.email or not settings.can_email:
-            return
-        address = job.email.strip().lower()
-        if not limits.allowed("mail_email", address):
-            logger.info("not mailing %s: over its allowance", address)
-            return
-        if not limits.allowed("mail_total", "all"):
-            logger.warning("daily mail cap reached; not mailing %s", address)
-            return
-        try:
-            notify.send_ready(job.id, job.email, piece=job.score or "",
-                              finished=job.finished)
-        except notify.MailError as exc:
-            logger.warning("could not tell %s about job %s: %s",
-                           job.email, job.id, exc)
-
-    def _fail(self, job: Job, message: str) -> None:
-        job.state, job.error = store.ERROR, message
-        job.finished = time.time()
-        for name, value in job.stages.items():
-            if value == "active":
-                job.stages[name] = "failed"
-        store.update_job(job.id, state=store.ERROR, error=message,
-                         finished=job.finished, worker=None, lease_until=None)
+            self._wake.set()                 # someone may be next
 
     def resume(self) -> int:
         """Pick the queue up again after a restart.
