@@ -25,7 +25,10 @@ def main() -> int:
     for issue in problems:
         print(f"WARNING: {issue}")
 
-    app = create_app()
+    app = create_app()          # resumes the queue as it builds
+
+    from app import store
+    waiting = len(store.waiting())
     print(f"\n  score roots : "
           f"{', '.join(str(r.path) for r in settings.score_roots) or 'none'}")
     print(f"  jobs        : {settings.work_dir}")

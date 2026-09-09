@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
 import re
 import threading
@@ -21,12 +22,26 @@ from . import limits
 from . import render as rnd
 from . import retention
 from . import stats
+from . import store
 from . import sync as syncing
 from .settings import settings
 
 bp = Blueprint("main", __name__)
 
-MAX_UPLOAD_BYTES = 500 * 1024 * 1024       # matches the mockup's "up to 500 mb"
+# 500 MB was the mockup's number and it rejects most real phone
+# recordings: an iPhone at 4K30 passes it in three minutes, at 1080p30 in
+# ten. Since the render is a fixed 1080p canvas either way, a 4K upload
+# buys nothing but a longer wait — so the cap is generous and the page
+# says 1080p is enough.
+MAX_UPLOAD_GB = float(os.getenv("MAX_UPLOAD_GB", "4") or 4)
+MAX_UPLOAD_BYTES = int(MAX_UPLOAD_GB * 1024 * 1024 * 1024)
+
+# Length is what costs: the encode grows with it, and the aligner's memory
+# grows with its square. Nothing in the reference corpus of 249 recordings
+# runs past 31 minutes, and the longest identified piece is a 23-minute
+# concerto movement, so 25 admits everything real at a quarter of the
+# memory 40 would need.
+MAX_DURATION_MINUTES = float(os.getenv("MAX_DURATION_MINUTES", "25") or 25)
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
@@ -125,7 +140,9 @@ def api_library():
                     # Published so the privacy note quotes the window that
                     # is actually enforced rather than a number typed into
                     # copy once and then left behind by a config change.
-                    "retention_hours": settings.retention_hot_hours})
+                    "retention_hours": settings.retention_hot_hours,
+                    "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
+                    "max_minutes": MAX_DURATION_MINUTES})
 
 
 @bp.get("/api/stats")
@@ -413,6 +430,26 @@ def api_upload():
         job.state, job.error = "error", str(exc)
         return jsonify({"error": job.error}), 415
 
+    minutes = (info["duration"] or 0) / 60.0
+    if not info["duration"]:
+        dest.unlink(missing_ok=True)
+        job.state, job.error = "error", (
+            "The length of that video could not be read, so we cannot tell "
+            "how long it would take to process.")
+        return jsonify({"error": job.error}), 415
+
+    if minutes > MAX_DURATION_MINUTES:
+        # Length is what costs: the encode grows with it and the aligner's
+        # memory grows with its square. Refused here rather than after a
+        # visitor has waited in a queue for it.
+        dest.unlink(missing_ok=True)
+        job.state, job.error = "error", (
+            f"That recording is {minutes:.0f} minutes long, and we can take "
+            f"up to {MAX_DURATION_MINUTES:.0f}. If it is a whole sonata or "
+            f"a recital, upload one movement at a time — the scores are per "
+            f"movement anyway.")
+        return jsonify({"error": job.error}), 413
+
     if not info["has_audio"]:
         dest.unlink(missing_ok=True)
         job.state, job.error = "error", (
@@ -463,8 +500,8 @@ def api_render(job_id: str):
     job = jobs.registry.get(job_id)
     if job is None:
         return jsonify({"error": "Unknown job."}), 404
-    if job.state == "running":
-        return jsonify({"error": "That job is already running."}), 409
+    if job.state in (store.QUEUED, store.RUNNING):
+        return jsonify({"error": "That job is already in the queue."}), 409
     if not job.upload_path.is_file():
         return jsonify({"error": "The uploaded video is no longer on disk."}), 410
 
@@ -565,5 +602,9 @@ def create_app() -> Flask:
     settings.ensure_dirs()
 
     # Finished videos outlive the process that made them.
-    jobs.registry.rehydrate()
+    # Anything queued when this last stopped is still queued, and a
+    # render caught in flight goes back to the front of the line
+    # rather than being reported as finished. Done here rather than
+    # in run.py so it also happens under gunicorn.
+    jobs.registry.resume()
     return app

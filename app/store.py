@@ -157,6 +157,17 @@ def one(sql: str, args: tuple = ()) -> sqlite3.Row | None:
     return rows[0] if rows else None
 
 
+def write_returning(sql: str, args: tuple = ()) -> list[sqlite3.Row]:
+    """A statement that changes rows and reports which. Committed.
+
+    `query` deliberately does not commit, so using it for an UPDATE loses
+    the change at the next connection close — a mistake worth making
+    impossible rather than remembering.
+    """
+    with write() as conn:
+        return conn.execute(sql, args).fetchall()
+
+
 # ---------------------------------------------------------------------------
 # jobs
 # ---------------------------------------------------------------------------
@@ -192,7 +203,7 @@ def waiting() -> list[sqlite3.Row]:
     takes somebody else is worse than showing no position at all.
     """
     return query("SELECT * FROM jobs WHERE state = ?"
-                 " ORDER BY priority DESC, queued_at", (QUEUED,))
+                 " ORDER BY priority DESC, queued_at, id", (QUEUED,))
 
 
 def running() -> sqlite3.Row | None:
@@ -220,10 +231,18 @@ def position(job_id: str) -> int | None:
     row = get_job(job_id)
     if row is None or row["state"] != QUEUED:
         return None
+    # `id` breaks the tie because two jobs really can share a queued_at:
+    # time.time() moves in ~15 ms steps on Windows, and two submissions in
+    # the same step would otherwise each be told they were ahead of the
+    # other. Arbitrary is fine; disagreeing is not.
     ahead = one(
         "SELECT COUNT(*) AS n FROM jobs WHERE state = ? AND ("
-        "  priority > ? OR (priority = ? AND queued_at < ?))",
-        (QUEUED, row["priority"], row["priority"], row["queued_at"] or 0))
+        "  priority > ?"
+        "  OR (priority = ? AND queued_at < ?)"
+        "  OR (priority = ? AND queued_at = ? AND id < ?))",
+        (QUEUED, row["priority"],
+         row["priority"], row["queued_at"] or 0,
+         row["priority"], row["queued_at"] or 0, row["id"]))
     return int(ahead["n"]) if ahead else 0
 
 
@@ -244,7 +263,7 @@ def claim_next(worker: str, lease_seconds: float = 3600.0) -> sqlite3.Row | None
         row = conn.execute(
             "UPDATE jobs SET state = ?, worker = ?, started = ?, lease_until = ?"
             " WHERE id = (SELECT id FROM jobs WHERE state = ?"
-            "             ORDER BY priority DESC, queued_at LIMIT 1)"
+            "             ORDER BY priority DESC, queued_at, id LIMIT 1)"
             " RETURNING *",
             (RUNNING, worker, now, now + lease_seconds, QUEUED)).fetchone()
         return row

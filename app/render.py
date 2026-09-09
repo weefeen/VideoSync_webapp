@@ -31,6 +31,8 @@ import hashlib
 import json
 import pathlib
 import shutil
+import shlex
+import logging
 import subprocess
 import tempfile
 from typing import Callable
@@ -55,6 +57,9 @@ NONE, STATIC, DYNAMIC = "none", "static", "dynamic"
 BACKGROUNDS = (NONE, STATIC, DYNAMIC)
 
 TOP, BOTTOM = "top", "bottom"
+
+
+logger = logging.getLogger(__name__)
 
 
 class RenderError(RuntimeError):
@@ -410,11 +415,34 @@ def prepare_bands(pkg: ScorePackage, size: tuple[int, int], style: Style,
 # --------------------------------------------------------------------------
 # rendering
 # --------------------------------------------------------------------------
+class ToolFailed(RenderError):
+    """A tool exited non-zero, carrying enough to reproduce the run.
+
+    The filter graphs here run to hundreds of characters and are assembled
+    from the visitor's own crop, colours and panel choice, so without the
+    exact command a failure cannot be repeated — which in practice meant it
+    could not be fixed. `command` is the argument list, ready to re-run or
+    to paste after shlex.join.
+    """
+
+    def __init__(self, what: str, cmd: list[str], returncode: int,
+                 stderr: str):
+        self.what = what
+        self.command = list(cmd)
+        self.returncode = returncode
+        self.stderr = stderr or ""
+        tail = self.stderr.strip().splitlines()[-6:]
+        super().__init__(f"{what} failed:\n" + "\n".join(tail))
+
+
 def _run(cmd: list[str], what: str) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        tail = (result.stderr or "").strip().splitlines()[-6:]
-        raise RenderError(f"{what} failed:\n" + "\n".join(tail))
+        # Logged as well as carried: what a visitor is shown must not
+        # contain a command line, and an operator needs exactly that.
+        logger.error("%s failed (exit %s)\n  %s\n%s", what, result.returncode,
+                     shlex.join(cmd), (result.stderr or "").strip()[-4000:])
+        raise ToolFailed(what, cmd, result.returncode, result.stderr or "")
 
 
 def _band_strip(pkg: ScorePackage, images: dict[int, pathlib.Path],
