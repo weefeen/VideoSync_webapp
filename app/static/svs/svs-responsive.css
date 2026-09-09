@@ -1,0 +1,118 @@
+/* Small screens.
+ *
+ * The design reflows its page-level grids — the hero, the source footer —
+ * but the components inside them keep the column counts and fixed tracks
+ * they were drawn with, so on a phone the dropzone, the candidate rows,
+ * the editor stage and the send box all overflow or crush. This adds the
+ * rules those components need and nothing else: no restyling, no new
+ * colours, no changes above the breakpoints.
+ *
+ * Two sizes: tablets in portrait, then phones. Plus a pass for touch,
+ * where the constraint is finger size rather than screen width.
+ */
+
+/* ── tablets in portrait, and any narrow window ──────────────────────── */
+@media (max-width: 900px) {
+  .top { padding: 22px 22px 0; gap: 14px; flex-wrap: wrap; }
+  main { padding: 0 22px 64px; }
+
+  /* The editor stage puts the poster rail beside the frame; below this
+     there is no room for a column of stills next to a video. */
+  .stage { flex-direction: column; gap: 12px; }
+  .posters { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap;
+             align-items: center; width: 100%; }
+  .posters > .lab { flex: 0 0 100%; margin-bottom: 2px; }
+  .pth { width: 76px; flex: 0 0 76px; }
+  .insp { width: 100%; }
+
+  /* Title and view switch stop competing for one line. */
+  .shapehead { flex-direction: column; align-items: stretch; gap: 14px; }
+  .views { width: 100%; }
+
+  /* The send box: the address and the button stack rather than the button
+     being squeezed to nothing. */
+  .deliver { grid-template-columns: minmax(0, 1fr); gap: 22px;
+             align-items: stretch; }
+  .deliver .go { align-self: flex-start; }
+  .emailrow { max-width: none; }
+
+  .srcinner { padding: 0 22px; }
+  .foot { padding-left: 22px; padding-right: 22px; }
+}
+
+/* ── phones ──────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .top { padding: 18px 16px 0; }
+  main { padding: 0 16px 56px; }
+  section[data-s] { padding-top: 34px; }
+
+  /* Three columns of glyph, words and button do not fit. The glyph goes —
+     it is decoration — and the button becomes the full width it needs to
+     be a target. */
+  .dropzone { grid-template-columns: minmax(0, 1fr); gap: 18px;
+              padding: 26px 20px; text-align: left; }
+  .dropzone .glyph { display: none; }
+  .dropbtn { width: 100%; padding: 16px 20px; }
+  .dropzone h2 { font-size: 22px; }
+
+  /* A candidate row keeps its mark and its name; the confidence bar is the
+     first thing to go, since the figure beside it says the same in less
+     room — and outside ?debug neither is there at all. */
+  .cand { grid-template-columns: 16px minmax(0, 1fr) auto; gap: 12px;
+          padding: 14px; }
+  .cand .bar { display: none; }
+  .cand .t { font-size: 16px; }
+  .cands.lead .cand .t { font-size: 18px; }
+  .piece { grid-template-columns: minmax(0, 1fr); gap: 4px;
+           padding-left: 0; }
+  .piece:hover { padding-left: 0; }
+  .candhead { flex-wrap: wrap; gap: 6px 12px; }
+
+  /* Inspector rows: an 88-pixel label column leaves nothing for the
+     control it labels. */
+  .ctl { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .insp .opts { flex-wrap: wrap; }
+  .insp .opts .o { flex: 1 1 auto; min-width: 44%; }
+
+  /* Buttons that were sized for a mouse. */
+  .go { width: 100%; justify-content: center; font-size: 16px; }
+  .advance { flex-direction: column; align-items: stretch; gap: 12px; }
+  .advance .lab { text-align: center; }
+
+  .display { font-size: clamp(28px, 8vw, 38px); }
+  .standfirst { font-size: 15.5px; }
+  .fbrow { flex-wrap: wrap; gap: 8px 14px; }
+  .filename { font-size: 20px; }
+
+  /* Partner marks wrap instead of running off the side. */
+  .fbwrap { gap: 16px; }
+  .pbands { flex-wrap: wrap; gap: 14px 0; }
+  .pband { padding-right: 18px; }
+  .pband + .pband { padding-left: 18px; }
+
+  .recap { grid-template-columns: minmax(0, 1fr); }
+  .confirm { padding-top: 48px; }
+  .confirm h1 { font-size: clamp(24px, 7vw, 32px); }
+  .foot { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .footlinks { flex-wrap: wrap; gap: 12px 18px; }
+
+  /* The rights dialog is a full-screen sheet on a small display. */
+  .rights { padding: 0; align-items: flex-end; }
+  .rightscard { max-width: none; border-radius: 3px 3px 0 0;
+                padding: 22px 18px calc(18px + env(safe-area-inset-bottom)); }
+  .rightsacts { flex-wrap: wrap; gap: 12px 16px; }
+  .rightsacts .go { width: 100%; }
+}
+
+/* ── fingers rather than pointers ────────────────────────────────────── */
+/* Width says nothing about how it is being touched: a tablet with a stylus
+   and a phone in a hand need the same target size regardless of viewport. */
+@media (pointer: coarse) {
+  .linkbtn, .view, .insp .opts .o, .chip, .pth, .piece, .cand {
+    min-height: 44px;
+  }
+  .chip { min-width: 44px; }
+  .linkbtn { padding: 12px 0; }
+  /* Hover states that stick on touch are worse than none. */
+  .piece:hover { padding-left: 26px; }
+}

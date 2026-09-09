@@ -990,3 +990,32 @@ async function showCount(){
 }
 showCount();
 document.addEventListener('DOMContentLoaded', showCount);
+
+/* ── small screens ───────────────────────────────────────────────────── */
+/* The design reflows its page-level grids but not the components inside
+ * them, so the dropzone, candidate rows, editor stage and send box keep
+ * the column counts they were drawn with. The rules live in their own
+ * stylesheet rather than in a template literal here. */
+const responsive = document.createElement('link');
+responsive.rel = 'stylesheet';
+responsive.href = 'svs-responsive.css';
+document.head.appendChild(responsive);
+
+/* ── the design's own screen switcher ────────────────────────────────── */
+/* Upload / Recognised / Unrecognised / How it looks / Inspector open /
+ * Almost there / Sent — the jump list that let the mock be reviewed
+ * without a server. Every one of those states is now reached by using the
+ * thing, and it fakes a chosen piece when nothing was uploaded, which is
+ * what this wiring exists to remove. Kept under ?debug, where skipping a
+ * forty-five second wait to look at a screen is worth having.
+ *
+ * (This was written once already and then deleted by my own edit, which
+ * truncated the file from the counter onwards. Hence its position last.) */
+function removeScreenSwitcher(){
+  const sw = document.querySelector('#sw');
+  if(!sw) return;
+  if(DEBUG){ sw.style.opacity = '.55'; return; }
+  sw.remove();
+}
+removeScreenSwitcher();
+document.addEventListener('DOMContentLoaded', removeScreenSwitcher);
