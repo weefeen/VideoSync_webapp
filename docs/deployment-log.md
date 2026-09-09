@@ -635,13 +635,76 @@ to lose less by staging the work — which is the per-stage queue split of
 
 ---
 
+## 16. systemd, and the orphaned ffmpeg fixed
+
+§15 measured the problem: `kill -9` on a hand-started worker leaves its
+ffmpeg encoding for another eight minutes, holding one of two cores, so the
+retry the broker correctly redelivered ran at half speed.
+
+It cannot be fixed inside the worker. SIGKILL cannot be caught, so the
+process never gets to clean up, and its child is reparented to init and
+carries on. **The supervisor has to own it**, which is what systemd's default
+`KillMode=control-group` does: everything the unit starts is in the unit's
+cgroup, and stopping the unit signals the whole cgroup.
+
+    deploy/vsw-worker.service     the renderer
+    deploy/vsw-web.service        serves, applies events, sweeps
+    deploy/install-units.sh       installs both, idempotent
+
+Two things ruled out rather than forgotten. `preexec_fn` with
+`PR_SET_PDEATHSIG` would also kill the child with its parent, and is unsafe
+here: the worker is multi-threaded and `preexec_fn` runs between fork and
+exec, where a lock held by another thread can deadlock the child.
+`start_new_session` plus killing the group on shutdown handles a graceful
+stop and does nothing at all on SIGKILL, which is the case that caused this.
+
+### Proved, not assumed
+
+    worker main : 45607
+    encode pid  : 45839   (parent 45607)
+    cgroup      : 45607 45839
+
+    kill -9 45607          # the worker only, exactly as in §15
+
+    encode pid 45839 is gone — systemd killed it with the cgroup
+    ffmpeg processes whose parent is init: none
+
+The unit restarted, the broker redelivered, and the job picked up again —
+after two such kills its record read two `Interrupted` runs and a third
+running.
+
+**A false result on the way, worth writing down.** The first attempt at this
+check used `pgrep -f ffmpeg` and reported survivors. They were the checking
+shell itself: its own command line contained the string "ffmpeg", so it
+matched. `pgrep -x ffmpeg` plus a parent check is what the result above uses.
+A test that greps for a string it also contains will lie in exactly one
+direction — it says the bug is still there.
+
+### What the units also buy
+
+- **Both processes survive a reboot.** Neither did before; both were started
+  by hand with `setsid` and would not have come back.
+- **Logs go to the journal** — `journalctl -u vsw-worker -f`. The web
+  process previously wrote to a file only because it was started with a
+  redirect, and before this session it configured no logging at all.
+- `Requires=rabbitmq-server.service` on the worker, so it does not spend its
+  first minute failing to connect at boot.
+
+`TimeoutStopSec=30` on the worker is a deliberate trade: a render takes up to
+32 minutes and cannot resume from the middle, so a stop either waits half an
+hour or costs a re-render. It costs the re-render, because redelivery is safe
+and an operator who cannot restart a service inside a minute stops
+restarting it.
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;
   2 shared cores gave 1.292 and a dedicated 4-core box will differ
-- gunicorn in place of the Flask development server — and with it the
-  first real proof that the app *serves* on Linux, which "every module
-  imports" is not
+- gunicorn in place of the Flask development server. One line in
+  `deploy/vsw-web.service` and a dependency; supervision itself is done
+  (§16), so this is now only about the server, not about the process
 - A bot check before anything faces the public
 - Apache vhost, certbot and DNS for `chopin.weefeen.com` — on the
   production Linode, not this one, and only once the above is proven

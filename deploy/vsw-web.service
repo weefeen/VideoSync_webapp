@@ -1,0 +1,43 @@
+# The site: serves the pages, applies what the worker reports, sweeps.
+#
+#   install:  cp deploy/vsw-web.service /etc/systemd/system/
+#             systemctl daemon-reload && systemctl enable --now vsw-web
+#
+# It does NOT render when RABBITMQ_URL is set — `vsw-worker.service` does.
+# Two consumers on one queue would let the same task be rendered twice.
+#
+# NOTE: ExecStart is still Flask's development server, which says so on
+# every startup. Replacing it with gunicorn is one line here and a
+# dependency; it is deliberately a separate change from getting these two
+# processes supervised at all, so that each can be proved on its own.
+
+[Unit]
+Description=VideoSync web app
+Documentation=https://github.com/weefeen/VideoSync_webapp
+After=network-online.target rabbitmq-server.service
+Wants=network-online.target rabbitmq-server.service
+
+[Service]
+Type=simple
+User=vsw
+Group=vsw
+WorkingDirectory=/srv/vsw/app
+Environment=HOME=/srv/vsw
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/vsw/venv/bin/python run.py --host 127.0.0.1 --port 5000
+
+Restart=always
+RestartSec=3
+
+# Nothing here holds long work: the applier writes rows and the janitor
+# sweeps every thirty seconds. Both are safe to interrupt — events wait in
+# the broker until the applier comes back.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

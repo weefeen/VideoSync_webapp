@@ -69,7 +69,7 @@ app/
 
 tools/                  see tools/README.md
 docs/                   see docs/README.md
-deploy/                 bootstrap.sh (a fresh machine), deploy.sh (a release)
+deploy/                 bootstrap.sh, the two systemd units, install-units.sh
 design/mockup/          the design as handed over, kept for provenance only
 ```
 

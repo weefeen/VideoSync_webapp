@@ -1,0 +1,60 @@
+# The render worker. One per machine.
+#
+#   install:  cp deploy/vsw-worker.service /etc/systemd/system/
+#             systemctl daemon-reload && systemctl enable --now vsw-worker
+#
+# The setting that matters here is one that is not written down below,
+# because it is the default: KillMode=control-group. Everything systemd
+# starts lands in this unit's cgroup, and when the unit stops — for any
+# reason, including the main process being killed outright — systemd
+# signals every process in that cgroup.
+#
+# That is not tidiness. Measured on this node: `kill -9` on the worker
+# leaves its ffmpeg running, because SIGKILL cannot be caught and the
+# worker never gets to clean up. The orphan carried on encoding for eight
+# more minutes, holding one of two cores, and the retry that the broker
+# correctly redelivered took 970 s instead of 547. Under systemd the
+# orphan cannot happen: ffmpeg is in the cgroup and goes with it.
+
+[Unit]
+Description=VideoSync render worker
+Documentation=https://github.com/weefeen/VideoSync_webapp
+# The worker does nothing without the broker, and starting first only
+# produces a minute of connection-refused noise before it settles.
+After=network-online.target rabbitmq-server.service
+Wants=network-online.target
+Requires=rabbitmq-server.service
+
+[Service]
+Type=simple
+User=vsw
+Group=vsw
+WorkingDirectory=/srv/vsw/app
+Environment=HOME=/srv/vsw
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/vsw/venv/bin/python -m app.queue.worker
+
+Restart=always
+RestartSec=5
+
+# A render takes up to about 32 minutes and cannot resume from the middle,
+# so a stop either waits half an hour or costs a re-render. It costs the
+# re-render: redelivery is safe (the broker still holds the message, and
+# the per-attempt record stops finished work being repeated), and an
+# operator who cannot restart a service inside a minute stops restarting it.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# The work is ffmpeg and it should not compete with the web process for the
+# little that is left. Weight, not a hard limit: on an idle box it still
+# gets everything.
+Nice=5
+CPUWeight=80
+
+# It writes only into its own work directory and reads two checkouts.
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
