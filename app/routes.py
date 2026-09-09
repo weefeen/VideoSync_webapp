@@ -151,10 +151,7 @@ def api_band(name: str):
     # the band's paper instead of ink on it.
     ink = _hex_colour(request.args.get("ink", ""))
     if ink and band.is_vector:
-        svg_text = band.path.read_text(encoding="utf-8", errors="replace")
-        svg_text = svg_text.replace(
-            "<svg ", f'<svg style="color:{ink};fill:{ink}" ', 1)
-        response = Response(svg_text, mimetype="image/svg+xml")
+        response = Response(_tint(band.path, ink), mimetype="image/svg+xml")
     else:
         response = send_file(band.path, conditional=True)
 
@@ -170,6 +167,30 @@ def _hex_colour(raw: str) -> str:
     if re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value):
         return value
     return ""
+
+
+def _tint(path: pathlib.Path, ink: str) -> str:
+    """The engraving in one colour: every symbol, not merely the filled ones.
+
+    Verovio's stylesheet inside the file draws strokes with `currentColor`
+    and leaves fills to inherit, so colouring the root would seem to be
+    enough — except that the inner `definition-scale` element carries
+    `color="black"` and wraps nearly the whole score. That beats anything
+    set above it, so the noteheads followed the ink while every stroked
+    symbol — staff lines, stems, beams, slurs, barlines — stayed black.
+    Both have to be answered.
+
+    `fill="none"` is left alone: those paths are drawn by their stroke, and
+    filling them would blot the score.
+    """
+    svg = path.read_text(encoding="utf-8", errors="replace")
+    svg = svg.replace("<svg ", f'<svg style="color:{ink};fill:{ink}" ', 1)
+    svg = svg.replace('color="black"', f'color="{ink}"')
+    # Editorial marks are engraved in red. They are part of the score, so
+    # they take the chosen colour along with everything else.
+    svg = svg.replace('color="red"', f'color="{ink}"')
+    svg = svg.replace('fill="red"', f'fill="{ink}"')
+    return svg
 
 
 # --------------------------------------------------------------------------

@@ -656,3 +656,38 @@ document.addEventListener('input', e=>{
   S.vidOffset = (+e.target.value) / 100;
   paint();
 });
+
+/* ── paper and ink must differ ───────────────────────────────────────── */
+/* A score in the colour of its own paper is an empty band. The clash is
+ * stopped where it is offered rather than after it is chosen: the swatch
+ * matching the other colour is marked and does nothing. */
+const clashCSS = document.createElement('style');
+clashCSS.textContent = `
+  .chip.clash{opacity:.28;cursor:not-allowed;position:relative}
+  .chip.clash::after{content:'';position:absolute;inset:-2px;
+    border-radius:inherit;background:
+      linear-gradient(to bottom right, transparent 46%, currentColor 46%,
+                      currentColor 54%, transparent 54%)}
+`;
+document.head.appendChild(clashCSS);
+
+const COUNTERPART = { bandColor: 'noteColor', noteColor: 'bandColor' };
+
+const baseChipRow = chipRow;
+chipRow = function(g, list){
+  const other = COUNTERPART[g];
+  let html = baseChipRow(g, list);
+  if(other){
+    // Mark the one that would make the score vanish.
+    html = html.replace(/<span class="chip([^"]*)" data-v="([^"]+)"/g,
+      (whole, rest, value) => value.toLowerCase() === String(S[other]).toLowerCase()
+        ? `<span class="chip${rest} clash" data-v="${value}"` : whole);
+  }
+  return html;
+};
+
+/* Capture, so the design's own chip handler never sees the click. */
+document.addEventListener('click', e=>{
+  const chip = e.target.closest && e.target.closest('.chip.clash');
+  if(chip){ e.stopPropagation(); e.preventDefault(); }
+}, true);
