@@ -1261,6 +1261,7 @@ document.addEventListener('click', () => setTimeout(() => {
   handNote();
   linkPartners();
   sayTheLimit();
+  sayTheWindow();
 }, 0), true);
 
 /* The handwritten note under the dropzone.
@@ -1342,4 +1343,21 @@ function sayTheLimit(){
   const mins = SERVER.maxMinutes || 0;
   lab.textContent = `mp4 · mov · avi · mkv · webm — up to ${size}` +
                     (mins ? `, ${mins | 0} minutes` : '');
+}
+
+/* The "it's on its way" screen still promised seven days.
+ *
+ * The design was drawn before the window was decided, and it is now 48
+ * hours. A page that promises longer than the server allows sends someone
+ * back on the third day to a link that has stopped working — the one thing
+ * a confirmation screen must not do. Read from the server, like the size
+ * cap and the free-tier count, so it cannot drift again. */
+function sayTheWindow(){
+  document.querySelectorAll('.confirm p, .confirm .lab').forEach(el => {
+    if(!/seven days|7 days/i.test(el.textContent || '')) return;
+    const hours = (SERVER && SERVER.retentionHours) || 48;
+    const said = hours % 24 === 0 && hours >= 48
+      ? `${hours / 24} days` : `${hours} hours`;
+    el.textContent = el.textContent.replace(/seven days|7 days/i, said);
+  });
 }
