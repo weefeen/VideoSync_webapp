@@ -16,6 +16,7 @@ from flask import (Blueprint, Flask, current_app, jsonify, redirect,
 from werkzeug.utils import secure_filename
 
 from . import jobs, package as pkg, pipeline
+from .queue import webside
 from . import identify as ident
 from . import library
 from . import limits
@@ -775,5 +776,5 @@ def create_app() -> Flask:
     # render caught in flight goes back to the front of the line
     # rather than being reported as finished. Done here rather than
     # in run.py so it also happens under gunicorn.
-    jobs.registry.resume()
+    webside.start_threads()
     return app

@@ -27,15 +27,12 @@ Three things follow from the queue living on disk rather than in memory:
 from __future__ import annotations
 
 import dataclasses
-import itertools
 import json
 import logging
 import os
 import pathlib
-import shlex
 import threading
 import time
-import traceback
 import uuid
 from typing import Any
 
@@ -44,14 +41,9 @@ from . import pipeline
 from . import render as rnd
 from . import store
 from .settings import settings
-from .queue import ledger, messages
+from .queue import webside
 
 logger = logging.getLogger(__name__)
-
-# One encode uses what the machine has, so one worker is the honest default.
-# It is a setting because the day the work spreads over more machines, that
-# should be a number to change rather than a file to rewrite.
-WORKERS = max(1, int(os.getenv("MAX_CONCURRENT_RENDERS", "1") or 1))
 
 # Until enough jobs have run here to know better. Measured on a workstation:
 # about 0.82 s of encode per second of music, plus a fixed cost that does
@@ -230,9 +222,7 @@ class Registry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._wake = threading.Event()
         self._live: dict[str, Job] = {}     # uploaded, not yet submitted
-        self._workers: list[threading.Thread] = []
 
     # -- lookup ----------------------------------------------------------
     def add(self, job: Job) -> Job:
@@ -276,125 +266,21 @@ class Registry:
         job.save(style, meta)
         with self._lock:
             self._live.pop(job.id, None)
-        self.ensure_workers()
-        self._wake.set()
+        # The row is the promise and it is written above. If the handover
+        # fails the job is still owed, and the janitor offers it again —
+        # which is why `published_at` is a fact of its own.
+        try:
+            webside.publish(job.id)
+        except Exception:                        # noqa: BLE001
+            logger.exception("job %s could not be handed to the queue; "
+                             "the sweep will offer it again", job.id)
 
     # -- the workers -----------------------------------------------------
-    def ensure_workers(self) -> None:
-        with self._lock:
-            self._workers = [w for w in self._workers if w.is_alive()]
-            for n in range(WORKERS - len(self._workers)):
-                worker = threading.Thread(
-                    target=self._serve, daemon=True,
-                    name=f"render-{len(self._workers) + n}")
-                self._workers.append(worker)
-                worker.start()
 
-    def _serve(self) -> None:
-        """Take the next job, run it, repeat. Idle when there is nothing."""
-        me = threading.current_thread().name
-        lease = max(600.0, settings.sync_timeout * 4)
-        while True:
-            row = store.claim_next(me, lease_seconds=lease)
-            if row is None:
-                self._wake.wait(timeout=20)
-                self._wake.clear()
-                continue
-            try:
-                self._run(Job.from_row(row), row)
-            except Exception:                    # noqa: BLE001
-                traceback.print_exc()
-
-    def _run(self, job: Job, row) -> None:
-        """Do the work, and report it. The reporting is the point.
-
-        Nothing here writes the job table. Every fact leaves as an `Event`
-        and `ledger.apply` decides what it means for the row — the same
-        function that will apply those events when the two halves are
-        separate processes, so the rules cannot come to differ between the
-        one arrangement and the other.
-
-        The work is driven off a `RenderTask` rather than off the row for
-        the same reason: what the worker is allowed to know is exactly what
-        fits in a message, and on the next machine that is all it will get.
-        """
-        seq = itertools.count(1)
-        me = threading.current_thread().name
-
-        def emit(kind: str, **fields) -> None:
-            ledger.apply(messages.Event(job_id=job.id, type=kind,
-                                        attempt=job.attempt, seq=next(seq),
-                                        worker=me, **fields))
-
-        try:
-            task = messages.RenderTask(
-                job_id=job.id, upload=row["upload"],
-                package=row["score"] or "", attempt=job.attempt,
-                mode=row["mode"], duration=row["duration"],
-                style=json.loads(row["style"]) if row["style"] else {},
-                meta=json.loads(row["meta"] or "{}"),
-                queued_at=row["queued_at"] or 0.0)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            emit("started")
-            emit("failed", error=f"The stored settings could not be read: {exc}",
-                 error_class=type(exc).__name__)
-            self._wake.set()
-            return
-
-        emit("started")
-        began = time.time()
-        try:
-            package = pipeline.find_package(task.package)
-            if package is None:
-                raise pipeline.PipelineError(
-                    f"No score package named {task.package!r}.")
-            style = rnd.Style(**task.style) if task.style else None
-            result = pipeline.run(
-                package, pathlib.Path(task.upload), task.job_id, style,
-                task.mode, task.meta,
-                lambda stage, detail="": emit("progress", stage=stage,
-                                              detail=detail))
-            emit("done", result=str(result.output), mode=result.mode,
-                 output_bytes=(result.output.stat().st_size
-                               if result.output.is_file() else None),
-                 elapsed=round(time.time() - began, 1))
-
-        except pipeline.PipelineError as exc:
-            # A tool failure carries the command that produced it; anything
-            # else has only its message. Both are reported, so "which stage,
-            # what inputs, what error" has an answer without a log dig.
-            emit("failed", error=str(exc), error_class=type(exc).__name__,
-                 command=shlex.join(getattr(exc, "command", []) or []),
-                 returncode=getattr(exc, "returncode", None),
-                 stderr_tail=(getattr(exc, "stderr", "") or "")[-4000:])
-        except Exception as exc:             # noqa: BLE001 - never die silently
-            traceback.print_exc()
-            emit("failed", error=f"Unexpected failure: {exc}",
-                 error_class=type(exc).__name__)
-        finally:
-            self._wake.set()                 # someone may be next
-
-    def resume(self) -> int:
-        """Pick the queue up again after a restart.
-
-        A render cannot continue from the middle, so anything caught in
-        flight goes back to the queue rather than being reported finished or
-        quietly forgotten. Returns how many are now waiting.
-        """
-        reclaimed = store.reclaim_expired()
-        stranded = store.write_returning(
-            "UPDATE jobs SET state = ?, worker = NULL, lease_until = NULL,"
-            " started = NULL WHERE state = ? RETURNING id",
-            (store.QUEUED, store.RUNNING))
-        for row in stranded:
-            logger.info("job %s was interrupted; queued again", row["id"])
-        waiting = len(store.waiting())
-        if waiting:
-            logger.info("%d job(s) waiting (%d recovered from a restart)",
-                        waiting, len(reclaimed) + len(stranded))
-            self.ensure_workers()
-            self._wake.set()
-        return waiting
+# `ensure_workers`, `_serve`, `_run` and `resume` were here. The worker loop
+# is `app/queue/webside.py` and the work itself is `app/queue/worker.py`;
+# what is left of this class is lookup and submission, which is all the web
+# side ever needed from it.
 
 
 registry = Registry()

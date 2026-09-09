@@ -305,27 +305,11 @@ def position(job_id: str) -> int | None:
     return int(ahead["n"]) if ahead else 0
 
 
-def claim_next(worker: str, lease_seconds: float = 3600.0) -> sqlite3.Row | None:
-    """Take the next job, atomically. None when the queue is empty.
-
-    One statement, so two workers asking at the same moment cannot be given
-    the same job: SQLite applies the UPDATE and its subquery as a unit. That
-    is what makes adding a second worker a matter of starting one, rather
-    than of revisiting this file.
-
-    The lease is the answer to a worker that dies mid-render. It does not
-    hold a lock; it records when everyone else may stop believing this job
-    is being worked on.
-    """
-    now = time.time()
-    with write() as conn:
-        row = conn.execute(
-            "UPDATE jobs SET state = ?, worker = ?, started = ?, lease_until = ?"
-            " WHERE id = (SELECT id FROM jobs WHERE state = ?"
-            "             ORDER BY priority DESC, queued_at, id LIMIT 1)"
-            " RETURNING *",
-            (RUNNING, worker, now, now + lease_seconds, QUEUED)).fetchone()
-        return row
+# `claim_next` was here: one atomic UPDATE...RETURNING that handed the next
+# queued job to whichever worker asked first. The queue itself is the claim
+# now — a task is delivered to one consumer — and keeping a second way to
+# take a job would be an invitation to use it and get two workers on one
+# render by two different routes.
 
 
 def reclaim_expired() -> list[str]:
@@ -366,6 +350,33 @@ def set_progress(job_id: str, stage: str | None, detail: str,
 def mark_published(job_id: str) -> None:
     """The queue has taken the work. Until this, a lost handover is possible."""
     update_job(job_id, published_at=time.time())
+
+
+def unpublished(older_than: float = 30.0) -> list[sqlite3.Row]:
+    """Jobs that are waiting but were never handed over.
+
+    A publish that failed leaves exactly this: a row that says `queued` while
+    nothing anywhere intends to render it. Silent, and permanent, until
+    somebody asks why their video never came.
+
+    The age is what keeps the sweep off a job that was queued a moment ago
+    and is being published right now.
+    """
+    return query("SELECT * FROM jobs WHERE state = ? AND published_at IS NULL"
+                 " AND queued_at < ? ORDER BY priority DESC, queued_at, id",
+                 (QUEUED, time.time() - older_than))
+
+
+def forget_publications() -> int:
+    """Mark every queued job as never handed over. Returns how many.
+
+    For a transport that does not survive a restart: whatever was holding
+    those tasks went with the process, so the sweep must offer them again.
+    """
+    rows = write_returning(
+        "UPDATE jobs SET published_at = NULL WHERE state = ? RETURNING id",
+        (QUEUED,))
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------

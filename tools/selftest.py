@@ -101,9 +101,12 @@ def check_limits_are_sane() -> str:
 
 
 def check_job_store_round_trips() -> str:
-    """The queue is SQLite, and SQLite is where the platforms differ least —
-    but the claiming statement uses UPDATE...RETURNING, which is only in
-    newer SQLite, and the two platforms ship different builds of it."""
+    """A job goes in, is found by the sweep, and its stage record survives.
+
+    SQLite is where the two platforms differ least, but not where they are
+    identical: the sweep uses `UPDATE ... RETURNING`, which older builds do
+    not have, and Windows and Linux ship different ones.
+    """
     from app import store
 
     store.put_job({"id": "selftest", "created": time.time(), "name": "x.mp4",
@@ -114,17 +117,82 @@ def check_job_store_round_trips() -> str:
     if store.position("selftest") != 0:
         raise Failed("the only job in the queue is not first in it")
 
-    claimed = store.claim_next("selftest-worker")
-    if claimed is None or claimed["id"] != "selftest":
-        raise Failed("UPDATE...RETURNING claimed nothing — check the SQLite "
-                     f"build: {__import__('sqlite3').sqlite_version}")
+    # A job nothing has confirmed the handover of. The sweep finds these,
+    # and it uses UPDATE...RETURNING, which is not in older SQLite — the two
+    # platforms ship different builds, so it is exercised rather than assumed.
+    store.update_job("selftest", queued_at=time.time() - 3600)
+    if "selftest" not in [r["id"] for r in store.unpublished(older_than=30)]:
+        raise Failed("an unconfirmed job was not found by unpublished(); "
+                     f"sqlite {__import__('sqlite3').sqlite_version}")
+    store.mark_published("selftest")
+    if [r["id"] for r in store.unpublished(older_than=30)] == ["selftest"]:
+        raise Failed("a published job is still reported as unhandled")
+    if store.forget_publications() < 1:
+        raise Failed("forget_publications did not clear a queued job")
 
     run = store.stage_begin("selftest", "embed", media_seconds=10.0)
     store.stage_end(run, state=store.DONE, command="ffmpeg -i a b")
     rows = store.stage_runs("selftest")
     if not rows or rows[0]["command"] != "ffmpeg -i a b":
         raise Failed(f"stage rows did not round-trip: {rows}")
-    return f"queued, claimed and staged (sqlite {__import__('sqlite3').sqlite_version})"
+    return (f"queued, swept and staged "
+            f"(sqlite {__import__('sqlite3').sqlite_version})")
+
+
+def check_a_task_reaches_a_worker_and_comes_back() -> str:
+    """The whole seam, with the work stubbed: publish, consume, report, apply.
+
+    This is the path a broker will carry. Running it in-process on every push
+    means the shapes, the ordering and the ledger's rules are exercised on
+    both platforms without anybody installing a broker — and when the broker
+    arrives, only `transport.py` is new.
+    """
+    from app import store
+    from app.queue import ledger, transport, worker
+    from app.queue.messages import Event, RenderTask
+
+    bus = transport.LocalTransport()
+    jid = "seam"
+    _queued(jid, score="Some Score", mode="reference")
+
+    # The work itself is not the subject here, so it is replaced by
+    # something that reports the same way a real render does.
+    def fake_render(task: RenderTask, publish) -> None:
+        publish(Event(job_id=task.job_id, type="started", attempt=task.attempt,
+                      seq=1, worker="stub"))
+        publish(Event(job_id=task.job_id, type="progress", attempt=task.attempt,
+                      seq=2, stage="encode", detail="1920x1080"))
+        publish(Event(job_id=task.job_id, type="done", attempt=task.attempt,
+                      seq=3, result="/tmp/seam.mp4", elapsed=1.0))
+
+    bus.publish_task(RenderTask(job_id=jid, upload=f"/tmp/{jid}.mp4",
+                                package="Some Score", mode="reference"))
+    # Drain by hand rather than by thread, so the check cannot be flaky.
+    body = bus._tasks.get_nowait()
+    fake_render(RenderTask.from_json(body), bus.publish_event)
+
+    applied = 0
+    while not bus._events.empty():
+        ledger.apply(Event.from_json(bus._events.get_nowait()))
+        applied += 1
+
+    row = store.get_job(jid)
+    if row["state"] != store.DONE or row["result"] != "/tmp/seam.mp4":
+        raise Failed(f"the seam did not finish the job: {row['state']!r}")
+    if applied != 3:
+        raise Failed(f"{applied} events applied, expected 3")
+
+    # A ping is answered without touching ffmpeg, which is what makes a live
+    # broker checkable in seconds rather than in half an hour.
+    answers = []
+    worker.handle_task(RenderTask(job_id="p", upload="", package="",
+                                  kind="ping"), answers.append)
+    if [e.type for e in answers] != ["pong"]:
+        raise Failed(f"a ping was not answered with a pong: {answers}")
+
+    if transport.LocalTransport.survives_restart:
+        raise Failed("the in-process transport claims to survive a restart")
+    return "published, consumed, reported, applied; ping answered"
 
 
 def check_old_databases_gain_the_new_columns() -> str:
@@ -471,6 +539,7 @@ def main() -> int:
         check_every_module_imports,
         check_limits_are_sane,
         check_job_store_round_trips,
+        check_a_task_reaches_a_worker_and_comes_back,
         check_old_databases_gain_the_new_columns,
         check_messages_round_trip,
         check_ledger_applies_a_run_in_order,
