@@ -103,19 +103,46 @@ def _labels(pair_list: str):
     "recognised, but no score installed" forever, for every piece, with
     nothing anywhere saying why. An individual id having no entry is the
     real quiet case, and that still returns an empty list.
+
+    Read here rather than through `weefeen_id.labels.ScoreLabels`, which
+    parses the same file but is not portable: see `_stem`. Only rows whose
+    `level1` is "ok" count, which is the set of recordings the indexes were
+    actually built from.
     """
     if not pair_list:
         return lambda _piece_id: []
     try:
-        from weefeen_id.labels import ScoreLabels
-        table = ScoreLabels.from_pair_list(pair_list)
+        pairs = json.loads(
+            pathlib.Path(pair_list).read_text(encoding="utf-8"))["pairs"]
+        table: dict[str, list[str]] = {}
+        for name, row in pairs.items():
+            if row.get("level1") == "ok":
+                table.setdefault(_stem(row["video"]), []).append(name)
     except Exception as exc:  # noqa: BLE001 - any failure here is fatal
         raise ConfigProblem(
             f"The score list at {pair_list} could not be read ({exc}). Without "
             f"it a recognised piece cannot be matched to a score.") from exc
-    if not len(table):
+    if not table:
         raise ConfigProblem(f"The score list at {pair_list} is empty.")
-    return lambda piece_id: table.names(piece_id) if piece_id else []
+    table = {stem: sorted(set(names)) for stem, names in table.items()}
+    return lambda piece_id: table.get(piece_id, []) if piece_id else []
+
+
+def _stem(video: str) -> str:
+    """The piece id a recording carries: its file name without extension.
+
+    The Windows flavour on purpose, on every platform. Every `video` in the
+    pair list is an absolute Windows path, and `pathlib.Path` on Linux is a
+    PosixPath for which a backslash is an ordinary character — so the stem
+    of `C:\\...\\work_op_39__troisieme_scherzo,_....mp4` came back as the
+    whole path, matched no piece id, and every recognition on the Linux node
+    ended "recognised, but no installed score to render it" while reporting
+    full confidence. All 372 validated rows were affected, not some.
+
+    PureWindowsPath accepts forward slashes too, so this keeps working if
+    the list is ever rewritten with portable paths.
+    """
+    return pathlib.PureWindowsPath(video).stem
 
 
 def _device() -> str:
