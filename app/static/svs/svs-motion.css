@@ -42,18 +42,19 @@
   opacity: .10;
   /* Two masks, unioned: show the score where EITHER says show.
    *
-   *   across  a full-width strip over the header only — down to 96px,
-   *           gone by 150. It stops above the title: masking by column
-   *           alone left the header bare, because the header is centred
-   *           and that is exactly what a column mask hides, but the strip
-   *           must not carry on past it into the headline.
+   *   across  a full-width strip over the header only. It fades IN over
+   *           the first 26px so the engraving does not begin hard against
+   *           the top edge of the window, holds to 74, and is gone by 148
+   *           — above the title, never behind it. Masking by column alone
+   *           left the header bare, because the header is centred and that
+   *           is exactly what a column mask hides.
    *   margins the space outside the 1040px reading column, everywhere else.
    *
    * The crossing is 30px rather than 60. On a 1440 laptop the margin is
    * only about 130px wide, so a 60px fade was half of it: most of the
    * space was dissolving rather than showing anything. */
   -webkit-mask-image:
-      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
+      linear-gradient(180deg, transparent 0, #000 26px, #000 74px, transparent 148px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),
@@ -61,7 +62,7 @@
         #000 100%);
   -webkit-mask-composite: source-over;
           mask-image:
-      linear-gradient(180deg, #000 0, #000 74px, transparent 148px),
+      linear-gradient(180deg, transparent 0, #000 26px, #000 74px, transparent 148px),
       linear-gradient(90deg,
         #000 0,
         #000 calc(50% - 550px), transparent calc(50% - 520px),

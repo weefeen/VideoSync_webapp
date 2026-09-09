@@ -36,7 +36,7 @@ const DEBUG = new URLSearchParams(location.search).has('debug');
 let JOB = null;                 // the job this upload belongs to
 let SERVER = { online: false, can_identify: false, can_sync: false,
                can_email: false, videosPerWeek: 0,
-               retentionHours: 48 };
+               retentionHours: 48, maxUploadMb: 0, maxMinutes: 0 };
 
 /* What the design shipped with. Opening the HTML on its own is a supported
  * way to use this — the README says so — and it must keep working: with no
@@ -55,7 +55,9 @@ async function loadLibrary(){
     SERVER = { online: true, can_identify: data.can_identify,
                can_sync: data.can_sync, can_email: !!data.can_email,
                videosPerWeek: data.videos_per_week || 0,
-               retentionHours: data.retention_hours || 48 };
+               retentionHours: data.retention_hours || 48,
+               maxUploadMb: data.max_upload_mb || 0,
+               maxMinutes: data.max_minutes || 0 };
     if(Array.isArray(data.works) && data.works.length) WORKS = data.works;
   }catch(err){
     // No server: keep the shipped library so the whole interface still
@@ -504,7 +506,7 @@ $('#rightsGo').onclick = ()=>{
   if(name && blob) uploadAndIdentify(name, blob);
 };
 
-const READY = loadLibrary().then(()=>{ if(!S.file) draw(); });
+const READY = loadLibrary().then(()=>{ if(!S.file) draw(); sayTheLimit(); });
 
 /* ── the frame, laid out the way the renderer lays it out ────────────── */
 /* The preview placed the video across the whole frame and drew the band on
@@ -1258,6 +1260,7 @@ document.addEventListener('click', () => setTimeout(() => {
   fixFooter();
   handNote();
   linkPartners();
+  sayTheLimit();
 }, 0), true);
 
 /* The handwritten note under the dropzone.
@@ -1323,3 +1326,20 @@ function linkPartners(){
   });
 }
 linkPartners();
+
+/* The dropzone's size limit, from the server rather than from the mockup.
+ *
+ * It read "up to 500 mb" because that is what the design was drawn with.
+ * The server takes four gigabytes now, and a page that understates its own
+ * limit turns people away at the door for no reason. Quoted from what is
+ * actually enforced, so the two cannot drift again. */
+function sayTheLimit(){
+  const lab = document.querySelector('#dropcopy .lab');
+  if(!lab || !SERVER.online) return;
+  const mb = SERVER.maxUploadMb || 0;
+  if(!mb) return;
+  const size = mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 ? 1 : 0)} gb` : `${mb} mb`;
+  const mins = SERVER.maxMinutes || 0;
+  lab.textContent = `mp4 · mov · avi · mkv · webm — up to ${size}` +
+                    (mins ? `, ${mins | 0} minutes` : '');
+}
