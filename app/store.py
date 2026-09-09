@@ -134,6 +134,21 @@ def connect() -> sqlite3.Connection:
         return _conn
 
 
+def close() -> None:
+    """Let go of the database file. The next call reopens it.
+
+    Only tests and shutdown need this, and it exists because of Windows:
+    there an open file cannot be deleted, so a temporary WORK_DIR cannot be
+    cleaned up while this connection is held. On Linux the unlink would
+    simply succeed and nothing would ever have asked for it.
+    """
+    global _conn
+    with _lock:
+        if _conn is not None:
+            _conn.close()
+            _conn = None
+
+
 @contextlib.contextmanager
 def write() -> Iterator[sqlite3.Connection]:
     """A transaction. Rolls back if the body raises."""

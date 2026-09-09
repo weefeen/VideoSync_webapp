@@ -1,14 +1,23 @@
-# Checks, on every push.
+# Checks, on every push, on both platforms.
 #
 # Deliberately separate from deployment. VideoScoreSync's workflow deploys to
 # production on `pull_request`, which means opening a pull request ships it;
 # here a pull request only ever runs these checks.
 #
+# Why a matrix. Development happens on Windows and the servers are Linux, and
+# the differences between them do not announce themselves — they surface as an
+# empty result rather than an error. One shipped: `pathlib.Path` treats a
+# backslash as an ordinary character on Linux, so every piece the recogniser
+# identified on the node resolved to no score, with full confidence and no
+# error anywhere. Running the checks on Linux alone would not have caught it;
+# neither would running them on Windows alone. Both, every push, is the only
+# arrangement that does.
+#
 # What this can and cannot verify: the app's real work needs ffmpeg, cairo,
-# torch and two conda environments, none of which belong in a CI runner. So
-# this checks the things that break most often and cost nothing — that every
-# module imports, that the settings and limits parse, and that the stage list
-# and the queue configuration agree with each other.
+# torch and — on Windows — two conda environments, none of which belong in a
+# CI runner. `tools/selftest.py` is the part that can be checked anywhere, and
+# it is the same script a developer runs locally, so a failure here is
+# reproducible there with one command.
 
 name: checks
 
@@ -23,7 +32,13 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # a Windows-only failure must not hide a Linux one
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    name: checks (${{ matrix.os }})
+
     steps:
       - uses: actions/checkout@v4
 
@@ -40,59 +55,8 @@ jobs:
       - name: Everything compiles
         run: python -m compileall -q app tools run.py
 
-      - name: Every module imports
-        # An import error here is one that would otherwise appear as a worker
-        # that will not start, which is a far more expensive way to find it.
-        env:
-          WORK_DIR: ${{ runner.temp }}/work
-        run: |
-          python - <<'PY'
-          import importlib, pkgutil, sys, pathlib
-          sys.path.insert(0, ".")
-          bad = []
-          for mod in pkgutil.iter_modules(["app"]):
-              name = f"app.{mod.name}"
-              try:
-                  importlib.import_module(name)
-              except Exception as exc:               # noqa: BLE001
-                  bad.append(f"{name}: {type(exc).__name__}: {exc}")
-          for line in bad:
-              print("FAILED", line)
-          sys.exit(1 if bad else 0)
-          PY
-
-      - name: Configuration is readable and its defaults are sane
-        env:
-          WORK_DIR: ${{ runner.temp }}/work
-        run: |
-          python - <<'PY'
-          import sys; sys.path.insert(0, ".")
-          from app.settings import settings
-          from app import limits
-          # .env.example supplies the committed defaults; a typo in it would
-          # otherwise only show up as a wrong limit in production.
-          for name, rule in limits.RULES.items():
-              assert rule.limit > 0, f"{name} has a non-positive limit"
-              assert rule.window > 0, f"{name} has a non-positive window"
-          assert settings.smtp_port > 0
-          print(f"{len(limits.RULES)} limit rules, all positive")
-          PY
-
-      - name: The job store round-trips
-        env:
-          WORK_DIR: ${{ runner.temp }}/work
-        run: |
-          python - <<'PY'
-          import sys, time; sys.path.insert(0, ".")
-          from app import store
-          store.put_job({"id": "ci", "created": time.time(), "name": "x.mp4",
-                         "upload": "/tmp/x.mp4", "state": store.QUEUED,
-                         "queued_at": time.time()})
-          assert store.get_job("ci")["state"] == store.QUEUED
-          assert store.position("ci") == 0
-          run = store.stage_begin("ci", "embed", media_seconds=10.0)
-          store.stage_end(run, state=store.DONE, command="ffmpeg -i a b")
-          rows = store.stage_runs("ci")
-          assert rows and rows[0]["command"] == "ffmpeg -i a b", rows
-          print("store ok")
-          PY
+      # cairo is absent on both runners, which is fine: app/svg.py imports it
+      # lazily behind a broad except and falls back to the PNG bands, so this
+      # exercises that fallback path on every push as a side effect.
+      - name: Checks that must hold on both platforms
+        run: python tools/selftest.py
