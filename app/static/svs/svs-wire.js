@@ -791,10 +791,14 @@ function foldScoreSources(){
 
   // The notice itself is kept, exactly as written — only put away.
   const notice = foot.innerHTML;
-  foot.innerHTML = `<div class="srcinner" style="grid-template-columns:auto">
+  // A single auto column stretches, and a stretched button centres its own
+  // label — which is why this read as centred. Pinned to the start instead.
+  foot.innerHTML = `<div class="srcinner"
+      style="grid-template-columns:minmax(0,1fr);justify-items:start">
       <button class="linkbtn" id="srctoggle" aria-expanded="false"
-        aria-controls="srcnotice">Score sources</button>
-      <div id="srcnotice" hidden></div>
+        aria-controls="srcnotice" style="justify-self:start;text-align:left"
+        >Score sources</button>
+      <div id="srcnotice" style="justify-self:stretch;width:100%" hidden></div>
     </div>`;
 
   const button = foot.querySelector('#srctoggle');
