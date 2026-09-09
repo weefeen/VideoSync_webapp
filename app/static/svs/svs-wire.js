@@ -925,37 +925,40 @@ document.addEventListener('DOMContentLoaded', trimFreeLine);
 
 /* ── how many videos have actually been made ─────────────────────────── */
 /* The server counts finished renders and nothing else — never an estimate,
- * never a flattering guess. Sat on its own panel under the standfirst,
- * with the magenta accent down its edge, the number in the darkest
- * aubergine and the label in full ink: a figure worth stating should not
- * be set in the grey reserved for things nobody needs to read. */
+ * never a flattering guess. Set beside the standfirst in full ink with the
+ * magenta accent down its edge: legible without taking a row of the page
+ * to say one small number. */
 const countCSS = document.createElement('style');
 countCSS.textContent = `
-  /* Its own row across the page: a claim, not a caption. */
-  .madecount{display:flex;align-items:baseline;justify-content:center;
-    gap:16px;margin:46px 0 0;padding:26px 20px;
-    background:var(--surface);border-top:1px solid var(--hair);
-    border-bottom:1px solid var(--hair);text-align:center}
+  /* Beside the standfirst, not a band across the page. Read easily,
+     said once, and not shouted. */
+  .madecount{display:inline-flex;align-items:baseline;gap:10px;
+    margin:22px 0 0;padding:9px 14px 9px 12px;
+    border-left:2px solid var(--mag);background:var(--surface);
+    border-radius:2px}
   .madecount b{font-family:Fraunces,Georgia,serif;font-weight:400;
-    font-size:clamp(40px,5.4vw,62px);letter-spacing:-.035em;line-height:1;
-    color:var(--b1);font-variant-numeric:tabular-nums}
-  .madecount span{font-family:"JetBrains Mono",monospace;font-size:11px;
-    font-weight:500;letter-spacing:.19em;text-transform:uppercase;
-    color:var(--ink);line-height:1.6}
-  .madecount i{display:block;width:38px;height:1px;background:var(--mag);
-    margin:0}
-  @media(max-width:640px){.madecount{flex-direction:column;gap:8px}}
+    font-size:23px;letter-spacing:-.02em;line-height:1;color:var(--b1);
+    font-variant-numeric:tabular-nums}
+  .madecount span{font-family:"JetBrains Mono",monospace;font-size:9.5px;
+    font-weight:500;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink);line-height:1.5}
 `;
 document.head.appendChild(countCSS);
 
+let countShown = false;
 async function showCount(){
-  const hero = document.querySelector('section[data-s="pick"] .hero');
-  if(!hero || document.querySelector('.madecount')) return;
+  // Claim the slot before awaiting: this runs at load and again on
+  // DOMContentLoaded, and both got past a check made after the fetch,
+  // which is how the page ended up stating it twice.
+  if(countShown) return;
+  const standfirst = document.querySelector('section[data-s="pick"] .standfirst');
+  if(!standfirst) return;
+  countShown = true;
   let made = 0;
   try{
     const r = await fetch('/api/stats');
     made = (await r.json()).videos | 0;
-  }catch(err){ return; }
+  }catch(err){ countShown = false; return; }
 
   const line = document.createElement('p');
   line.className = 'madecount';
@@ -963,9 +966,7 @@ async function showCount(){
   line.innerHTML = `<b>${made.toLocaleString()}</b>`
     + `<span>${made === 1 ? 'performance scored so far'
                           : 'performances scored so far'}</span>`;
-  // Its own row after the hero, before the upload begins — standing on
-  // its own rather than reading as another line of the introduction.
-  hero.insertAdjacentElement('afterend', line);
+  standfirst.insertAdjacentElement('afterend', line);
 }
 showCount();
 document.addEventListener('DOMContentLoaded', showCount);
