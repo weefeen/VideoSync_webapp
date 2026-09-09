@@ -157,7 +157,7 @@
  * written by hand, not enough to look like a mistake. */
 .handnote {
   display: block;
-  margin-top: 10px;
+  margin: 0 0 12px 2px;
   font-family: Caveat, "Segoe Script", "Bradley Hand", cursive;
   font-size: 22px;
   font-weight: 600;
@@ -169,7 +169,8 @@
   text-shadow: 0 1px 0 rgba(255, 255, 255, .55);
 }
 @media (max-width: 600px) {
-  /* The dropzone goes left-aligned and single column below this, and the
-     note is decoration — it should not push the button off the fold. */
-  .handnote { font-size: 19px; margin-top: 8px; }
+  /* The hero stacks below this, so the note sits above the sample rather
+     than beside the headline; a little smaller so it does not push the
+     sample itself off the first screen. */
+  .handnote { font-size: 19px; margin-bottom: 10px; }
 }

@@ -1322,8 +1322,11 @@ document.addEventListener('click', () => setTimeout(() => {
  * felt tip does on paper anyway, and it buys another half stop of contrast
  * for free. */
 function handNote(){
-  const copy = document.querySelector('#dropcopy');
-  if(!copy || copy.querySelector('[data-hand]')) return;
+  // Beside the sample, not beside the dropzone: it describes what comes
+  // out, and the figure's own caption already says 16:9 · 1920x1080 — the
+  // note is the same claim said out loud.
+  const figure = document.querySelector('.hero .artifact');
+  if(!figure || figure.querySelector('[data-hand]')) return;
 
   if(!document.querySelector('link[data-caveat]')){
     const link = document.createElement('link');
@@ -1337,7 +1340,7 @@ function handNote(){
   note.className = 'handnote';
   note.dataset.hand = '1';
   note.textContent = 'Full HD video compatible, high quality score';
-  copy.appendChild(note);
+  figure.insertBefore(note, figure.firstElementChild);
 }
 handNote();
 
