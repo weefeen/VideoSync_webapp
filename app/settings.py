@@ -264,6 +264,15 @@ class Settings:
             if not shutil.which(exe) and not pathlib.Path(exe).is_file():
                 issues.append(f"{name} not found (looked for {exe!r}). "
                               f"Install it or set {name.upper()}_EXE in .env.")
+        # `.env.prod` is committed and so carries a placeholder where the
+        # broker password goes. Copied to `.env` and left alone, the failure
+        # is an authentication refusal from RabbitMQ on every publish, which
+        # reads like a broken broker rather than an unfinished deployment
+        # step. Say which it is.
+        if "CHANGE_ME" in self.rabbitmq_url:
+            issues.append(
+                "RABBITMQ_URL still carries the placeholder password from "
+                ".env.prod. Put the real one in .env, which is not committed.")
         return issues
 
 
