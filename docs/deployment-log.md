@@ -116,8 +116,11 @@ everything**, where Windows needs three:
     /srv/vsw/venv/bin/python -- Python 3.12.3
 
     Flask 3.1.3          python-dotenv 1.2.3   pillow 12.3.0
-    CairoSVG 2.9.1       librosa 1.0.0         numba 0.67.0
-    numpy 2.5.3          scipy 1.18.1          torch 2.14.0+cpu
+    CairoSVG 2.9.1       librosa 1.0.0 ->      numba 0.67.0
+    numpy 2.5.3 ->       scipy 1.18.1          torch 2.14.0+cpu
+
+    -> these two were WRONG and are corrected in section 7. What pip
+       resolved is not what the engine repositories were written against.
     piano-transcription-inference 0.0.6        torchlibrosa 0.1.0
     tqdm 4.70.0          soundfile 0.14.0      validators 0.35.0
     mido 1.3.3           pretty_midi 0.2.11    h5py 3.16.0   matplotlib 3.11.1
