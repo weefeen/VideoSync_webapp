@@ -40,16 +40,24 @@
   /* Twelve percent. It sits in the margin now, where nothing competes
      with it, so it can be seen rather than merely sensed. */
   opacity: .12;
+  /* Hard to the screen edges, and a short crossing into the reading
+     column rather than a long one.
+     
+     The 3% fade that used to sit at each edge is gone: it emptied the
+     corners, which is exactly where the header sits, so the top of the
+     page looked bare. And the crossing was 140px, which spent most of the
+     available margin fading — it is 60px now, so nearly all of the margin
+     shows the score moving instead of dissolving. */
   -webkit-mask-image: linear-gradient(90deg,
-      transparent 0, #000 3%,
-      #000 calc(50% - 680px), transparent calc(50% - 540px),
-      transparent calc(50% + 540px), #000 calc(50% + 680px),
-      #000 97%, transparent 100%);
+      #000 0,
+      #000 calc(50% - 620px), transparent calc(50% - 560px),
+      transparent calc(50% + 560px), #000 calc(50% + 620px),
+      #000 100%);
           mask-image: linear-gradient(90deg,
-      transparent 0, #000 3%,
-      #000 calc(50% - 680px), transparent calc(50% - 540px),
-      transparent calc(50% + 540px), #000 calc(50% + 680px),
-      #000 97%, transparent 100%);
+      #000 0,
+      #000 calc(50% - 620px), transparent calc(50% - 560px),
+      transparent calc(50% + 560px), #000 calc(50% + 620px),
+      #000 100%);
 }
 
 /* The tilt. Oversized because a rectangle turned seven degrees no longer
@@ -89,11 +97,18 @@
     to { transform: translate3d(620px, 0, 0); }
 }
 
-/* The page's own content has to sit above it. `main` and the rest are not
-   positioned by the design, so without this they share a stacking context
-   with the backdrop and depend on document order. */
-body > .top, body > main, body > footer, body > .foot,
-body > .srcfoot, body > .confirm { position: relative; z-index: 1; }
+/* The page's own content has to sit above the backdrop, and it has to say
+   so rather than rely on paint order.
+   
+   Not `body > .top`: this design builds itself out of a <template>, so the
+   header and the rest are not direct children of body and that selector
+   matched nothing. It worked anyway, by document order — which is exactly
+   the kind of accident that stops working when something is reordered.
+   Matched by class at any depth instead. */
+.top, main, footer, .foot, .srcfoot, .confirm, .partrow, .terms {
+  position: relative;
+  z-index: 1;
+}
 
 /* ── 3. the headline in musical time ──────────────────────────────────── */
 .rubatoword {
