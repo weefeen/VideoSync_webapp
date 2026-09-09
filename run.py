@@ -25,17 +25,16 @@ def main() -> int:
     for issue in problems:
         print(f"WARNING: {issue}")
 
-    app = create_app()          # resumes the queue as it builds
+    app = create_app()          # starts the queue as it builds
 
     from app import store
     waiting = len(store.waiting())
     print(f"\n  score roots : "
           f"{', '.join(str(r.path) for r in settings.score_roots) or 'none'}")
     print(f"  jobs        : {settings.work_dir}")
-    # can_sync, not can_autosync: the second is app/autosync.py, which is the
-    # music_line_extractor route that nothing on the running path uses. On the
-    # Linux node it is deliberately unconfigured, so the banner announced
-    # "alignment: unavailable" on a machine whose aligner was working.
+    # can_sync is the aligner the app actually uses. This once read
+    # can_autosync — the music_line_extractor route, since removed — and so
+    # announced "alignment: unavailable" on a machine whose aligner worked.
     print(f"  alignment   : {'ready' if settings.can_sync else 'unavailable'}")
     print(f"  recognition : {'ready' if settings.can_identify else 'unavailable'}")
     print(f"  email       : {'ready' if settings.can_email else 'unavailable'}")
@@ -43,7 +42,7 @@ def main() -> int:
         print(f"  queued      : {waiting}")
     print(f"\n  http://{args.host}:{args.port}\n")
 
-    # threaded=True so a running render doesn't block the SSE stream.
+    # threaded=True so a status poll is answered while a render runs.
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
     return 0
 

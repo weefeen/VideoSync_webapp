@@ -18,7 +18,7 @@ import uuid
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from app import autosync, package as pkg, pipeline, render as rnd   # noqa: E402
+from app import package as pkg, pipeline, render as rnd            # noqa: E402
 from app.settings import settings                                   # noqa: E402
 
 
@@ -77,7 +77,7 @@ def main() -> int:
                 else:
                     skipped.setdefault(path.name, reason)
         for name, p in sorted(usable.items()):
-            ref = "reference+auto" if autosync.has_reference(p.root) else "auto only"
+            ref = "reference" if (p.root / "reference").is_dir() else "no reference"
             vec = sum(1 for b in p.bands if b.is_vector)
             fmt = f"{vec} svg" if vec else f"{len(p.bands)} raster"
             print(f"OK   {name[:46]:46} {len(p.bands):>3} bands ({fmt:>10})  {ref}")

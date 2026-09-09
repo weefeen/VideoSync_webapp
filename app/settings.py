@@ -76,8 +76,6 @@ class Settings:
     # music_line_extractor supplies auto-synchronisation. It is invoked as
     # a subprocess through its own CLI and its own interpreter, never
     # imported — so its repo is untouched and its dependencies stay its own.
-    mle_root: pathlib.Path | None = None
-    mle_python: str = ""
     # Backdrop artwork offered by the UI for background=static / dynamic.
     background_static: pathlib.Path | None = None
     background_dynamic: pathlib.Path | None = None
@@ -139,11 +137,6 @@ class Settings:
         path = {"static": self.background_static,
                 "dynamic": self.background_dynamic}.get(kind)
         return str(path) if path and path.is_file() else None
-
-    @property
-    def can_autosync(self) -> bool:
-        return bool(self.mle_root and (self.mle_root / "services").is_dir()
-                    and self.mle_python)
 
     @property
     def pitch_index(self) -> pathlib.Path | None:
@@ -275,15 +268,12 @@ def load() -> Settings:
     roots += [ScoreRoot(RASTER, p) for p in _paths("SCORE_ROOT_RASTER")]
 
     work = os.getenv("WORK_DIR", "").strip()
-    mle = os.getenv("MLE_ROOT", "").strip().strip('"')
     return Settings(
         score_roots=roots,
         video_roots=_paths("VIDEO_ROOT"),
         ffmpeg=_tool("FFMPEG_EXE", "ffmpeg"),
         ffprobe=_tool("FFPROBE_EXE", "ffprobe"),
         work_dir=pathlib.Path(work) if work else REPO_ROOT / "var",
-        mle_root=pathlib.Path(mle) if mle else None,
-        mle_python=os.getenv("MLE_PYTHON", "").strip().strip('"') or "python",
         background_static=_one("BACKGROUND_STATIC"),
         background_dynamic=_one("BACKGROUND_DYNAMIC"),
         composer_filter=os.getenv("COMPOSER_FILTER", "").strip(),

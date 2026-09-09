@@ -522,6 +522,43 @@ def check_linux_configuration_leaves_no_gaps() -> str:
     return f"{len(prod)} variables, covering all {len(example)} in .env.example"
 
 
+def check_the_readme_layout_is_real() -> str:
+    """Every path in the README's layout block must exist.
+
+    A layout that lists a file somebody deleted is worse than no layout: it
+    is read once, believed, and then quietly wastes the next person's
+    afternoon. This is the cheapest way to keep the map and the ground the
+    same shape, and it costs nothing to run.
+    """
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    try:
+        block = text.split("```", 2)[1]
+    except IndexError:
+        raise Failed("the README has no layout block any more") from None
+
+    found, stack = [], []
+    for line in block.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        token = line.strip().split()[0]
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        path = (stack[-1][1] if stack else "") + token
+        if token.endswith("/"):
+            stack.append((indent, path))
+        found.append(path)
+
+    missing = [p for p in found if not (ROOT / p).exists()]
+    if missing:
+        raise Failed("the README's layout names things that do not exist:\n  "
+                     + "\n  ".join(missing))
+    if len(found) < 10:
+        raise Failed(f"only {len(found)} paths found in the layout block; "
+                     f"the parser or the block has changed shape")
+    return f"{len(found)} paths, all present"
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -549,6 +586,7 @@ def main() -> int:
         check_pair_list_is_read_without_the_dependency,
         check_linux_configuration_leaves_no_gaps,
         check_linux_configuration_has_no_windows_paths,
+        check_the_readme_layout_is_real,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
