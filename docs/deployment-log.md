@@ -460,6 +460,100 @@ the ledger's rules are exercised on every push without a broker anywhere.
 
 ---
 
+## 14. RabbitMQ, on the dev node
+
+### The broker
+
+    apt install rabbitmq-server        3.12.1 on Ubuntu 24.04
+
+**3.12.1 answers the question §13 left open.** `x-consumer-timeout` is a
+per-queue argument from 3.12, so nothing has to be changed in a shared
+broker's `rabbitmq.conf`. It was not taken on trust: `brokercheck topology`
+declares the queues with that argument against the real broker, and the
+broker accepted them.
+
+`/etc/rabbitmq/rabbitmq.conf`:
+
+    listeners.tcp.default = 127.0.0.1:5672
+    distribution.listener.interface = 127.0.0.1
+
+Both lines are corrections, not defaults. The package binds **5672 and 25672
+to 0.0.0.0**, and this node has a public address with `ufw` inactive — so the
+broker and the Erlang distribution port were briefly reachable from the
+internet. 25672 is protected only by the Erlang cookie. Whoever builds the
+production host should check this before anything else.
+
+    rabbitmqctl add_vhost vsw
+    rabbitmqctl add_user vsw <generated>
+    rabbitmqctl set_permissions -p vsw vsw ".*" ".*" ".*"
+    rabbitmqctl delete_user guest        # remove the default account
+
+The password is in `/srv/vsw/broker_password`, mode 600, and in `.env` as
+`RABBITMQ_URL`. Neither is in the repository; `.env.prod` carries
+`CHANGE_ME`.
+
+### Two processes
+
+    python -m app.queue.worker     consumes vsw.render — the only renderer
+    python run.py                  serves, applies events, sweeps
+
+The web process **deliberately does not consume tasks** when a broker is
+configured. With the in-process queue it must, because nobody else can reach
+that queue; with a broker, consuming as well would put two consumers on one
+queue and nothing yet stops both rendering the same task.
+
+    rabbitmqctl list_consumers -p vsw
+      vsw.render   (the worker)
+      vsw.events   (the web process's applier)
+
+### Proof
+
+    brokercheck ping     pong from localhost:15518 in 0.03s
+
+`ping` is answered without touching ffmpeg, so a wrong URL, a missing vhost,
+a bad password or a queue whose arguments disagree shows up in a second
+rather than at the end of a half-hour render.
+
+Then a real upload, over HTTP, to the running web process:
+
+     elapsed  state    stage
+          0s  running  align    matching the recording to the score
+          5s  running  strip    timing bands to the performance
+         35s  running  encode   1920x1080 · band 1916x358 bottom
+        535s  done     done
+
+    output      131,321,451 bytes — byte for byte what §12 and §13 produced
+    record      render, attempt 1, done, elapsed 546.7 s
+    row after   done, worker NULL, lease NULL, error NULL, published_at set
+    queues      vsw.render 0, vsw.events 0, both dead-letter queues 0
+
+| | elapsed | s/s |
+|---|---|---|
+| §12, in-process worker thread | 550.8 s | 1.299 |
+| §13, through the transport seam | 547.9 s | 1.292 |
+| **§14, through RabbitMQ, separate processes** | **546.7 s** | **1.289** |
+
+A broker between two processes costs nothing measurable, which is the answer
+to the only real objection to putting one there.
+
+**Mid-render, `vsw.render` held 1 message with 1 consumer.** That is the ack
+discipline working: the delivery stays unacked until the video exists, so a
+worker that dies gets it redelivered rather than losing the job. It is also
+exactly the case that RabbitMQ's 30-minute `consumer_timeout` default would
+have broken, for the longest uploads only.
+
+### Not yet done here
+
+- **Neither process is supervised.** Both were started with `setsid` by hand
+  and neither comes back after a reboot. systemd units belong with gunicorn.
+- **The web process logs nothing from the queue** — `run.py` never calls
+  `logging.basicConfig`, so the applier's and janitor's messages go nowhere.
+  The worker configures its own and is readable.
+- The kill-the-worker-mid-render and stop-the-broker checks from
+  `broker-slice.md` §9 have not been run.
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;

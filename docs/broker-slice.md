@@ -514,7 +514,18 @@ points is enough.
    runs the whole seam with the render stubbed; and a real render on the node
    came out **byte for byte identical** to step 1's, at 547.9 s against
    550.8 s — see `deployment-log.md` §13.
-3. **AMQP.** `AmqpTransport`, `python -m app.queue.worker`,
+3. ~~**AMQP.**~~ **MOSTLY DONE** — `AmqpTransport`, `python -m app.queue.worker`,
+   `tools/brokercheck.py` and `pika` are in, and a real render went through
+   RabbitMQ on the dev node in 546.7 s against 547.9 s without it, producing
+   a byte-identical output (`deployment-log.md` §14). **Still owed:** the
+   attempt record and the `.part` rename of §5, and the kill-the-worker and
+   stop-the-broker checks of §9 — that is, everything that makes a
+   *redelivery* safe. Until those land, a worker that dies mid-render will
+   have its job redelivered and rendered again from the start, which is
+   correct but wasteful, and a job that finished just before the worker died
+   would be rendered twice.
+
+   Superseded, for the record: **AMQP.** `AmqpTransport`, `python -m app.queue.worker`,
    `tools/brokercheck.py`, `pika` in requirements. *Proof:* the seven live
    checks on the dev node, written into the deployment log.
 4. **Paperwork.** The reconciling note in `queue-design.md`, `README.md`'s
