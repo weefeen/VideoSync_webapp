@@ -64,11 +64,23 @@
     // the background rather than the element. Six image elements pointing
     // at three URLs was three requests and three decodes of a third of a
     // megabyte each, to draw the same thing this draws with one.
+    const run = document.createElement('div');
+    run.className = 'driftrun';
+    run.style.backgroundImage =
+      `url("/api/library/${encodeURIComponent(name)}/page?n=1")`;
+
+    // Three nested elements, each doing one job: the outer decides WHERE
+    // the score may show, the middle tilts it, the inner moves it. They
+    // cannot be collapsed — a mask on a rotated element is rotated too, and
+    // the margins it has to line up with are square to the page.
+    const tilt = document.createElement('div');
+    tilt.className = 'drifttilt';
+    tilt.appendChild(run);
+
     const layer = document.createElement('div');
     layer.className = 'driftpages';
     layer.setAttribute('aria-hidden', 'true');
-    layer.style.backgroundImage =
-      `url("/api/library/${encodeURIComponent(name)}/page?n=1")`;
+    layer.appendChild(tilt);
     document.body.insertBefore(layer, document.body.firstChild);
   }
 

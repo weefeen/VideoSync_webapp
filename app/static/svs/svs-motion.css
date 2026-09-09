@@ -19,40 +19,72 @@
  * the page reads as laid over sheet music rather than dragging a picture
  * behind it. Six percent opacity, which is enough to see when you look for
  * it and not enough to notice while reading. */
+/* Where the score may show: the margins, never behind the reading column.
+ *
+ * The content is 1040px wide and centred, so this is opaque outside a
+ * centred band a little wider than that and transparent within it. Behind
+ * text the engraving is noise however faint it is; in the margin it is
+ * paper showing at the edges of a desk.
+ *
+ * Not rotated, deliberately. The tilt lives on the child, because a mask
+ * on a turned element turns with it, and the margins this has to line up
+ * with are square to the page. Below about 1360px there is no margin left
+ * and the whole thing simply fades out, which is the right answer on a
+ * narrow screen rather than a special case to write. */
 .driftpages {
   position: fixed;
-  /* Oversized so the tilt below cannot pull a bare corner into view: a
-     rectangle turned seven degrees no longer covers the box it came from,
-     and the missing wedges would sit exactly where the page corners are. */
-  inset: -25%;
+  inset: 0;
   z-index: 0;
+  overflow: hidden;
   pointer-events: none;
   opacity: .06;
-  /* Tiled both ways, so the plates fill the screen rather than forming a
-     single band across it. */
+  -webkit-mask-image: linear-gradient(90deg,
+      transparent 0, #000 3%,
+      #000 calc(50% - 680px), transparent calc(50% - 540px),
+      transparent calc(50% + 540px), #000 calc(50% + 680px),
+      #000 97%, transparent 100%);
+          mask-image: linear-gradient(90deg,
+      transparent 0, #000 3%,
+      #000 calc(50% - 680px), transparent calc(50% - 540px),
+      transparent calc(50% + 540px), #000 calc(50% + 680px),
+      #000 97%, transparent 100%);
+}
+
+/* The tilt. Oversized because a rectangle turned seven degrees no longer
+   covers the box it came from, and the bare wedges would land in view. */
+.drifttilt {
+  position: absolute;
+  inset: -25%;
+  transform: rotate(-7deg);
+}
+
+/* The moving part is a transform, not a background position.
+ *
+ * Animating background-position looked like it kept stopping, and it did:
+ * that property is rendered on the CPU and snapped to whole pixels, so at
+ * a few pixels a second the image sat still for a third of a second and
+ * then jumped one. A transform is composited with sub-pixel precision, so
+ * the same speed is continuous.
+ *
+ * The element reaches one tile past each side, so sliding by exactly one
+ * tile never uncovers an edge and lands on the identical picture. */
+.driftrun {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -620px;
+  right: -620px;
   background-repeat: repeat;
   background-position: 0 center;
-  /* The WIDTH is pinned and the height follows from A4, because the drift
-     is horizontal and travels exactly one tile width. Pin the height
-     instead and that width varies with the viewport, so the loop lands
-     mid-plate on every screen but one. */
+  /* Width pinned, height from A4: the slide travels one tile width, so a
+     width that varied with the viewport would land mid-plate. */
   background-size: 620px auto;
-  /* Off the square, the way paper actually lies on a desk. The drift runs
-     along the tilt because the background moves in the element's own
-     coordinates, which this turns with it. */
-  transform: rotate(-7deg);
-  /* Strongest in the middle, gone by the edges — so the texture never
-     ends on a line, and never crowds the corners where the header, the
-     footer and the panel sit. */
-  -webkit-mask-image: radial-gradient(ellipse 62% 62% at 50% 50%, #000 35%, transparent 100%);
-          mask-image: radial-gradient(ellipse 62% 62% at 50% 50%, #000 35%, transparent 100%);
-  animation: driftpages 180s linear infinite;
+  animation: driftrun 100s linear infinite;
+  will-change: transform;
 }
-/* Left to right, by exactly one tile, so the last frame draws what the
-   first did and there is no seam to see. */
-@keyframes driftpages {
-  from { background-position: 0 center; }
-    to { background-position: 620px center; }
+@keyframes driftrun {
+  from { transform: translate3d(0, 0, 0); }
+    to { transform: translate3d(620px, 0, 0); }
 }
 
 /* The page's own content has to sit above it. `main` and the rest are not
