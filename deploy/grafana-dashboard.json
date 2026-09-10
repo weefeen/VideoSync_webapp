@@ -304,12 +304,1004 @@
     },
     {
       "type": "row",
-      "title": "Where a job actually is",
+      "title": "Will the next job fit?",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 5
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory headroom",
+      "description": "The only graph on this dashboard that predicts an outage rather than describing one. `Used` is total minus MemAvailable - the kernel's own estimate of what a new allocation can actually get, which is the question being asked; MemFree would count the page cache as a crisis. The ceiling is this box's RAM, and the dashed line is where the alert fires. `Highest a render has reached` is our own high-water mark, recorded by the worker in the events it already sends - so it survives the machine that produced it, which matters once the renderer moves to a host that is destroyed after each job. Measured so far: 2457 MB on a 7.1-minute recording, on a 3915 MB box. The upload cap is 25 minutes, and `align` is DTW - its cost is the product of the two sequence lengths, so it grows with the SQUARE of duration. Watch this as longer uploads arrive: the shape of the peak line against recording length is what sizes the compute node.  A LIMIT OF THIS PANEL, measured: `align` allocated 2433 MB in 18.6 seconds on a 7.1-minute recording. Prometheus scrapes every 30s, so the blue `Used` line can miss that spike entirely - during the test render it sampled a peak of 2021 MB while the process tree actually reached 2433 MB. The red line does not have this problem: it comes from getrusage in the worker, is exact, and is what to trust for sizing. `Used` is a floor, not a ceiling.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "node_memory_MemTotal_bytes",
+          "legendFormat": "Total on this box",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
+          "legendFormat": "Used",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "0.8 * node_memory_MemTotal_bytes",
+          "legendFormat": "80% - the alert fires here",
+          "range": true
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vsw_peak_rss_bytes",
+          "legendFormat": "Highest a render has ever reached",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMax": 4294967296
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total on this box"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    6
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Used"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 18
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "80% - the alert fires here"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    6
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Highest a render has ever reached"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "What is the limiting factor",
+      "description": "Every resource as a percentage of itself, so the highest line IS the bottleneck - that is the whole point of this panel, and why the units are normalised rather than native. Measured during a real render of the Op. 39 Scherzo: CPU 98%, memory 34%, disk 0.1%, iowait 0.01% - so at encode the answer is CPU, and only CPU. At `align` it is memory instead: 2457 MB of 3915 on a 7.1-minute recording. The bottleneck MOVES between stages, which is why this panel is a time series and not a gauge. Read it during a render: if CPU is at 95% and everything else is low, a faster processor is the upgrade; if disk-busy is on top, a faster CPU buys nothing. TWO OF THESE CANNOT BE MEASURED FROM INSIDE A VIRTUAL MACHINE. Memory BANDWIDTH needs CPU performance counters, which a Linode guest is not given - if memory speed is ever the suspect it has to be settled by a benchmark on the box, not by this dashboard. CPU CLOCK SPEED is fixed and invisible for the same reason; what you can see instead is `steal` on the panel below, which is the hypervisor handing our slice to somebody else - the honest measure of not getting the CPU we paid for. Network is drawn in absolute terms further down: the link ceiling is not reported by the machine, so a percentage would be invented.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+          "legendFormat": "CPU busy",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "node_load1 / scalar(count(count by (cpu) (node_cpu_seconds_total{mode=\"idle\"})))",
+          "legendFormat": "Load vs cores",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+          "legendFormat": "Memory used",
+          "range": true
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(rate(node_disk_io_time_seconds_total[5m]))",
+          "legendFormat": "Disk busy",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "max": 1.0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU busy"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Load vs cores"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Memory used"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Disk busy"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU load against cores",
+      "description": "Load average is a count of processes wanting to run, so it means nothing without the core count - which is drawn here rather than left for you to remember. Below the line the machine keeps up; above it, work is queuing and every render runs slower than its estimate. Unlike memory this is not fatal: a saturated CPU makes the site slow, it does not get anything killed. If 1 min sits above 15 min the load is still climbing. Encode is 92% of a job and uses 1.92 of the 2 cores here, so during a render this is MEANT to sit near the line - what matters is whether it comes back down afterwards.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "count(count by (cpu) (node_cpu_seconds_total{mode=\"idle\"}))",
+          "legendFormat": "Cores on this box",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "node_load1",
+          "legendFormat": "Load, 1 min",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "node_load5",
+          "legendFormat": "Load, 5 min",
+          "range": true
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "node_load15",
+          "legendFormat": "Load, 15 min",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cores on this box"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    6
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Load, 1 min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 14
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Load, 5 min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Load, 15 min"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Where the CPU actually goes",
+      "description": "Busy-ness split by what it is busy with, stacked against the whole machine. READ `nice` FIRST: vsw-worker.service sets Nice=5, so the render's own CPU - ffmpeg, measured at 182% of 2 cores - lands there and NOT in `user`. During a render `nice` is around 90% and `user` about 6%; taking `user` as the workload would tell you the box was idle while it was in fact 98% consumed. `user` here is the web app, Grafana and Prometheus. `iowait` is the processor stalled on a disk - tall iowait during encode would mean the disk is the limit and a faster CPU would buy nothing; measured at 0.01%, so it is not. `steal` is time the hypervisor gave to another tenant on the same physical host: not our load, not fixable by us, and a persistent few percent is the argument for a dedicated-CPU plan. Measured at 0.01% here, so this shared plan is currently delivering what it promises - and it is the closest this stack can get to measuring CPU speed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 23
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (mode) (rate(node_cpu_seconds_total{mode!=\"idle\"}[5m])) / on() group_left count(count by (cpu) (node_cpu_seconds_total{mode=\"idle\"}))",
+          "legendFormat": "{{mode}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "max": 1.0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "nice"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "displayName",
+                "value": "nice - the render"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "user"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "displayName",
+                "value": "user - the web app"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "system"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "iowait"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "steal"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Disk, and whether it is the limit",
+      "description": "`Busy` is the fraction of time the device had a request outstanding - utilisation, not throughput, and the number that says whether the disk is the constraint. Near 100% with modest MB/s means seeks, not bandwidth. The throughput lines matter because this pipeline is unusually file-heavy: a 131 MB output, its uploaded source, and the extracted audio all cross this device, and uploads are KEPT rather than swept.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 23
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(rate(node_disk_io_time_seconds_total[5m]))",
+          "legendFormat": "Busy",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(node_disk_read_bytes_total[5m]))",
+          "legendFormat": "Read",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(node_disk_written_bytes_total[5m]))",
+          "legendFormat": "Written",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "max": 1.0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Busy"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 14
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Read"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "Bps"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Written"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "Bps"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Where a job actually is",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Network throughput",
+      "description": "In absolute bytes per second, not as a percentage: the machine does not report its link ceiling, so any percentage here would be a number we made up. Judge it against the plan - and against the fact that a finished video is ~131 MB, so a handful of simultaneous downloads is the realistic load, not the renders themselves. `lo` is excluded; it is Prometheus scraping this box and would swamp the real traffic.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(node_network_receive_bytes_total{device!=\"lo\"}[5m]))",
+          "legendFormat": "In",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m]))",
+          "legendFormat": "Out",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "In"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Out"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
@@ -320,7 +1312,7 @@
         "h": 7,
         "w": 14,
         "x": 0,
-        "y": 6
+        "y": 32
       },
       "targets": [
         {
@@ -363,7 +1355,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 6
+        "y": 32
       },
       "targets": [
         {
@@ -402,7 +1394,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 39
       }
     },
     {
@@ -413,7 +1405,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 40
       },
       "targets": [
         {
@@ -472,7 +1464,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 40
       },
       "targets": [
         {
@@ -531,18 +1523,18 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 47
       }
     },
     {
       "type": "timeseries",
       "title": "Seconds of work per gigabyte uploaded",
-      "description": "The figure the caps were set from. Length is what actually costs — the canvas is a fixed 1080p whatever arrives — so this drifts with the kind of video people send, and is worth watching rather than trusting.",
+      "description": "The figure the caps were set from. Length is what actually costs \u2014 the canvas is a fixed 1080p whatever arrives \u2014 so this drifts with the kind of video people send, and is worth watching rather than trusting.",
       "gridPos": {
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 22
+        "y": 48
       },
       "targets": [
         {
@@ -582,7 +1574,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 22
+        "y": 48
       },
       "targets": [
         {
@@ -627,13 +1619,13 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 54
       }
     },
     {
       "type": "table",
       "title": "Why the failures failed",
-      "description": "The reason, not the count. Prometheus cannot hold this — an error message as a label is one new series per distinct failure — so it comes straight from the app. The command is the ffmpeg line that was actually run, assembled from what the visitor chose; paste it into a terminal to reproduce.",
+      "description": "The reason, not the count. Prometheus cannot hold this \u2014 an error message as a label is one new series per distinct failure \u2014 so it comes straight from the app. The command is the ffmpeg line that was actually run, assembled from what the visitor chose; paste it into a terminal to reproduce.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "vsw-infinity"
@@ -642,7 +1634,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 55
       },
       "targets": [
         {
@@ -832,6 +1824,823 @@
         "footer": {
           "show": false
         }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Who is using this, and from where",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Where the uploads come from",
+      "description": "The server-location answer, and the one to read first. Built from the country recorded at the time of each upload, not from re-resolving addresses now - so it survives a recording being deleted, and a block of addresses being reassigned cannot rewrite last year. Sorted by minutes of video, because that is what has to cross an ocean.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 0,
+        "y": 65
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "countries",
+          "columns": [
+            {
+              "selector": "country",
+              "text": "Country",
+              "type": "string"
+            },
+            {
+              "selector": "uploads",
+              "text": "Uploads",
+              "type": "number"
+            },
+            {
+              "selector": "minutes",
+              "text": "Minutes",
+              "type": "number"
+            },
+            {
+              "selector": "city_count",
+              "text": "Cities",
+              "type": "number"
+            },
+            {
+              "selector": "cities",
+              "text": "Mostly from",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uploads"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cities"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Country",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "What people actually play",
+      "description": "Every piece the recogniser has named here. 'Asked' counts answers and 'Uploads' counts recordings - a visitor who asked twice about one video is 2 and 1. Length is a median with its range, never a mean: one thirty-second test upload of a twenty-minute Ballade would drag an average somewhere neither figure has ever been. 'Confidence' is the winner's share of the whole ranked list, so a low one means the runners-up were close, not that the answer was wrong.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 10,
+        "y": 65
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "pieces",
+          "columns": [
+            {
+              "selector": "title",
+              "text": "Piece",
+              "type": "string"
+            },
+            {
+              "selector": "times",
+              "text": "Asked",
+              "type": "number"
+            },
+            {
+              "selector": "uploads",
+              "text": "Uploads",
+              "type": "number"
+            },
+            {
+              "selector": "confidence",
+              "text": "Confidence",
+              "type": "number"
+            },
+            {
+              "selector": "median_minutes",
+              "text": "Median",
+              "type": "number"
+            },
+            {
+              "selector": "shortest_minutes",
+              "text": "Shortest",
+              "type": "number"
+            },
+            {
+              "selector": "longest_minutes",
+              "text": "Longest",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Asked"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uploads"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Median"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Shortest"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Longest"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Confidence"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Piece",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Every visitor, by address",
+      "description": "One row per internet address, with the city it resolves to. There is no login here, so this is the only thing that distinguishes one visitor from another, and it is what the daily upload limit is counted against. It is deleted with the recording when somebody asks - which is why the two tables above are built from the recorded country instead, and go on working afterwards.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "visitors",
+          "columns": [
+            {
+              "selector": "last_seen",
+              "text": "Last seen",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "address",
+              "text": "Address",
+              "type": "string"
+            },
+            {
+              "selector": "city",
+              "text": "City",
+              "type": "string"
+            },
+            {
+              "selector": "region",
+              "text": "Region",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "Country",
+              "type": "string"
+            },
+            {
+              "selector": "uploads",
+              "text": "Uploads",
+              "type": "number"
+            },
+            {
+              "selector": "delivered",
+              "text": "Delivered",
+              "type": "number"
+            },
+            {
+              "selector": "failed",
+              "text": "Failed",
+              "type": "number"
+            },
+            {
+              "selector": "identifications",
+              "text": "Asked",
+              "type": "number"
+            },
+            {
+              "selector": "pieces",
+              "text": "Pieces",
+              "type": "number"
+            },
+            {
+              "selector": "minutes",
+              "text": "Minutes",
+              "type": "number"
+            },
+            {
+              "selector": "megabytes",
+              "text": "MB",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last seen"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Address"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uploads"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Delivered"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Failed"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Asked"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pieces"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MB"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Failed"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Last seen",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Every answer the recogniser gave",
+      "description": "The rows the two tables above are built from, newest first - where an implausible median or an unexpected country comes from. Deliberately carries no address: the job id is here instead, and the address is reached by looking that job up while it still exists. 'Consensus' is how much of the recording agreed with itself, over how many windows; a high confidence over two windows is arithmetic, not evidence.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "recent",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "When",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "job",
+              "text": "Job",
+              "type": "string"
+            },
+            {
+              "selector": "city",
+              "text": "City",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "Country",
+              "type": "string"
+            },
+            {
+              "selector": "outcome",
+              "text": "Outcome",
+              "type": "string"
+            },
+            {
+              "selector": "piece",
+              "text": "Piece",
+              "type": "string"
+            },
+            {
+              "selector": "confidence",
+              "text": "Confidence",
+              "type": "number"
+            },
+            {
+              "selector": "consensus",
+              "text": "Consensus",
+              "type": "number"
+            },
+            {
+              "selector": "windows",
+              "text": "Windows",
+              "type": "number"
+            },
+            {
+              "selector": "minutes",
+              "text": "Minutes",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "When"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Job"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Confidence"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Consensus"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Windows"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Confidence"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Outcome"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "matched": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "unavailable": {
+                        "color": "yellow",
+                        "index": 1
+                      },
+                      "unrecognised": {
+                        "color": "orange",
+                        "index": 2
+                      },
+                      "error": {
+                        "color": "red",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ]
       }
     }
   ]

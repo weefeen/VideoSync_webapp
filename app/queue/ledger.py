@@ -136,7 +136,8 @@ def _done(event: Event, row) -> bool:
 
     finished = event.at or time.time()
     fields = {"state": store.DONE, "finished": finished,
-              "result": event.result, "stage": "done",
+              "result": event.result, "object_key": event.object_key,
+              "stage": "done",
               "detail": event.detail, "error": None,
               "worker": None, "lease_until": None}
     # Which alignment actually ran is decided by the work, not by the

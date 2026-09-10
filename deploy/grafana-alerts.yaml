@@ -1,0 +1,155 @@
+# Alerts, provisioned as a file so a rebuilt Grafana still has them.
+#
+# One rule, because there is one thing on this box that can actually take the
+# site down: memory. A render has been measured at 2457 MB of 3915 on a
+# 7.1-minute recording, and the upload cap is 25 minutes. `align` is where
+# the jump happens — DTW's cost is the product of the two sequence lengths,
+# so it grows with the SQUARE of duration — and there is no graceful failure
+# to fall back on: the kernel's OOM killer takes whichever process it
+# chooses, which may be the web app rather than the render that caused it.
+#
+# WHY 80% AND NOT 90%. The alert has to fire while there is still time to do
+# something. Between 80% and dead is about 780 MB on this box — less than one
+# `align` step — so at 90% the warning and the OOM would arrive together.
+#
+# WHY `available` AND NOT `free`. MemFree ignores the page cache, which the
+# kernel gives back on demand, and would read as a crisis on an idle box.
+# MemAvailable is the kernel's own estimate of what a new allocation can
+# actually get, which is the question being asked.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: memory
+    folder: VideoSync
+    # Every minute: fast enough that a render climbing toward the ceiling is
+    # caught mid-job, cheap because it is one instant query.
+    interval: 1m
+    rules:
+      - uid: vsw-memory-80
+        title: Memory above 80% on the render box
+        condition: over
+        # Five minutes of it, not one sample. Encoding allocates in bursts
+        # and a single spike past the line is normal; five minutes above it
+        # is a job that is not going to come back down on its own.
+        for: 5m
+        annotations:
+          summary: >-
+            Memory has been over 80% for five minutes. A render is measured
+            at 2.4 GB on a 7-minute recording and the cap is 25 minutes, so
+            the likely cause is a longer upload in `align`.
+          description: >-
+            Look at "Memory headroom" on the VideoSync dashboard: if the used
+            line is still climbing, the kernel will pick a process to kill and
+            it may be the web app rather than the worker. `systemctl stop
+            vsw-worker` ends the render and leaves the site up.
+          runbook_url: ""
+        labels:
+          severity: warning
+        isPaused: false
+        # No notification policy is provisioned with this: delivery needs an
+        # SMTP server Grafana can use, which this box does not have yet. The
+        # rule fires and is visible under Alerting → Alert rules regardless,
+        # and adding a contact point later does not change this file.
+        noDataState: NoData
+        execErrState: Error
+        data:
+          - refId: used
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: used
+              editorMode: code
+              instant: true
+              range: false
+              # Fraction of the machine that is genuinely spoken for.
+              expr: >-
+                1 - (node_memory_MemAvailable_bytes /
+                     node_memory_MemTotal_bytes)
+          - refId: over
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: over
+              type: threshold
+              expression: used
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]
+
+      # The rule above CANNOT catch the thing that will actually kill this
+      # box, and it took a real render to notice. `align` allocated 2433 MB
+      # in 18.6 seconds; Prometheus scrapes every 30 s and the rule needs
+      # five minutes above the line, so a spike that size and that short is
+      # invisible to it twice over. During the test render the scraped peak
+      # was 2021 MB while the process tree actually reached 2433 MB.
+      #
+      # This rule uses OUR number instead: `vsw_peak_rss_bytes` comes from
+      # getrusage in the worker, is the exact high-water mark of the process
+      # tree, and does not depend on catching a moment. It is a gauge that
+      # only ever rises, so once it fires it stays firing — which is right,
+      # because what it reports is not a passing spike but a standing fact:
+      # a render on this machine has come within a fifth of the ceiling, and
+      # no amount of waiting will make that untrue. Silence it by making the
+      # box bigger or the cap smaller.
+      #
+      # It fires AFTER the render rather than during it. That is the honest
+      # trade: an exact number slightly late beats a sampled number that
+      # misses. The one above stays for slow growth, which is the failure
+      # this one cannot see.
+      - uid: vsw-render-peak-80
+        title: A render has reached 80% of this machine's memory
+        condition: over
+        # No `for`: the input is a high-water mark, not a live reading.
+        # Waiting five minutes to confirm a fact that cannot change would
+        # only delay it.
+        for: 0m
+        annotations:
+          summary: >-
+            A single render's peak memory has passed 80% of the box. Measured
+            at 2433 MB of 3915 on a 7.1-minute recording, and `align` is DTW
+            — its cost is the product of the two sequence lengths, so it
+            grows with the SQUARE of duration.
+          description: >-
+            The upload cap is 25 minutes. Even linear growth from the
+            measured point would want ~8.5 GB; quadratic is far worse. Either
+            the machine gets more memory or MAX_DURATION_MINUTES comes down —
+            the third option is the OOM killer choosing a process, and it may
+            choose the web app rather than the render.
+        labels:
+          severity: warning
+        isPaused: false
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: peak
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: peak
+              editorMode: code
+              instant: true
+              range: false
+              expr: >-
+                vsw_peak_rss_bytes / on() group_left()
+                node_memory_MemTotal_bytes
+          - refId: over
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: over
+              type: threshold
+              expression: peak
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.8]

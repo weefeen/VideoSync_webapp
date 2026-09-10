@@ -90,6 +90,11 @@ class Event:
     peak_rss: int | None = None
     # done
     result: str | None = None
+    # Where the result lives in the bucket. None means it is only on the
+    # worker's local disk — fine while the worker shares a disk with the web
+    # app, and the reason a compute host may not be destroyed until this is
+    # set.
+    object_key: str | None = None
     mode: str | None = None       # which alignment actually ran
     output_bytes: int | None = None
     elapsed: float | None = None

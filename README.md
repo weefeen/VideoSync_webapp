@@ -43,7 +43,7 @@ app/
   routes.py             the HTTP surface — every endpoint
   settings.py           .env into one frozen object; the "can we?" properties
   jobs.py               a Job, its public shape, the queue-position estimate
-  store.py              SQLite: the jobs and stage_runs tables, and migrations
+  store.py              SQLite: jobs, stage_runs and recognitions; migrations
   pipeline.py           one job end to end: prepare, align, bands, strip, encode
 
   queue/                the seam between taking an order and doing the work
@@ -62,6 +62,9 @@ app/
   svg.py                cairo, and the Windows dance to make it load
   paths.py              a job's folder layout
   limits.py             what one visitor may use
+  visitors.py           who used it, from where, and what they played
+  storage.py            the bucket a finished video is put in
+  metrics.py            the Prometheus exposition, and the failure detail
   notify.py             the "it is ready" email
   retention.py          the 48-hour window
   stats.py              how many videos this install has actually made
@@ -69,7 +72,7 @@ app/
 
 tools/                  see tools/README.md
 docs/                   see docs/README.md
-deploy/                 bootstrap.sh, the two systemd units, install-units.sh
+deploy/                 see deploy/README.md
 design/mockup/          the design as handed over, kept for provenance only
 ```
 

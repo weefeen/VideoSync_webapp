@@ -23,6 +23,7 @@ compute host will be split along.
 | | |
 |---|---|
 | `selftest.py` | what CI runs, on Windows and Linux. No ffmpeg, cairo, torch or network. Every check exists because something worked on one platform and silently did nothing on the other. |
+| `visitors.py` | who has used this, from where, and what they played — the addresses with their country and city, the pieces with how long they run, and every answer the recogniser gave. Reads the database directly, so it works on a box where the web process is not running. `--who`, `--where`, `--what`, `--recent`, `--json`. |
 | `doctor.py` | is this machine configured, and what score packages can it see. Read-only. |
 | `compare_alignments.py` | two `measures.data` for one recording, measure by measure. A successful exit code does not tell you an alignment is right. |
 | `brokercheck.py` | against a **real** RabbitMQ, by hand, on a machine that has one. `ping` answers in a second without touching ffmpeg, so a wrong URL or a queue whose arguments disagree shows up immediately instead of at the end of a half-hour render. |

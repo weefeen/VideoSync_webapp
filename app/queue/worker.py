@@ -22,6 +22,7 @@ from typing import Callable
 
 from .. import pipeline
 from .. import render as rnd
+from .. import storage
 from . import attempt
 from .messages import Event, RenderTask
 
@@ -114,15 +115,36 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
             lambda stage, detail="": say("progress", stage=stage, detail=detail))
         size = (result.output.stat().st_size
                 if result.output.is_file() else None)
+
+        # THE HARD ORDERING RULE. "The render succeeded" and "the result is
+        # safe" are different events, and only the second may be announced.
+        # The upload is confirmed with a HEAD before this returns; until it
+        # does, the message stays unacknowledged, the job is not finished,
+        # and a host destroyed here costs a re-render rather than somebody's
+        # video.
+        #
+        # A failure to store fails the JOB, deliberately. The alternative —
+        # report done and keep the file locally — produces a job that looks
+        # finished and a video that dies with the machine, which is the exact
+        # outcome this exists to prevent.
+        object_key = None
+        if storage.available() and result.output.is_file():
+            object_key = storage.output_key(task.job_id,
+                                            result.output.suffix or ".mp4")
+            say("progress", stage="store",
+                detail="putting the result somewhere it survives")
+            size = storage.put(result.output, object_key)
+
         elapsed = round(time.time() - began, 1)
         # Recorded BEFORE the event is published. If this worker dies in the
         # gap, the redelivery finds the record and republishes the outcome
         # instead of rendering the same thing again.
         attempt.write(job_dir, task.attempt, attempt.DONE,
                       result=str(result.output), mode=result.mode,
+                      object_key=object_key,
                       output_bytes=size, elapsed=elapsed)
         say("done", result=str(result.output), mode=result.mode,
-            output_bytes=size, elapsed=elapsed)
+            object_key=object_key, output_bytes=size, elapsed=elapsed)
         return True
 
     except pipeline.PipelineError as exc:
@@ -165,6 +187,7 @@ def _repeat(record: dict, say, task: RenderTask) -> bool:
                 "not rendering again", task.attempt, task.job_id, status)
     if status == attempt.DONE:
         say("done", result=record.get("result"), mode=record.get("mode"),
+            object_key=record.get("object_key"),
             output_bytes=record.get("output_bytes"),
             elapsed=record.get("elapsed"))
         return True
