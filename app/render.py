@@ -59,6 +59,16 @@ BACKGROUNDS = (NONE, STATIC, DYNAMIC)
 
 TOP, BOTTOM = "top", "bottom"
 
+# Where the title panel goes, and how the frame is composed around it.
+#
+#   left      a full-height column at the edge; the video fills what is
+#             left and is cropped to do it. The original layout.
+#   centered  a narrower column, and the video and band float as a group,
+#             fitted rather than cropped and centred vertically on the
+#             backdrop. A different composition, not a moved panel.
+PANEL_OFF, PANEL_LEFT, PANEL_CENTERED = "off", "left", "centered"
+PANEL_MODES = (PANEL_OFF, PANEL_LEFT, PANEL_CENTERED)
+
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +92,19 @@ class Style:
     background: str = NONE
     background_path: str | None = None    # required for static/dynamic
     band_position: str = BOTTOM
-    panel: bool = False
+    # off | left | centered. Was a bool when "left" was the only column;
+    # `__post_init__` still accepts that, because rows written then are
+    # still in the job table and still have to render.
+    panel: str = PANEL_OFF
     # 578/1920 — the column width the original title panel used.
     panel_width: float = 0.301
+    # The centred composition, taken from the design's own drawing of it:
+    # a narrower column, a right-hand margin so the picture does not touch
+    # the frame edge, and a tenth of the height kept clear so the group has
+    # air above and below rather than filling to the edges.
+    centered_width: float = 0.215
+    centered_pad: float = 0.042
+    centered_headroom: float = 0.10
     # No inset by default: the band spans the frame edge to edge.
     margin: int = 0
     # Nothing between the video and the score: they meet.
@@ -101,6 +121,15 @@ class Style:
     # 1 the bottom, 0.5 the middle.
     video_offset: float = 0.5
     crf: int = 20
+
+    def __post_init__(self) -> None:
+        # `panel` used to be True/False. Any job queued before "centered"
+        # existed still carries a boolean in its stored style, and a job
+        # that cannot be re-rendered from its own row is a job silently
+        # lost — so the old shape is accepted rather than rejected.
+        if isinstance(self.panel, bool):
+            object.__setattr__(self, "panel",
+                               PANEL_LEFT if self.panel else PANEL_OFF)
 
     @property
     def needs_alpha(self) -> bool:
@@ -123,8 +152,13 @@ class Style:
                     f"background={self.background!r} needs background_path.")
             if not pathlib.Path(self.background_path).is_file():
                 raise RenderError(f"Background not found: {self.background_path}")
+        if self.panel not in PANEL_MODES:
+            raise RenderError(f"panel must be one of "
+                              f"{', '.join(PANEL_MODES)}, got {self.panel!r}.")
         if not 0.0 <= self.panel_width < 0.9:
             raise RenderError("panel_width must be between 0 and 0.9.")
+        if not 0.0 < self.centered_width < 0.9:
+            raise RenderError("centered_width must be between 0 and 0.9.")
 
     @property
     def canvas(self) -> tuple[int, int]:
@@ -201,8 +235,11 @@ def compute_layout(style: Style, band_aspect: float,
     height is whatever its aspect demands, and the surplus is cropped.
     `style.video_offset` chooses which slice of it survives.
     """
+    if style.panel == PANEL_CENTERED:
+        return _centered_layout(style, band_aspect, video_aspect)
+
     width, height = style.canvas
-    panel_w = _even(width * style.panel_width) if style.panel else 0
+    panel_w = _even(width * style.panel_width) if style.panel == PANEL_LEFT else 0
     panel = Rect(0, 0, panel_w, height) if panel_w else None
 
     content_x = panel_w + style.margin
@@ -265,6 +302,79 @@ def compute_layout(style: Style, band_aspect: float,
                   video_source=(source_w, source_h),
                   video_crop_x=video_crop_x,
                   video_crop_y=video_crop_y)
+
+
+def _centered_layout(style: Style, band_aspect: float,
+                     video_aspect: float) -> Layout:
+    """The composed layout: a narrow column, and the picture floating.
+
+    Different from `left` in three ways that matter, all of them taken from
+    the design's own drawing of it rather than invented here:
+
+    * the video is **fitted, never cropped**. Beside a full-height column
+      the picture is cropped to fill its box, because a fitted one would
+      leave dead space. Here there is meant to be space around it — the
+      backdrop is the point — so nothing is cut.
+    * the video and the band travel **as one group**, centred vertically,
+      with a tenth of the height kept clear so they never reach the edges.
+    * the column is narrower, 0.215 against 0.301, and a margin on the
+      right keeps the picture off the frame edge.
+
+    The group is centred horizontally in what is left beside the column
+    too. The design pins it to the column's edge, which is the same thing
+    until the group has to be scaled down to fit the height — and it does,
+    for every ordinary 16:9 band — after which pinning leaves all the slack
+    piled on one side. Centred is what the option is called.
+    """
+    width, height = style.canvas
+    panel_w = _even(width * style.centered_width)
+    pad = _even(width * style.centered_pad)
+    panel = Rect(0, 0, panel_w, height)
+
+    content_x = panel_w
+    content_w = width - panel_w - pad
+    if content_w < 16:
+        raise RenderError("The canvas is too small for a centred panel.")
+
+    # Both fitted to the available width, each keeping its own aspect.
+    video_w, video_h = _even(content_w), _even(content_w / video_aspect)
+    band_w, band_h = _even(content_w), _even(content_w / band_aspect)
+
+    # `style.gap` is 0 by default — the video and the band meet. In this
+    # layout they are floating on a backdrop rather than butted against a
+    # frame edge, so a hairline of air reads as deliberate where zero reads
+    # as a mistake. The setting still wins if it was raised.
+    gap = max(style.gap, _even(height * 0.019))
+
+    total = video_h + gap + band_h
+    room = _even(height * (1.0 - style.centered_headroom))
+    if total > room:
+        shrink = room / total
+        video_w, video_h = _even(video_w * shrink), _even(video_h * shrink)
+        band_w, band_h = _even(band_w * shrink), _even(band_h * shrink)
+        total = video_h + gap + band_h
+    if video_h < 16 or band_h < 16:
+        raise RenderError(
+            "There is no room for both the picture and the score in a "
+            "centred layout at this aspect ratio.")
+
+    top = _even_at((height - total) / 2)
+    if style.band_position == TOP:
+        band_y, video_y = top, top + band_h + gap
+    else:
+        video_y, band_y = top, top + video_h + gap
+
+    video_x = content_x + _even_at((content_w - video_w) / 2)
+    band_x = content_x + _even_at((content_w - band_w) / 2)
+
+    # Fitted, so the source is exactly what lands: nothing is cropped, and
+    # `crops` stays False so the filter graph skips the crop entirely.
+    return Layout(canvas=(width, height),
+                  band=Rect(band_x, band_y, band_w, band_h),
+                  video=Rect(video_x, video_y, video_w, video_h),
+                  panel=panel,
+                  video_source=(video_w, video_h),
+                  video_crop_x=0, video_crop_y=0)
 
 
 def _clamp01(value: float) -> float:

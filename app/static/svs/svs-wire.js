@@ -464,7 +464,10 @@ $('#submit').onclick = async function(){
         style: {
           aspect: S.aspect,
           band_position: S.bandPos,
-          panel: S.panel !== 'off',
+          // the mode itself: 'off', 'left' or 'centered'. This sent a
+          // boolean while the renderer only knew a left column, so
+          // choosing Centered quietly produced a left one.
+          panel: S.panel,
           band_bg: S.bandColor,
           band_fg: S.noteColor,
           band_bg_opacity: S.alpha / 100,
@@ -528,12 +531,60 @@ const MARGIN = 0, GAP = 0, PANEL_W = 0.301;
 
 if(S.vidOffset === undefined) S.vidOffset = 0.5;
 
+/* The centred composition, mirroring app/render.py::_centered_layout line
+ * for line. Not a moved panel: a narrower column, and the video and band
+ * floating as one group, FITTED rather than cropped, centred vertically on
+ * the backdrop with a tenth of the height kept clear.
+ *
+ * Kept in step with the renderer by hand, like the layout below it. When
+ * these two disagree the preview lies, which is worse than not having one.
+ */
+const CENTRED_W = 0.215, CENTRED_PAD = 0.042, CENTRED_HEADROOM = 0.10;
+
+function centredLayout(cw, ch, videoAspect, bandAspect){
+  const even = n => Math.max(2, Math.round(n) - (Math.round(n) % 2));
+  const panelW = even(cw * CENTRED_W);
+  const pad = even(cw * CENTRED_PAD);
+  const contentW = cw - panelW - pad;
+
+  let videoW = even(contentW), videoH = even(contentW / videoAspect);
+  let bandW  = even(contentW), bandH  = even(contentW / bandAspect);
+  const gap = even(ch * 0.019);
+
+  let total = videoH + gap + bandH;
+  const room = even(ch * (1 - CENTRED_HEADROOM));
+  if (total > room) {
+    const shrink = room / total;
+    videoW = even(videoW * shrink); videoH = even(videoH * shrink);
+    bandW  = even(bandW  * shrink); bandH  = even(bandH  * shrink);
+    total = videoH + gap + bandH;
+  }
+
+  const top = even((ch - total) / 2);
+  const bandTop = S.bandPos === 'top';
+  const bandY  = bandTop ? top : top + videoH + gap;
+  const videoY = bandTop ? top + bandH + gap : top;
+
+  return {
+    canvas: [cw, ch],
+    panel: { x: 0, y: 0, w: panelW, h: ch },
+    video: { x: panelW + even((contentW - videoW) / 2), y: videoY,
+             w: videoW, h: videoH },
+    band:  { x: panelW + even((contentW - bandW) / 2), y: bandY,
+             w: bandW, h: bandH },
+    // Fitted, so nothing is cropped and the backdrop shows around it.
+    source: { w: videoW, h: videoH }, cropX: 0, cropY: 0,
+  };
+}
+
 function renderLayout(){
   const w = realBand();
   if(!w) return null;
   const [cw, ch] = CANVAS[S.aspect] || CANVAS['16/9'];
   const [va, vb] = (S.src.aspect || '16/9').split('/').map(Number);
   const videoAspect = va / vb, bandAspect = w.band_w / w.band_h;
+
+  if (S.panel === 'centered') return centredLayout(cw, ch, videoAspect, bandAspect);
 
   const panelW = S.panel === 'left' ? Math.round(cw * PANEL_W) : 0;
   const contentX = panelW + MARGIN, contentW = cw - panelW - 2 * MARGIN;
