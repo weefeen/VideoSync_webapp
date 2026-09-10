@@ -274,10 +274,15 @@ class Settings:
         # there — and the failure lands halfway through a render, minutes
         # in, as "No Futura LT Pro font in ...". Renders without a panel
         # succeed throughout, which is what makes it easy to miss.
-        if self.font_dir and not self.font_dir.is_dir():
+        # Asked of `fonts` rather than kept here as well: FONT_DIR is read
+        # there, with a default beside the code, and two places deciding
+        # where the fonts are is how they come to disagree.
+        from . import fonts
+        where = fonts.font_dir()
+        if not where.is_dir():
             issues.append(
-                f"FONT_DIR does not exist: {self.font_dir}. Renders with a "
-                f"title panel will fail; ones without will not.")
+                f"FONT_DIR does not exist: {where}. Renders with a title "
+                f"panel will fail; ones without will not.")
         if "CHANGE_ME" in self.rabbitmq_url:
             issues.append(
                 "RABBITMQ_URL still carries the placeholder password from "

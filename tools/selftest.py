@@ -97,7 +97,21 @@ def check_limits_are_sane() -> str:
             raise Failed(f"{name} has a window of {rule.window} seconds")
     if settings.smtp_port <= 0:
         raise Failed(f"SMTP_PORT is {settings.smtp_port}")
-    return f"{len(limits.RULES)} limit rules, all positive"
+
+    # `problems()` is what the release check runs before a deploy swaps the
+    # symlink, and until now nothing called it any earlier. A line added to
+    # it referring to an attribute that does not exist raised AttributeError
+    # on the server, mid-deploy, with every local check green — which is the
+    # long way round to find a typo.
+    try:
+        found = settings.problems()
+    except Exception as exc:                          # noqa: BLE001
+        raise Failed(f"settings.problems() raised {type(exc).__name__}: {exc}"
+                     ) from exc
+    if not isinstance(found, list):
+        raise Failed(f"problems() returned {type(found).__name__}, not a list")
+    return (f"{len(limits.RULES)} limit rules, and problems() runs "
+            f"({len(found)} reported here)")
 
 
 def check_job_store_round_trips() -> str:
