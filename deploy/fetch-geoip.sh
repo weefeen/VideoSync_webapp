@@ -58,6 +58,12 @@ fi
 
 gunzip -c "$TMP.gz" > "$TMP"
 
+# Readable by the app, which does not run as root. `mktemp` makes the file
+# 0600 and `mv` keeps that, so without this the download succeeds, the file
+# is visibly there, and every lookup fails with a permission error that looks
+# exactly like having no visitors.
+chmod 0644 "$TMP"
+
 # Swapped into place in one step. The app memory-maps this file and reads it
 # on every visitor row, so writing over it in place would have a live process
 # reading a half-written database.
@@ -71,6 +77,7 @@ rm -f "$TMP.gz"
 ls -1t "$DEST"/dbip-*.mmdb 2>/dev/null | tail -n +3 | xargs -r rm -f
 
 say "In place"
+chmod 0755 "$DEST"
 ls -lh "$DEST"/dbip-*.mmdb | sed 's|^|  |'
 echo
 echo "  Point the app at it:"
