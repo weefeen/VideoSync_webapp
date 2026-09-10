@@ -14,14 +14,31 @@
 #   DEPLOY_HOST        chopin.weefeen.com
 #   DEPLOY_USER        vsw   (an unprivileged user, NOT root)
 #
-# Until those exist this workflow simply will not run: `environment` gates it
-# behind a GitHub environment, so the first deploy is a deliberate act.
+# This used to claim that `environment: production` gated it until those
+# secrets existed. THAT IS NOT TRUE and merging to main proved it: a GitHub
+# environment only gates a job when the environment has protection rules on
+# it. With none — or with no such environment at all — the job runs, and it
+# died on the first step that needed a key:
+#
+#     Error: The ssh-private-key argument is empty.
+#
+# Two changes, so that cannot happen again:
+#
+#   * it no longer runs on push. There is nowhere to deploy to yet —
+#     chopin.weefeen.com does not exist — and a workflow that fails on every
+#     merge teaches people to ignore a red mark on main. Put the `push:`
+#     trigger back the day the host is real; it is one line, below.
+#   * a `configured` job checks the secrets first and skips the deploy when
+#     they are missing. Skipped reads as "not set up"; failed reads as
+#     "broken", and the difference matters at a glance six months from now.
+#     The check has to be its own job because the `secrets` context is not
+#     available in a job-level `if`.
 
 name: deploy
 
 on:
-  push:
-    branches: [main]
+  # push:
+  #   branches: [main]       # <- uncomment when the production host exists
   workflow_dispatch:
     inputs:
       ref:
@@ -38,7 +55,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  configured:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          missing=""
+          [ -n "$KEY" ]  || missing="$missing SSH_PRIVATE_KEY"
+          [ -n "$HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$USER" ] || missing="$missing DEPLOY_USER"
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deployment is not configured; skipping. Missing:$missing"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
+    needs: configured
+    if: needs.configured.outputs.ready == 'true'
     runs-on: ubuntu-latest
     environment: production
     steps:
