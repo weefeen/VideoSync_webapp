@@ -117,6 +117,34 @@
     to { transform: translate3d(734px, 0, 0); }
 }
 
+/* ── the headline in musical time ─────────────────────────────────────── */
+/* svs-motion.js rebuilds the headline word by word and gives each span a
+   delay; these two rules are what those delays drive. Without them the
+   spans are inert and the headline simply appears — which is what it had
+   been doing, because this rule was lost when the drift masks were
+   rewritten and nothing failed loudly: the JS still ran, the classes were
+   still added, and no error appeared anywhere.
+
+   `opacity: 0` to start is only safe inside the reduced-motion guard above.
+   Outside it, a visitor who has asked for less movement would get a
+   headline that never becomes visible. */
+.rubatoword {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(.14em);
+  animation: rubatoword .62s cubic-bezier(.22, .68, .28, 1) forwards;
+}
+@keyframes rubatoword { to { opacity: 1; transform: none; } }
+
+}
+/* ── end of the reduced-motion guard ──────────────────────────────────── */
+/* Everything ABOVE is motion and belongs behind that guard. Everything
+   below is layout that must apply whatever a visitor has asked for.
+   The brace above was missing entirely: browsers close an unterminated
+   block at end of file, so the page looked right and the rule below was
+   silently trapped inside the guard — meaning anyone with reduced motion
+   set lost the stacking fix, and with it the upload dialog. */
+
 /* The page's own content has to sit above the backdrop — but WITHOUT
    creating a stacking context, which is a distinction that broke the
    upload dialog.
