@@ -118,12 +118,21 @@ An `auto` mode once aligned against the score itself through
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt          # the app
 cp .env.example .env          # then edit the paths
 python tools/doctor.py        # checks config, tools and corpus
 python tools/selftest.py      # the checks CI runs, on this machine
 python run.py                 # http://127.0.0.1:5000
 ```
+
+**On a Linux server, install `requirements-engine.txt` as well.** The first
+file serves pages and renders a video from an alignment that already exists;
+it cannot recognise or align, because those run in subprocesses whose imports
+nothing at startup touches — so leaving it out produces a deployment that
+starts cleanly and fails on the first upload. On Windows it is not needed:
+those libraries live in the `2026liszt` environment, not the app's.
+
+    pip install -r requirements.txt -r requirements-engine.txt
 
 `ffmpeg` and `ffprobe` are external binaries, not Python packages. Without
 `cairosvg`, `.svg` bands cannot be rasterised and the `.png` twins beside them

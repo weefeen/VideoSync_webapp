@@ -1,0 +1,59 @@
+# What the two read-only engine repositories need, on a Linux server.
+#
+#     pip install -r requirements.txt -r requirements-engine.txt
+#
+# `requirements.txt` is this app: Flask, Pillow, cairosvg, pika. It is
+# enough to serve pages and to render a video from an alignment that
+# already exists. It is NOT enough to run a job, and that distinction cost
+# a real mistake: a deployment that installed only `requirements.txt`
+# would start cleanly, pass a "does the app build" check, and then fail on
+# the first upload — because recognition and alignment happen in
+# subprocesses whose imports nothing at startup touches.
+#
+# NOT NEEDED ON WINDOWS. There the workflow is split across conda
+# environments (see README) and these live in `2026liszt`, not in the
+# app's environment. This file is for a machine where one interpreter runs
+# everything, which is every Linux box we deploy to.
+#
+# The versions are pinned to what the ENGINES were written against, not to
+# what pip resolves today. Those repositories are read-only, so the
+# environment bends to them and not the other way round. Two of these are
+# pinned because of a failure, not a preference — see below.
+
+# torch is CPU-only on purpose: recognition was measured at 130 s on CPU
+# against 78 s on a GPU, for an identical verdict, and no host we run on
+# has a GPU. The extra index is where the +cpu wheels live; without it pip
+# resolves the CUDA build and pulls about two gigabytes of driver
+# libraries that never get used.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.0+cpu
+
+# Recognition — music_finrgerprint.
+piano-transcription-inference==0.0.6
+torchlibrosa==0.1.0
+h5py==3.16.0
+
+# Chroma extraction and alignment — VideoScoreSync.
+#
+# librosa is pinned BECAUSE OF A FAILURE. pip resolved 1.0.0, which removed
+# `get_duration(filename=...)`, and the first job on the first Linux box
+# died with a TypeError inside api_audio/chroma.py. VideoScoreSync pins
+# numpy and leaves librosa open, so nothing stopped it.
+librosa==0.11.0
+# numpy is pinned to the same pair, for the same reason: 2.x is not what
+# that code was written against.
+numpy==1.26.4
+numba==0.67.0
+scipy==1.17.1
+soundfile==0.14.0
+
+# Reached through the engines' own import chains rather than used here.
+# `validators` in particular is imported by a VideoScoreSync service and is
+# the only thing from its requirements.txt that its import chain actually
+# needed — the rest of that file pulls opencv, which needs libGL, which is
+# exactly the error in that project's own embed_score_err.log.
+mido==1.3.3
+pretty_midi==0.2.11.post0
+matplotlib==3.11.1
+tqdm==4.70.0
+validators==0.35.0
