@@ -101,6 +101,39 @@ jobs:
           printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Can we reach the host at all?
+        # Separated from the rsync so a connection problem says so, instead
+        # of surfacing as "exit code 1" on a step that was going to copy
+        # 15 MB. Everything below this point assumes the login works, and
+        # this is the cheapest place to find out that it does not.
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          echo "connecting as $USER@$HOST"
+          if ssh -o BatchMode=yes -o ConnectTimeout=15 "$USER@$HOST"                  'echo "reached $(hostname) as $(whoami)"'; then
+            exit 0
+          fi
+          cat >&2 <<'WHY'
+
+          Could not log in. In order of how often each one is the cause:
+
+            * SSH_PRIVATE_KEY is malformed. It must be the WHOLE file,
+              including the -----BEGIN----- and -----END----- lines and the
+              final newline. A key pasted without its last line loads as
+              "invalid format".
+            * SSH_KNOWN_HOSTS does not match. Use every line that
+              `ssh-keyscan <host>` prints, not just one of them: which host
+              key type gets negotiated is not fixed.
+            * DEPLOY_USER is wrong, or its public half is not in that
+              user's ~/.ssh/authorized_keys on the server.
+            * The host is not reachable from a GitHub runner at all.
+
+          Check it from anywhere with the same key:
+            ssh -i <the key> $USER@$HOST true
+          WHY
+          exit 1
+
       - name: Send the release
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
