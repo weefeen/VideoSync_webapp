@@ -138,6 +138,25 @@ the top.
 geolocation service, which is what the privacy page says, so any change to
 this that introduces a network call is a change to a published promise.
 
+### Alerts that reach a person
+
+```bash
+sudo deploy/install-alert-mail.sh
+```
+
+Reads `SMTP_*` and `ALERT_EMAIL` out of `/srv/vsw/shared/.env`, writes them
+into `grafana.ini`, provisions the contact point and the notification policy,
+restarts Grafana and sends a test. Refuses with instructions if either is
+missing, rather than half-configuring.
+
+**Nothing secret is in this repository and nothing needs to be.** The app
+already keeps `SMTP_*` in `.env` for the "your video is ready" mail, so the
+alerts borrow the same credentials and the same place to rotate them.
+
+Until `SMTP_HOST` is set, two things do not work and both are silent: alerts
+fire and are visible under Alerting but email nobody, and no visitor is ever
+told their video is ready.
+
 ## Rolling back
 
 A release that does not answer its health check inside a minute is rolled
