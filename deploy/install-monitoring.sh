@@ -100,10 +100,16 @@ say "The Infinity plugin, for the failure table"
 # message or an ffmpeg command line as a Prometheus label is unbounded
 # cardinality — one new series per distinct failure — so the detail is read
 # straight from the app as JSON, and this is what reads JSON.
-if ! grafana-cli plugins ls 2>/dev/null | grep -q infinity; then
-    grafana-cli plugins install yesoreyeram-infinity-datasource >/dev/null 2>&1         && echo "  installed" || echo "  COULD NOT INSTALL — the failure table will be empty"
-else
+# `grafana cli`, with a homepath. The old `grafana-cli` is deprecated in
+# Grafana 13 and fails with "Could not find config defaults" — which the
+# first version of this hid behind >/dev/null, so it reported a clean
+# install of nothing.
+if [ -d /var/lib/grafana/plugins/yesoreyeram-infinity-datasource ]; then
     echo "  already installed"
+elif grafana cli --homepath /usr/share/grafana         --pluginsDir /var/lib/grafana/plugins         plugins install yesoreyeram-infinity-datasource 2>&1 | tail -2; then
+    chown -R grafana:grafana /var/lib/grafana/plugins
+else
+    echo "  COULD NOT INSTALL — the failure table will have no datasource"
 fi
 
 say "Wire Grafana to Prometheus, and load the dashboard"
