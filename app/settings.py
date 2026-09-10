@@ -105,6 +105,12 @@ class Settings:
     # again, and again not by preference: chroma extraction ABORTS the
     # process under this app's environment (numba, missing Intel SVML), and
     # an abort cannot be caught.
+    # Turning an address into a country and a city, WITHOUT asking anybody.
+    # A MaxMind-format database on this disk; the lookup is a read of a local
+    # file, so no visitor's address is ever sent to a geolocation service.
+    # Unset — or the file absent — means addresses are listed unresolved,
+    # which is a smaller loss than the alternative.
+    geoip_db: pathlib.Path | None = None
     vss_root: pathlib.Path | None = None
     sync_python: str = ""
     sync_timeout: float = 900.0
@@ -314,6 +320,7 @@ def load() -> Settings:
         identify_min_seconds=_number("IDENTIFY_MIN_SECONDS", 20.0),
         rabbitmq_url=os.getenv("RABBITMQ_URL", "").strip().strip('"'),
         identify_timeout=_number("IDENTIFY_TIMEOUT", 600.0),
+        geoip_db=_one("GEOIP_DB"),
         vss_root=_one("VSS_ROOT"),
         sync_python=os.getenv("SYNC_PYTHON", "").strip().strip('"'),
         sync_timeout=_number("SYNC_TIMEOUT", 900.0),

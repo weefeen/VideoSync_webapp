@@ -20,6 +20,11 @@ gunicorn>=21.2
 # process and never imports this — so a developer machine needs no broker.
 pika>=1.3
 
+# Reads the geolocation database in deploy/fetch-geoip.sh, so a visitor's
+# address becomes a country and a city without leaving this machine. Optional
+# at runtime: without it the visitor list still renders, unresolved.
+maxminddb>=2.6
+
 # ffmpeg and ffprobe are external binaries, not Python packages.
 # Windows: https://www.gyan.dev/ffmpeg/builds/
 # Debian/Ubuntu: sudo apt install ffmpeg

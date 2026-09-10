@@ -29,7 +29,10 @@ from . import stats
 from . import svg
 from . import store
 from . import sync as syncing
+from . import visitors
 from .settings import settings
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("main", __name__)
 
@@ -179,6 +182,18 @@ def api_failures():
     what visitors chose, which is more than anyone outside needs.
     """
     return jsonify(metrics.failures())
+
+
+@bp.get("/api/visitors")
+def api_visitors():
+    """Who has used this, from where, and what they played. Not for the public.
+
+    Same rule as /metrics and /api/failures: loopback only, and whatever
+    fronts the site must keep it off the internet. This one is stricter than
+    either — it carries visitors' addresses, which is the most personal thing
+    this application holds.
+    """
+    return jsonify(visitors.everything())
 
 
 @bp.get("/api/stats")
@@ -524,6 +539,7 @@ def _identify_now(job: jobs.Job) -> dict:
         return {"state": "error", "recognised": False, "error": str(exc),
                 "configured": False}
     except ident.IdentifyError as exc:
+        _record_recognition(job, "error", [], None)
         return {"state": "error", "recognised": False, "error": str(exc)}
 
     candidates = _candidates(result)
@@ -537,10 +553,56 @@ def _identify_now(job: jobs.Job) -> dict:
         # answer from "we could not place it", and with one package
         # installed it is the likely one.
         state = "unavailable"
+    _record_recognition(job, state, candidates, result)
     return {"state": "done", "recognised": result.outcome == ident.MATCHED,
             "outcome": state, "candidates": candidates,
             "consensus": result.consensus, "windows": result.n_windows,
             "timing": result.timing}
+
+
+def _record_recognition(job: jobs.Job, outcome: str,
+                        candidates: list[dict], result) -> None:
+    """Keep what was played, and how sure we were.
+
+    Written here rather than in `identify` because this is where the answer
+    is complete: the recogniser names a piece, and only the library knows
+    whether a score exists for it — which is the difference between "we could
+    not place it" and "we placed it and cannot engrave it yet". The second is
+    a list of what to engrave next, and it is only visible from here.
+
+    Never allowed to break an identification. A visitor waiting on their
+    recording does not care that a statistic could not be filed, so a failure
+    here is logged and dropped.
+    """
+    top = candidates[0] if candidates else {}
+    # Resolved here, once, and the address itself is not passed on. What the
+    # statistic needs is the place; keeping a second copy of the address would
+    # mean deleting a recording on request no longer deletes it.
+    place = visitors.locate(job.client)
+    try:
+        store.put_recognition(
+            job.id,
+            country=place["country"],
+            city=place["city"],
+            outcome=outcome,
+            piece_id=top.get("piece_id") or None,
+            # The readable name, so a list of pieces can be read without the
+            # library loaded — this row outlives the packages installed today.
+            title=top.get("label") or None,
+            # Already a percentage of the whole ranked list: exactly the
+            # "compared to the others" figure, and computed in one place so
+            # the number filed here is the number the visitor was shown.
+            confidence=top.get("confidence"),
+            consensus=getattr(result, "consensus", None),
+            windows=getattr(result, "n_windows", None),
+            duration=job.duration,
+            candidates=[{"piece_id": c.get("piece_id"),
+                         "label": c.get("label"),
+                         "confidence": c.get("confidence"),
+                         "renderable": c.get("renderable")}
+                        for c in candidates[:5]])
+    except Exception:                              # noqa: BLE001
+        logger.exception("job %s: the recognition could not be recorded", job.id)
 
 
 @bp.post("/api/jobs/<job_id>/identify")
@@ -620,7 +682,12 @@ def api_upload():
             "detail": f"Use one of: {', '.join(sorted(VIDEO_SUFFIXES))}.",
         }), 415
 
-    job = jobs.new_job(upload.filename, _uploads() / "pending")
+    # The address is passed in, not assigned afterwards: `new_job` writes
+    # the row as it creates it. The rate limiter has already counted this
+    # address; keeping it on the job is what lets that counting be explained
+    # later, and what answers where the machines should be.
+    job = jobs.new_job(upload.filename, _uploads() / "pending",
+                       client=limits.client_key(request))
     dest = _uploads() / f"{job.id}{suffix}"
     job.upload_path = dest
     upload.save(dest)
@@ -661,6 +728,12 @@ def api_upload():
 
     job.duration = info["duration"]
     job.size_bytes = dest.stat().st_size
+    # Saved here as well as at submission, because an upload that is never
+    # rendered is still an upload: without this its row keeps the placeholder
+    # path it was created with and reports no length and no size, and every
+    # count of what this machine was actually given is short by exactly the
+    # visitors who changed their mind.
+    job.save()
     return jsonify({"job": job.public(), "probe": info})
 
 

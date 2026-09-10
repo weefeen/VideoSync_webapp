@@ -537,7 +537,7 @@
     {
       "type": "timeseries",
       "title": "Seconds of work per gigabyte uploaded",
-      "description": "The figure the caps were set from. Length is what actually costs — the canvas is a fixed 1080p whatever arrives — so this drifts with the kind of video people send, and is worth watching rather than trusting.",
+      "description": "The figure the caps were set from. Length is what actually costs \u2014 the canvas is a fixed 1080p whatever arrives \u2014 so this drifts with the kind of video people send, and is worth watching rather than trusting.",
       "gridPos": {
         "h": 7,
         "w": 12,
@@ -633,7 +633,7 @@
     {
       "type": "table",
       "title": "Why the failures failed",
-      "description": "The reason, not the count. Prometheus cannot hold this — an error message as a label is one new series per distinct failure — so it comes straight from the app. The command is the ffmpeg line that was actually run, assembled from what the visitor chose; paste it into a terminal to reproduce.",
+      "description": "The reason, not the count. Prometheus cannot hold this \u2014 an error message as a label is one new series per distinct failure \u2014 so it comes straight from the app. The command is the ffmpeg line that was actually run, assembled from what the visitor chose; paste it into a terminal to reproduce.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "vsw-infinity"
@@ -832,6 +832,823 @@
         "footer": {
           "show": false
         }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Who is using this, and from where",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Where the uploads come from",
+      "description": "The server-location answer, and the one to read first. Built from the country recorded at the time of each upload, not from re-resolving addresses now - so it survives a recording being deleted, and a block of addresses being reassigned cannot rewrite last year. Sorted by minutes of video, because that is what has to cross an ocean.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 0,
+        "y": 39
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "countries",
+          "columns": [
+            {
+              "selector": "country",
+              "text": "Country",
+              "type": "string"
+            },
+            {
+              "selector": "uploads",
+              "text": "Uploads",
+              "type": "number"
+            },
+            {
+              "selector": "minutes",
+              "text": "Minutes",
+              "type": "number"
+            },
+            {
+              "selector": "city_count",
+              "text": "Cities",
+              "type": "number"
+            },
+            {
+              "selector": "cities",
+              "text": "Mostly from",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uploads"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cities"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Country",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "What people actually play",
+      "description": "Every piece the recogniser has named here. 'Asked' counts answers and 'Uploads' counts recordings - a visitor who asked twice about one video is 2 and 1. Length is a median with its range, never a mean: one thirty-second test upload of a twenty-minute Ballade would drag an average somewhere neither figure has ever been. 'Confidence' is the winner's share of the whole ranked list, so a low one means the runners-up were close, not that the answer was wrong.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 10,
+        "y": 39
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "pieces",
+          "columns": [
+            {
+              "selector": "title",
+              "text": "Piece",
+              "type": "string"
+            },
+            {
+              "selector": "times",
+              "text": "Asked",
+              "type": "number"
+            },
+            {
+              "selector": "uploads",
+              "text": "Uploads",
+              "type": "number"
+            },
+            {
+              "selector": "confidence",
+              "text": "Confidence",
+              "type": "number"
+            },
+            {
+              "selector": "median_minutes",
+              "text": "Median",
+              "type": "number"
+            },
+            {
+              "selector": "shortest_minutes",
+              "text": "Shortest",
+              "type": "number"
+            },
+            {
+              "selector": "longest_minutes",
+              "text": "Longest",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Asked"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uploads"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Median"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Shortest"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Longest"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Confidence"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Piece",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Every visitor, by address",
+      "description": "One row per internet address, with the city it resolves to. There is no login here, so this is the only thing that distinguishes one visitor from another, and it is what the daily upload limit is counted against. It is deleted with the recording when somebody asks - which is why the two tables above are built from the recorded country instead, and go on working afterwards.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "visitors",
+          "columns": [
+            {
+              "selector": "last_seen",
+              "text": "Last seen",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "address",
+              "text": "Address",
+              "type": "string"
+            },
+            {
+              "selector": "city",
+              "text": "City",
+              "type": "string"
+            },
+            {
+              "selector": "region",
+              "text": "Region",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "Country",
+              "type": "string"
+            },
+            {
+              "selector": "uploads",
+              "text": "Uploads",
+              "type": "number"
+            },
+            {
+              "selector": "delivered",
+              "text": "Delivered",
+              "type": "number"
+            },
+            {
+              "selector": "failed",
+              "text": "Failed",
+              "type": "number"
+            },
+            {
+              "selector": "identifications",
+              "text": "Asked",
+              "type": "number"
+            },
+            {
+              "selector": "pieces",
+              "text": "Pieces",
+              "type": "number"
+            },
+            {
+              "selector": "minutes",
+              "text": "Minutes",
+              "type": "number"
+            },
+            {
+              "selector": "megabytes",
+              "text": "MB",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last seen"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Address"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uploads"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Delivered"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Failed"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Asked"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pieces"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MB"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Failed"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Last seen",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Every answer the recogniser gave",
+      "description": "The rows the two tables above are built from, newest first - where an implausible median or an unexpected country comes from. Deliberately carries no address: the job id is here instead, and the address is reached by looking that job up while it still exists. 'Consensus' is how much of the recording agreed with itself, over how many windows; a high confidence over two windows is arithmetic, not evidence.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/visitors",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "recent",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "When",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "job",
+              "text": "Job",
+              "type": "string"
+            },
+            {
+              "selector": "city",
+              "text": "City",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "Country",
+              "type": "string"
+            },
+            {
+              "selector": "outcome",
+              "text": "Outcome",
+              "type": "string"
+            },
+            {
+              "selector": "piece",
+              "text": "Piece",
+              "type": "string"
+            },
+            {
+              "selector": "confidence",
+              "text": "Confidence",
+              "type": "number"
+            },
+            {
+              "selector": "consensus",
+              "text": "Consensus",
+              "type": "number"
+            },
+            {
+              "selector": "windows",
+              "text": "Windows",
+              "type": "number"
+            },
+            {
+              "selector": "minutes",
+              "text": "Minutes",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "When"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Job"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Confidence"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Consensus"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Windows"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minutes"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Confidence"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Outcome"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "matched": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "unavailable": {
+                        "color": "yellow",
+                        "index": 1
+                      },
+                      "unrecognised": {
+                        "color": "orange",
+                        "index": 2
+                      },
+                      "error": {
+                        "color": "red",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ]
       }
     }
   ]

@@ -12,7 +12,7 @@ stages move to their own processes the broker carries *what to do next* and
 this keeps carrying *what state is this job in*. The split is deliberate and
 survives that change.
 
-Two tables:
+Three tables:
 
     jobs        one row per submission, including everything needed to run it
                 after a restart — the style and the metadata are stored, not
@@ -26,6 +26,13 @@ Two tables:
                 and the same rows calibrate the time estimates, so the
                 numbers shown to visitors come from what actually happened
                 rather than from a constant somebody measured once.
+
+    recognitions one row per answer from the recogniser: the piece it named,
+                how far ahead of the runners-up it was, how long the recording
+                ran, and the country it came from. It carries no address —
+                that lives on the job row and nowhere else, so deleting
+                somebody's recording deletes it. What is left here is what
+                people play and where from, which outlives any one upload.
 
 WAL so a reader never blocks the worker, and one connection behind one lock
 because at a handful of jobs a day contention is not a problem worth solving.
@@ -127,6 +134,54 @@ CREATE TABLE IF NOT EXISTS stage_runs (
 );
 CREATE INDEX IF NOT EXISTS stage_runs_job ON stage_runs(job_id, started);
 CREATE INDEX IF NOT EXISTS stage_runs_calib ON stage_runs(stage, state, ended);
+
+-- What the recogniser was asked, and what it answered. One row per
+-- identification, not per job: the same upload can be listened to twice, and
+-- an answer that changed between two attempts is the interesting one.
+--
+-- Separate from `jobs` because the two hold different facts. `jobs.score` is
+-- the score package a render was finally run against — which the visitor can
+-- override, and which stays empty for anyone who listened and then left.
+-- This is what the machine said, before anybody agreed with it.
+CREATE TABLE IF NOT EXISTS recognitions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    at          REAL NOT NULL,
+    -- Where it came from, and DELIBERATELY NOT the address. The address
+    -- lives in exactly one place — the job row — so that deleting somebody's
+    -- recording on request deletes it, with no second copy to remember.
+    -- What is kept here is the coarse location, resolved once at the moment
+    -- of the upload: it is what the question "where should the servers be"
+    -- actually needs, it survives the recording being deleted, and it is not
+    -- personal data. Which visitor did what is still answerable while the
+    -- job row exists, by joining on job_id.
+    country     TEXT NOT NULL DEFAULT '',
+    city        TEXT NOT NULL DEFAULT '',
+    -- matched | unavailable | unrecognised | error. `unavailable` means it
+    -- was named and no score is installed for it — the answer that says what
+    -- to engrave next.
+    outcome     TEXT NOT NULL,
+    -- The piece the recogniser named, in its own vocabulary. Never the
+    -- edition: two visitors playing the same Ballade must land on one row
+    -- however their scores were published.
+    piece_id    TEXT,
+    title       TEXT,
+    -- Its share of the whole ranked list, as a percentage — the "compared to
+    -- the others" figure. 100 means nothing else came close.
+    confidence  REAL,
+    -- How much of the recording agreed with itself, and over how many
+    -- windows. Confidence says the winner beat the field; these say whether
+    -- the field was worth beating.
+    consensus   REAL,
+    windows     INTEGER,
+    -- Seconds of music. Held here as well as on the job so that "how long is
+    -- this piece, across everyone who has played it" is one GROUP BY.
+    duration    REAL,
+    -- The runners-up, as JSON, for the times the winner was wrong.
+    candidates  TEXT
+);
+CREATE INDEX IF NOT EXISTS recognitions_piece ON recognitions(piece_id, at);
+CREATE INDEX IF NOT EXISTS recognitions_where ON recognitions(country, at);
 """
 
 # States a job can be in. `queued` is the new one and the point of this
@@ -488,3 +543,126 @@ def rate(stage: str, minimum: int = 5) -> float | None:
         return None
     return ratios[len(ratios) // 2]          # median, not mean: one stall
                                              # should not move the estimate
+
+
+# ---------------------------------------------------------------------------
+# recognitions — what was played, and how sure we were
+# ---------------------------------------------------------------------------
+
+def put_recognition(job_id: str, *, country: str = "", city: str = "",
+                    outcome: str,
+                    piece_id: str | None = None, title: str | None = None,
+                    confidence: float | None = None,
+                    consensus: float | None = None,
+                    windows: int | None = None,
+                    duration: float | None = None,
+                    candidates: list | None = None) -> int:
+    """Record one answer from the recogniser. Returns the row id.
+
+    Appended, never replaced. A second listen to the same upload is a second
+    row, because the pair of them is the evidence that the answer is not
+    stable — and overwriting the first would destroy exactly that.
+    """
+    with write() as conn:
+        cur = conn.execute(
+            "INSERT INTO recognitions (job_id, at, country, city, outcome,"
+            " piece_id, title, confidence, consensus, windows, duration,"
+            " candidates) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (job_id, time.time(), country or "", city or "", outcome,
+             piece_id, title,
+             confidence, consensus, windows, duration,
+             json.dumps(candidates or [])))
+        return int(cur.lastrowid)
+
+
+def recognitions(limit: int = 500) -> list[sqlite3.Row]:
+    """The most recent answers, newest first."""
+    return query("SELECT * FROM recognitions ORDER BY at DESC LIMIT ?", (limit,))
+
+
+def pieces() -> list[sqlite3.Row]:
+    """Every piece that has ever been recognised here, with its statistics.
+
+    Length is reported as a range and a median rather than a mean: a piece
+    played twice, once complete and once as a fragment somebody stopped
+    recording, has no meaningful average — and the two numbers say so where
+    one number would hide it.
+
+    Rows with no duration are counted in `times` but cannot contribute a
+    length, so `lengths` is reported separately. Two different denominators,
+    and quietly sharing one is how a statistic becomes wrong.
+    """
+    return query(
+        "SELECT piece_id, MAX(title) AS title,"
+        "       COUNT(*) AS times,"
+        # Distinct RECORDINGS, not distinct people: this table holds no
+        # address, so "how many different players" is not a question it can
+        # answer. Two listens to one upload count once here and twice in
+        # `times`, and the pair of numbers is the useful thing.
+        "       COUNT(DISTINCT job_id) AS uploads,"
+        "       COUNT(duration) AS lengths,"
+        "       MIN(duration) AS shortest,"
+        "       MAX(duration) AS longest,"
+        "       AVG(confidence) AS confidence,"
+        "       MIN(at) AS first_at, MAX(at) AS last_at"
+        " FROM recognitions WHERE piece_id IS NOT NULL AND piece_id != ''"
+        " GROUP BY piece_id ORDER BY times DESC, piece_id")
+
+
+def piece_durations(piece_id: str) -> list[float]:
+    """Every recorded length for one piece, in order. For the median."""
+    return [r["duration"] for r in query(
+        "SELECT duration FROM recognitions WHERE piece_id = ?"
+        " AND duration IS NOT NULL ORDER BY duration", (piece_id,))]
+
+
+def listens_by_client() -> list[sqlite3.Row]:
+    """How many times each address had something identified, and what.
+
+    Joined through `jobs`, because the recognition row holds no address —
+    only the place. So this answers "which visitor" for exactly as long as
+    the job row exists, and stops answering it the moment somebody's
+    recording is deleted. That is the intended behaviour, not a limitation.
+    """
+    return query("""
+        SELECT j.client AS client,
+               COUNT(*) AS listens,
+               SUM(r.outcome = 'matched') AS matched,
+               COUNT(DISTINCT r.piece_id) AS pieces
+          FROM recognitions r JOIN jobs j ON j.id = r.job_id
+         WHERE j.client != ''
+         GROUP BY j.client""")
+
+
+def places() -> list[sqlite3.Row]:
+    """Uploads by country and city, from the recognition rows.
+
+    The long-lived answer to "where should the servers be". Survives any
+    individual recording being deleted, because it never held an address.
+    """
+    return query("""
+        SELECT country, city, COUNT(*) AS listens,
+               COALESCE(SUM(duration), 0) AS seconds,
+               MIN(at) AS first_at, MAX(at) AS last_at
+          FROM recognitions WHERE country != ''
+         GROUP BY country, city ORDER BY listens DESC""")
+
+
+def visitors() -> list[sqlite3.Row]:
+    """One row per address, with what it has done here.
+
+    Uploads and recognitions are counted from their own tables rather than
+    from a join: an address that listened five times and never rendered would
+    otherwise be multiplied by its own recognitions and read as five uploads.
+    """
+    return query("""
+        SELECT client,
+               COUNT(*) AS uploads,
+               MIN(created) AS first_seen,
+               MAX(created) AS last_seen,
+               SUM(state = 'done') AS delivered,
+               SUM(state = 'error') AS failed,
+               COALESCE(SUM(duration), 0) AS seconds,
+               COALESCE(SUM(size_bytes), 0) AS bytes
+          FROM jobs WHERE client != ''
+         GROUP BY client ORDER BY last_seen DESC""")

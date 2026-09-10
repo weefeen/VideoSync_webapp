@@ -65,6 +65,12 @@ class Job:
     error: str | None = None
     result: pathlib.Path | None = None
     email: str = ""
+    # The address the upload came from. Kept because it is the only thing
+    # standing in for a login here: the limits that stop one visitor using
+    # the whole machine are counted against it, and where uploads come from
+    # is what decides where the servers should be. Never shown to anyone but
+    # the operator, and never resolved to a person.
+    client: str = ""
     detail: str = ""
     duration: float | None = None
     size_bytes: int | None = None
@@ -93,7 +99,8 @@ class Job:
             "upload": str(self.upload_path), "score": self.score,
             "mode": self.mode, "state": self.state, "error": self.error,
             "result": str(self.result) if self.result else None,
-            "email": self.email, "duration": self.duration,
+            "email": self.email, "client": self.client,
+            "duration": self.duration,
             "size_bytes": self.size_bytes, "priority": self.priority,
             "queued_at": self.queued_at, "started": self.started,
             "finished": self.finished,
@@ -114,6 +121,7 @@ class Job:
         job.state, job.error = row["state"], row["error"]
         job.result = pathlib.Path(row["result"]) if row["result"] else None
         job.email = row["email"] or ""
+        job.client = (row["client"] if "client" in row.keys() else "") or ""
         job.duration, job.size_bytes = row["duration"], row["size_bytes"]
         job.priority = row["priority"] or 0
         job.created = row["created"]
@@ -286,10 +294,16 @@ class Registry:
 registry = Registry()
 
 
-def new_job(original_name: str, upload_path: pathlib.Path) -> Job:
+def new_job(original_name: str, upload_path: pathlib.Path,
+            client: str = "") -> Job:
+    """A job, saved. `client` is passed in rather than set afterwards
+    because `add` writes the row immediately: an address assigned after this
+    returns would not reach the table until the next save, and a visitor who
+    uploads and never renders never causes one."""
     return registry.add(Job(id=uuid.uuid4().hex[:12],
                             original_name=original_name,
-                            upload_path=upload_path))
+                            upload_path=upload_path,
+                            client=client))
 
 
 def job_paths(job: Job) -> jobpaths.JobPaths:

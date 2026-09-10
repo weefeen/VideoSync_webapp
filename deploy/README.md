@@ -118,6 +118,26 @@ Finally, uncomment the two `push:` lines in `.github/workflows/deploy.yml`.
 Until then the workflow is manual-only, and its `configured` job skips
 cleanly rather than failing when the secrets are absent.
 
+### Geolocation, so the visitor list has a country and a city
+
+```bash
+sudo -u vsw deploy/fetch-geoip.sh          # ~60 MB, free, no account
+```
+
+Downloads DB-IP's City Lite database to `/srv/vsw/shared/geoip/` and points
+`current.mmdb` at it. Then set `GEOIP_DB=/srv/vsw/shared/geoip/current.mmdb`
+in `/srv/vsw/shared/.env` — it is in `.env.prod` already — and restart the
+web unit.
+
+Run it monthly; addresses get reassigned, and a year-old database quietly
+reports the wrong city. Nothing breaks without it: the visitor list still
+renders, with the country and city columns empty and the reason printed at
+the top.
+
+**The lookup is a read of that file.** No visitor's address is sent to a
+geolocation service, which is what the privacy page says, so any change to
+this that introduces a network call is a change to a published promise.
+
 ## Rolling back
 
 A release that does not answer its health check inside a minute is rolled
