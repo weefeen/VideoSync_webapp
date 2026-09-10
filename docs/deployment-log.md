@@ -779,6 +779,59 @@ nothing else, validated with `visudo -cf`.
 
 ---
 
+## 18. GitHub deploys to the node
+
+    current  : 20260910011948-b63d1d9
+    units    : active active        site: HTTP 200
+    jobs     : 6                    WORK_DIR /srv/vsw/shared/var
+
+The job count is the part worth checking: it was 6 before the deploy and 6
+after, so the queue database lives in `shared/` and was not replaced along
+with the code. A deploy swaps the code and leaves the data alone.
+
+### What was actually wrong, and how long it took to see it
+
+Four runs failed, each reported in the run summary as nothing but
+
+    Process completed with exit code 1
+
+The cause was **not** the key or the secrets. Those worked from the first
+attempt after `SSH_KNOWN_HOSTS` was given every host key type rather than
+just the ed25519 one: the auth log showed ten successful `vsw` logins and
+the rsync delivered all 107 files. It was failing inside `deploy.sh`,
+because two steps in the workflow still named `/mnt/volume_1/vsw` — the
+production layout — while the node and `deploy.sh` both use `/srv/vsw`. The
+release directory was being created in the right place and then looked for
+in the wrong one.
+
+That was found by accident, while adding diagnostics for a different
+theory. The diagnostics were chasing the wrong thing.
+
+**What actually located it was watching the server, not reading the
+workflow.** A loop on the node checking for a new release directory caught
+one appearing while `current` never moved — which places the failure after
+the rsync and before the symlink swap, in one observation. That is the
+lesson worth keeping: when a remote process reports only an exit code, the
+fastest question is what changed on the machine it was talking to.
+
+### Diagnostics kept anyway
+
+The run summary shows annotations; a failing `run:` step contributes only
+"exit code 1" to it, and anything the step printed is one click further in,
+where it went unread four times. So each step now records where it got to
+and a final `if: failure()` step names it, `ssh-add -l` proves an identity
+was actually loaded rather than trusting the agent's exit code, and
+known_hosts is counted after being written. None of it diagnosed this
+failure. All of it will make the next one legible.
+
+### Still manual
+
+The `push:` trigger is still commented out — a deploy is the "Run workflow"
+button. Turning it on is one line, now that a real run has been watched
+succeeding.
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;
