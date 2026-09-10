@@ -42,6 +42,23 @@ sudo chown vsw:vsw /srv/vsw/shared/.env && sudo chmod 600 /srv/vsw/shared/.env
 sudo deploy/install-units.sh
 ```
 
+### The title-panel fonts
+
+Licensed, so they are in no repository and no release. Put them in `shared/`
+beside `.env`, where they survive deploys:
+
+```bash
+sudo install -d -o vsw -g vsw /srv/vsw/shared/fonts
+sudo cp /path/to/FuturaLTPro/* /srv/vsw/shared/fonts/
+sudo chown -R vsw:vsw /srv/vsw/shared/fonts
+```
+
+`FONT_DIR` in `.env` points there. **Miss this and only renders with a title
+panel fail** — minutes in, as "No Futura LT Pro font in …" — while renders
+without one succeed all day. That is exactly how it went unnoticed on the
+test node: the default is no panel. `tools/doctor.py` and startup both say
+so now.
+
 Then the broker, if this host runs one:
 
 ```bash

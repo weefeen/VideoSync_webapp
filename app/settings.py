@@ -269,6 +269,15 @@ class Settings:
         # is an authentication refusal from RabbitMQ on every publish, which
         # reads like a broken broker rather than an unfinished deployment
         # step. Say which it is.
+        # A title panel needs the Futura faces. They are licensed and in no
+        # repository, so a fresh host has none until somebody puts them
+        # there — and the failure lands halfway through a render, minutes
+        # in, as "No Futura LT Pro font in ...". Renders without a panel
+        # succeed throughout, which is what makes it easy to miss.
+        if self.font_dir and not self.font_dir.is_dir():
+            issues.append(
+                f"FONT_DIR does not exist: {self.font_dir}. Renders with a "
+                f"title panel will fail; ones without will not.")
         if "CHANGE_ME" in self.rabbitmq_url:
             issues.append(
                 "RABBITMQ_URL still carries the placeholder password from "
