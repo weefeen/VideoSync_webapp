@@ -21,6 +21,7 @@ from .queue import webside
 from . import identify as ident
 from . import library
 from . import limits
+from . import metrics
 from . import notify
 from . import render as rnd
 from . import retention
@@ -154,6 +155,19 @@ def api_library():
                     "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
                     "max_minutes": MAX_DURATION_MINUTES,
                     "page_rule": _PAGE_RULE})
+
+
+@bp.get("/metrics")
+def api_metrics():
+    """Prometheus scrapes this. It is not for the public.
+
+    Loopback only in practice — gunicorn binds to 127.0.0.1 and Prometheus
+    runs beside it — but whatever fronts the site in production has to keep
+    this off the internet. It reports queue depth, what has failed and how
+    much of the machine a render uses, which is a description of the
+    business nobody outside it needs.
+    """
+    return Response(metrics.render(), mimetype="text/plain; version=0.0.4")
 
 
 @bp.get("/api/stats")
