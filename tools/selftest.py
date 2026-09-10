@@ -614,6 +614,56 @@ def check_a_redelivery_does_not_render_twice() -> str:
     return "done and failed repeated, new attempt runs, interrupted re-runs"
 
 
+def check_expired_videos_are_reclaimed() -> str:
+    """After the download window the video goes and the upload stays.
+
+    `retention.is_live()` stopped serving expired videos from the start, but
+    nothing deleted them, so every render stayed on disk for ever — 126 MB
+    each, with no upper bound. A disk that fills stops the renders, and the
+    first symptom has nothing to do with the cause.
+
+    Both halves matter. The rendered video is derived — the upload is kept
+    and the score and style are in the row — so reclaiming it discards a
+    cache that one encode rebuilds. The upload is derived from nothing, is a
+    recording of an identifiable person, and the privacy note commits to
+    holding it. Deleting the wrong one is the difference between
+    housekeeping and losing a visitor's recording.
+    """
+    from app import store
+    from app.queue import webside
+    from app.settings import settings
+
+    with tempfile.TemporaryDirectory(prefix="svs_reclaim_") as tmp:
+        home = pathlib.Path(tmp)
+        old_video, new_video, upload = (home / "old.mp4", home / "new.mp4",
+                                        home / "upload.mp4")
+        for f in (old_video, new_video, upload):
+            f.write_bytes(b"x" * 2048)
+
+        window = settings.retention_hot_hours * 3600.0
+        _queued("expired", state=store.DONE, result=str(old_video),
+                upload=str(upload), finished=time.time() - window - 60)
+        _queued("fresh", state=store.DONE, result=str(new_video),
+                upload=str(upload), finished=time.time())
+
+        freed = webside.reclaim_expired_outputs()
+
+        if old_video.exists():
+            raise Failed("an expired video was not reclaimed")
+        if not new_video.exists():
+            raise Failed("a video still inside its window was deleted")
+        if not upload.exists():
+            raise Failed("THE UPLOAD WAS DELETED — it is the one thing here "
+                         "that cannot be rebuilt")
+        if freed < 2048:
+            raise Failed(f"reported freeing {freed} bytes, expected >= 2048")
+        # The row survives, so the page still says the link expired rather
+        # than the job becoming unknown.
+        if store.get_job("expired") is None:
+            raise Failed("reclaiming removed the job row as well")
+    return "expired gone, fresh kept, upload untouched"
+
+
 def check_the_queue_topology_is_stable() -> str:
     """The queue arguments must not change by accident.
 
@@ -707,6 +757,7 @@ def main() -> int:
         check_a_task_reaches_a_worker_and_comes_back,
         check_the_queue_topology_is_stable,
         check_a_redelivery_does_not_render_twice,
+        check_expired_videos_are_reclaimed,
         check_old_databases_gain_the_new_columns,
         check_messages_round_trip,
         check_ledger_applies_a_run_in_order,

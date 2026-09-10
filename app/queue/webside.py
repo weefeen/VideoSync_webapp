@@ -25,10 +25,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
 import threading
 import time
 
 from .. import store
+from ..settings import settings
 from . import ledger, worker
 from .messages import Event, RenderTask
 from .transport import Transport, quiet_pika, transport
@@ -38,6 +40,10 @@ logger = logging.getLogger(__name__)
 # How long a queued row may go unconfirmed before it is offered again.
 UNPUBLISHED_GRACE = 30.0
 SWEEP_SECONDS = 30.0
+
+# How often expired videos are swept up. Hourly: it walks the finished
+# jobs and nothing about it is urgent to the minute.
+RECLAIM_SECONDS = 3600.0
 
 # One encode already uses what the machine has, so one is the honest number.
 # It counts consumers now rather than threads, and more than one is refused
@@ -200,13 +206,69 @@ def _recover(bus: Transport) -> None:
                     forgotten)
 
 
+def reclaim_expired_outputs() -> int:
+    """Delete rendered videos nobody can download any more. Returns bytes freed.
+
+    `retention.is_live()` stops serving a video after RETENTION_HOT_HOURS
+    and the page says so — but until now nothing deleted anything, so every
+    render stayed on disk for ever. At 126 MB each that is about eight
+    finished jobs per gigabyte, accumulating with no upper bound. A disk
+    that fills stops the renders, and the first symptom is unrelated to the
+    cause.
+
+    **Only the rendered video.** It is derived: the upload is kept, and the
+    score and the style are in the row, so it can be made again — this
+    discards a cache that costs one encode to rebuild, not a recording.
+
+    What is deliberately NOT deleted: the upload. Home recordings are the
+    one thing a studio library cannot supply and what the recogniser most
+    needs; keeping them is a commitment the privacy note makes explicitly.
+    They are also the only irreplaceable thing here.
+
+    This is the hot tier expiring with nowhere colder to go yet. When
+    archival exists, this becomes a move rather than a delete.
+    """
+    hours = settings.retention_hot_hours
+    if hours <= 0:
+        return 0
+    cutoff = time.time() - hours * 3600.0
+    freed = 0
+    rows = store.query(
+        "SELECT id, result FROM jobs WHERE state = ? AND result IS NOT NULL"
+        " AND finished IS NOT NULL AND finished < ?", (store.DONE, cutoff))
+    for row in rows:
+        path = pathlib.Path(row["result"])
+        try:
+            if path.is_file():
+                size = path.stat().st_size
+                path.unlink()
+                freed += size
+                logger.info("reclaimed %.0f MB from %s, past its %g-hour "
+                            "window", size / 1e6, row["id"], hours)
+        except OSError as exc:
+            logger.warning("could not reclaim %s: %s", path, exc)
+    return freed
+
+
 def _sweep_forever(bus: Transport) -> None:
+    last_reclaim = 0.0
     while True:
         time.sleep(SWEEP_SECONDS)
         try:
             sweep(bus)
         except Exception:                         # noqa: BLE001
             logger.exception("the janitor tripped; it will try again")
+        # Hourly, not every sweep: it walks the finished jobs, and nothing
+        # about it is urgent to the minute.
+        if time.time() - last_reclaim > RECLAIM_SECONDS:
+            last_reclaim = time.time()
+            try:
+                freed = reclaim_expired_outputs()
+                if freed:
+                    logger.info("reclaimed %.1f GB of expired video",
+                                freed / 1e9)
+            except Exception:                     # noqa: BLE001
+                logger.exception("the reclaim pass tripped; it will try again")
 
 
 def sweep(bus: Transport) -> int:
