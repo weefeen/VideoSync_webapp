@@ -149,31 +149,35 @@ def failures(limit: int = 50) -> list[dict]:
     assembled from the visitor's own crop, colours and panel choices, so
     without it a failure cannot be reproduced by hand.
     """
-    rows = store.query(
-        "SELECT j.id, j.created, j.score, j.error AS job_error,"
-        "       s.stage, s.error_class, s.error_message, s.command,"
-        "       s.returncode, s.stderr_tail, s.attempt, s.elapsed"
-        "  FROM jobs j"
-        "  LEFT JOIN stage_runs s"
-        "    ON s.job_id = j.id AND s.state = ? AND s.stage != ?"
-        " WHERE j.state = ?"
-        " ORDER BY j.created DESC LIMIT ?",
-        (store.ERROR, WHOLE, store.ERROR, limit))
+    failed = store.query(
+        "SELECT id, created, score, error FROM jobs WHERE state = ?"
+        " ORDER BY created DESC LIMIT ?", (store.ERROR, limit))
 
     out = []
-    for r in rows:
-        tail = (r["stderr_tail"] or "").strip().splitlines()
+    for job in failed:
+        # Prefer the row for the stage it died in; fall back to the
+        # whole-job row. Jobs from before per-stage timing existed have only
+        # the latter, and dropping them would quietly hide the oldest
+        # failures — which are the ones nobody has looked at yet.
+        runs = [r for r in store.stage_runs(job["id"])
+                if r["state"] == store.ERROR]
+        detail = next((r for r in runs if r["stage"] != WHOLE),
+                      next(iter(runs), None))
+
+        tail = ((detail["stderr_tail"] if detail else "") or "").strip().splitlines()
         out.append({
             # Milliseconds: what Grafana reads as a time axis.
-            "time": int((r["created"] or 0) * 1000),
-            "job": r["id"],
-            "score": r["score"] or "",
-            "stage": r["stage"] or "before any stage",
-            "attempt": r["attempt"] or 1,
-            "error": r["error_class"] or "",
-            "message": (r["error_message"] or r["job_error"] or "")[:400],
-            "returncode": r["returncode"],
-            "command": (r["command"] or "")[:600],
+            "time": int((job["created"] or 0) * 1000),
+            "job": job["id"],
+            "score": job["score"] or "",
+            "stage": (detail["stage"] if detail and detail["stage"] != WHOLE
+                      else "not recorded"),
+            "attempt": (detail["attempt"] if detail else 1) or 1,
+            "error": (detail["error_class"] if detail else "") or "",
+            "message": ((detail["error_message"] if detail else None)
+                        or job["error"] or "")[:400],
+            "returncode": detail["returncode"] if detail else None,
+            "command": ((detail["command"] if detail else "") or "")[:600],
             # The last few lines are where ffmpeg says what it objected to;
             # the rest is banner.
             "stderr": "\n".join(tail[-6:]),
