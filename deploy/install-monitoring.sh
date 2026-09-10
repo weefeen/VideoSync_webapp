@@ -122,8 +122,14 @@ if ! grep -q '^http_addr = 127.0.0.1' /etc/grafana/grafana.ini 2>/dev/null; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now prometheus grafana-server
-sleep 8
+systemctl enable prometheus grafana-server
+# RESTART, not `enable --now`. apt starts both at install time, before any
+# of the configuration above exists — and `--now` leaves an already-running
+# service alone, so it keeps the packaged defaults and scrapes a
+# node_exporter that is not installed instead of this app. That is exactly
+# what happened the first time this ran.
+systemctl restart prometheus grafana-server
+sleep 10
 
 say "State"
 for unit in prometheus grafana-server; do
