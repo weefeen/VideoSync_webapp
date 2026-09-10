@@ -25,6 +25,12 @@ pika>=1.3
 # at runtime: without it the visitor list still renders, unresolved.
 maxminddb>=2.6
 
+# The bucket a finished video is put in, so the host that rendered it can be
+# destroyed without taking the video with it. Optional at runtime: without it
+# results stay on local disk, which is what a developer machine wants and is
+# NOT a production configuration.
+boto3>=1.34
+
 # ffmpeg and ffprobe are external binaries, not Python packages.
 # Windows: https://www.gyan.dev/ffmpeg/builds/
 # Debian/Ubuntu: sudo apt install ffmpeg

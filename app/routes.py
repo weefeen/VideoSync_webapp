@@ -27,6 +27,7 @@ from . import render as rnd
 from . import retention
 from . import stats
 from . import svg
+from . import storage
 from . import store
 from . import sync as syncing
 from . import visitors
@@ -843,8 +844,27 @@ def api_download(job_id: str):
     # Named from our own library, never from what the visitor called their
     # file: that name is untrusted text and this sets a response header.
     stem = _safe_stem(job.score) or "score_video"
-    return send_file(job.result, as_attachment=True,
-                     download_name=f"{stem}_score_sync.mp4")
+    name = f"{stem}_score_sync.mp4"
+
+    # From the bucket when it is there, and the web box never sees the bytes.
+    # A 302 to a link that lives fifteen minutes and is signed per click: the
+    # bucket is private, so this is the only way in, and an expiry that short
+    # means a link which leaks is a link that has already stopped working.
+    if job.object_key:
+        link = storage.presigned_get(job.object_key, seconds=900,
+                                     filename=name)
+        if link:
+            return redirect(link, code=302)
+        # Signing failed but the object exists. Falling through to local disk
+        # is right when the file is still here and wrong when it is not, so
+        # the honest answer for a compute host is that the video is fine and
+        # this box cannot reach it.
+        if not (job.result and pathlib.Path(job.result).is_file()):
+            return jsonify({"error": "Your video is safe, but this server "
+                                     "cannot reach it right now. Please try "
+                                     "again in a minute."}), 503
+
+    return send_file(job.result, as_attachment=True, download_name=name)
 
 
 def _safe_stem(name: str | None) -> str:

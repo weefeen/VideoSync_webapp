@@ -848,6 +848,96 @@ def check_the_visitor_list_counts_honestly() -> str:
             f"{'on' if status['available'] else 'off (optional)'}")
 
 
+def check_a_result_is_safe_before_it_is_announced() -> str:
+    """A render that cannot be stored is a FAILED job, not a finished one.
+
+    This is the rule the whole compute design rests on: "the render
+    succeeded" and "the result is safe" are different events, and only the
+    second may be announced. If the worker reported `done` and kept the file
+    locally, the job would look finished and the video would die with the
+    machine — which is precisely the outcome object storage exists to
+    prevent, reintroduced by the code meant to prevent it.
+
+    Also checks the confirmation. `upload_file` returning without raising
+    means the parts were accepted, not that an object of the right size is
+    readable — so `put` HEADs afterwards, and a short object must raise
+    rather than pass.
+    """
+    import types
+
+    from app import storage
+
+    # A bucket that accepts everything and returns a truncated object. The
+    # nastiest realistic failure: the upload "works" and the result is
+    # unusable, which is invisible without the HEAD.
+    class Truncating:
+        def upload_file(self, filename, bucket, key, **kw):
+            self.key = key
+
+        def head_object(self, Bucket, Key):
+            return {"ContentLength": 1}
+
+    storage.reset()
+    storage._client = Truncating()          # noqa: SLF001
+    storage._tried = True                   # noqa: SLF001
+    try:
+        if not storage.available():
+            raise Failed("a stubbed client did not report as available")
+
+        big = pathlib.Path(tempfile.gettempdir()) / "vsw-selftest-output.mp4"
+        big.write_bytes(b"x" * 4096)
+        try:
+            storage.put(big, "jobs/x/output/x_PROCESSED.mp4")
+        except storage.StorageError as exc:
+            if "4096" not in str(exc) and "expected" not in str(exc):
+                raise Failed(f"the wrong error for a short object: {exc}")
+        else:
+            raise Failed("a 1-byte object passed as a 4096-byte upload — the "
+                         "HEAD confirmation is not being made")
+
+        # Missing entirely is the other half: uploaded, and not there.
+        class Absent(Truncating):
+            def head_object(self, Bucket, Key):
+                raise RuntimeError("NoSuchKey")
+
+        storage._client = Absent()          # noqa: SLF001
+        try:
+            storage.put(big, "jobs/x/output/x_PROCESSED.mp4")
+        except storage.StorageError:
+            pass
+        else:
+            raise Failed("an object that is not there passed as stored")
+        big.unlink(missing_ok=True)
+
+        # The key never contains anything a visitor chose. A file name is
+        # untrusted text and a slash in an S3 key is a directory separator.
+        key = storage.output_key("abc123", ".mp4")
+        if not key.startswith("jobs/abc123/") or "PROCESSED" not in key:
+            raise Failed(f"unexpected key shape: {key}")
+    finally:
+        storage.reset()
+
+    # Unconfigured must stay harmless: this is what a developer machine and
+    # every test above it run with, and it has to behave exactly as before.
+    if storage.available():
+        raise Failed("storage reports available with nothing configured")
+    if storage.head("anything") is not None:
+        raise Failed("an unconfigured bucket answered a HEAD")
+    if storage.presigned_get("anything") is not None:
+        raise Failed("an unconfigured bucket signed a link")
+    if not storage.status()["problem"]:
+        raise Failed("storage is unavailable and will not say why")
+
+    # And the event carries the key, or a stored result cannot be found again.
+    from app.queue.messages import Event
+    ev = Event(job_id="j", type="done", object_key="jobs/j/output/j.mp4")
+    if Event.from_json(ev.to_json()).object_key != "jobs/j/output/j.mp4":
+        raise Failed("object_key does not survive a round trip through the "
+                     "event, so the ledger would never learn it")
+
+    return "short and missing objects both rejected; unconfigured is inert"
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -880,6 +970,7 @@ def main() -> int:
         check_linux_configuration_has_no_windows_paths,
         check_the_readme_layout_is_real,
         check_the_visitor_list_counts_honestly,
+        check_a_result_is_safe_before_it_is_announced,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

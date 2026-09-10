@@ -64,6 +64,8 @@ class Job:
     state: str = "uploaded"      # uploaded | queued | running | done | error
     error: str | None = None
     result: pathlib.Path | None = None
+    # Where the finished video lives in the bucket, once it does.
+    object_key: str = ""
     email: str = ""
     # The address the upload came from. Kept because it is the only thing
     # standing in for a login here: the limits that stop one visitor using
@@ -99,6 +101,7 @@ class Job:
             "upload": str(self.upload_path), "score": self.score,
             "mode": self.mode, "state": self.state, "error": self.error,
             "result": str(self.result) if self.result else None,
+            "object_key": self.object_key or None,
             "email": self.email, "client": self.client,
             "duration": self.duration,
             "size_bytes": self.size_bytes, "priority": self.priority,
@@ -120,6 +123,8 @@ class Job:
         job.score, job.mode = row["score"], row["mode"]
         job.state, job.error = row["state"], row["error"]
         job.result = pathlib.Path(row["result"]) if row["result"] else None
+        job.object_key = ((row["object_key"] if "object_key" in row.keys()
+                           else "") or "")
         job.email = row["email"] or ""
         job.client = (row["client"] if "client" in row.keys() else "") or ""
         job.duration, job.size_bytes = row["duration"], row["size_bytes"]

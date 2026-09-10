@@ -94,7 +94,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- When the work was handed to the queue. NULL on a queued row means the
     -- handover has not been confirmed, which is what lets a lost message be
     -- noticed rather than waited on forever.
-    published_at REAL
+    published_at REAL,
+    -- Where the finished video lives in the bucket. NULL means local disk
+    -- only. `result` stays as it was: the path on the machine that made it,
+    -- which is still what a re-run checks and what a local install serves.
+    object_key  TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(state, priority DESC, queued_at);
 
@@ -227,6 +231,7 @@ _ADDED = (
     ("jobs", "detail", "TEXT NOT NULL DEFAULT ''"),
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
     ("jobs", "published_at", "REAL"),
+    ("jobs", "object_key", "TEXT"),
     ("stage_runs", "cpu_seconds", "REAL"),
     ("stage_runs", "cpu_at_open", "REAL"),
     ("stage_runs", "peak_rss", "INTEGER"),

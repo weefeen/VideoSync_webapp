@@ -63,6 +63,7 @@ app/
   paths.py              a job's folder layout
   limits.py             what one visitor may use
   visitors.py           who used it, from where, and what they played
+  storage.py            the bucket a finished video is put in
   metrics.py            the Prometheus exposition, and the failure detail
   notify.py             the "it is ready" email
   retention.py          the 48-hour window
