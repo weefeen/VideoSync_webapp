@@ -157,6 +157,42 @@ Until `SMTP_HOST` is set, two things do not work and both are silent: alerts
 fire and are visible under Alerting but email nobody, and no visitor is ever
 told their video is ready.
 
+### Deploying by hand, from a Windows machine
+
+The workflow rsyncs from a GitHub runner. Git Bash on Windows has no `rsync`,
+and shipping the Windows working tree directly is worse than inconvenient:
+files there carry CRLF, and a shell script with CRLF fails on Linux with
+`$'
+': command not found`. Let the server take the code from GitHub instead,
+where the committed blobs are LF:
+
+```bash
+REL="main-$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)"
+ssh root@<host> "
+  git clone -q --depth 1 --branch main <repo-url> /srv/vsw/releases/$REL
+  rm -rf /srv/vsw/releases/$REL/.git /srv/vsw/releases/$REL/.github
+  chown -R vsw:vsw /srv/vsw/releases/$REL
+  bash /srv/vsw/releases/$REL/deploy/deploy.sh $REL"
+```
+
+Push to `main` first — the server clones from there, so anything uncommitted
+is not deployed. The rest is identical to the workflow: same release layout,
+same health check, same rollback.
+
+### Checking a download by hand
+
+`/api/jobs/<id>/download` answers **302**, not the file. Any client that
+checks it must follow redirects — `curl -L`, not plain `curl`, which reports
+a successful zero-byte download and looks exactly like a broken render:
+
+```bash
+curl -sSL -o out.mp4 -w '%{http_code} %{size_download}
+'      https://<host>/api/jobs/<id>/download
+```
+
+The signed link lives 15 minutes and carries the download filename, so the
+browser saves it under the score's name rather than the object key.
+
 ## Rolling back
 
 A release that does not answer its health check inside a minute is rolled
