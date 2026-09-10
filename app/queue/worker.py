@@ -35,6 +35,35 @@ def name() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
+def usage() -> tuple[float | None, int | None]:
+    """CPU seconds burned and the high-water mark of memory, so far.
+
+    Self AND children, because the children are the point: ffmpeg is what
+    actually consumes this machine, and a measurement of the Python process
+    alone would report a render as nearly free.
+
+    `resource` is POSIX-only and absent on Windows, where the local
+    transport runs everything in one process anyway — so this returns
+    (None, None) there rather than pretending. Nothing downstream requires
+    a number.
+
+    `ru_maxrss` is a high-water mark the kernel never resets, so it is
+    cumulative for the process, not per stage. That is what makes it exact
+    without a sampling thread: the rise between two stage boundaries is
+    what the stage in between cost.
+    """
+    try:
+        import resource
+    except ImportError:                          # Windows
+        return None, None
+    me = resource.getrusage(resource.RUSAGE_SELF)
+    kids = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu = me.ru_utime + me.ru_stime + kids.ru_utime + kids.ru_stime
+    # Linux reports kilobytes; macOS reports bytes. Only Linux runs this.
+    peak = max(me.ru_maxrss, kids.ru_maxrss) * 1024
+    return round(cpu, 3), peak
+
+
 def handle_task(task: RenderTask, publish: Publish) -> bool:
     """Run one task and report it. True if it produced a video.
 
@@ -47,8 +76,12 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
     me = name()
 
     def say(kind: str, **fields) -> None:
+        # Every event carries the running cost, so a stage boundary is
+        # also a measurement point and nothing extra has to be scheduled.
+        cpu, rss = usage()
         publish(Event(job_id=task.job_id, type=kind, attempt=task.attempt,
-                      seq=next(seq), worker=me, **fields))
+                      seq=next(seq), worker=me,
+                      cpu_seconds=cpu, peak_rss=rss, **fields))
 
     if task.kind == "ping":
         # Answered without touching ffmpeg, so the round trip through a real

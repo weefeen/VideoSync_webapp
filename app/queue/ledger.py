@@ -81,9 +81,10 @@ def _started(event: Event, row) -> bool:
     store.update_job(event.job_id, state=store.RUNNING, worker=event.worker,
                      started=event.at, stage=None, detail="", error=None,
                      lease_until=time.time() + LEASE_SECONDS)
-    store.stage_begin(event.job_id, "render", attempt=event.attempt,
+    store.stage_begin(event.job_id, WHOLE, attempt=event.attempt,
                       inputs=[row["upload"]], bytes_in=row["size_bytes"],
-                      media_seconds=row["duration"])
+                      media_seconds=row["duration"],
+                      cpu_at_open=event.cpu_seconds)
     return True
 
 
@@ -95,6 +96,12 @@ def _progress(event: Event, row) -> bool:
     version used and the one both front-ends were written against.
     """
     stage = event.stage if event.stage in pipeline.STAGES else row["stage"]
+    # A milestone stage begins: close the one before it and open this one.
+    # This is what makes "where does the time actually go" answerable —
+    # without it there is one row per job saying only how long the whole
+    # thing took, which is the question nobody is asking.
+    if stage and stage != row["stage"]:
+        _turn_stage(event, row, stage)
     if row["state"] == store.QUEUED:
         # Something reclaimed this row while the worker was mid-stage. The
         # worker is plainly alive; put it back rather than let a second copy
@@ -168,6 +175,30 @@ _HANDLERS = {"started": _started, "progress": _progress,
 
 
 # --------------------------------------------------------------------------
+# The one row that spans the whole job. Kept alongside the per-stage rows
+# because `store.rate()` calibrates the queue's time estimates from it, and
+# because "how long did this job take" should not require adding six rows up.
+WHOLE = "render"
+
+
+def _stage_runs_open(job_id: str, attempt: int, *, whole: bool):
+    """Open runs for this attempt — either the whole-job one, or the stages."""
+    return [r for r in store.stage_runs(job_id)
+            if r["ended"] is None and (r["attempt"] or 1) == attempt
+            and ((r["stage"] == WHOLE) == whole)]
+
+
+def _turn_stage(event: Event, row, stage: str) -> None:
+    """End the stage that was running and start the next one."""
+    for run in _stage_runs_open(event.job_id, event.attempt, whole=False):
+        store.stage_end(run["id"], state=store.DONE,
+                        cpu_seconds=event.cpu_seconds,
+                        peak_rss=event.peak_rss)
+    store.stage_begin(event.job_id, stage, attempt=event.attempt,
+                      media_seconds=row["duration"],
+                      cpu_at_open=event.cpu_seconds)
+
+
 def _close_open_run(event: Event, *, state: str = store.ERROR,
                     **fields) -> None:
     """End the stage record this attempt left open, if it left one.
@@ -176,10 +207,15 @@ def _close_open_run(event: Event, *, state: str = store.ERROR,
     because the table is not its business — so it is looked up by job and
     attempt.
     """
-    open_runs = [r for r in store.stage_runs(event.job_id)
-                 if r["ended"] is None and (r["attempt"] or 1) == event.attempt]
-    for run in open_runs:
-        store.stage_end(run["id"], state=state, **fields)
+    # The per-stage row first, with its own cost, then the whole-job row
+    # with the same numbers and whatever detail the caller passed — the
+    # command and stderr of a failure belong on both, since the stage is
+    # where it happened and the job is where anybody looks first.
+    cost = {"cpu_seconds": event.cpu_seconds, "peak_rss": event.peak_rss}
+    for run in _stage_runs_open(event.job_id, event.attempt, whole=False):
+        store.stage_end(run["id"], state=state, **cost)
+    for run in _stage_runs_open(event.job_id, event.attempt, whole=True):
+        store.stage_end(run["id"], state=state, **cost, **fields)
 
 
 def _tell_them(row) -> None:

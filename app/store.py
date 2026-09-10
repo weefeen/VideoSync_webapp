@@ -108,7 +108,22 @@ CREATE TABLE IF NOT EXISTS stage_runs (
     error_message TEXT,
     stderr_tail   TEXT,
     bytes_in      INTEGER,
-    media_seconds REAL
+    media_seconds REAL,
+    -- CPU seconds this stage actually burned, the worker AND the ffmpeg it
+    -- spawned. Wall time says how long you waited; this says whether the
+    -- machine was working or blocked, and the ratio between them is how
+    -- many cores a stage really uses.
+    -- CPU seconds THIS stage burned: a delta, not a running total. The
+    -- worker can only report a cumulative figure, so the value it reported
+    -- when the stage opened is kept below and subtracted at the close.
+    cpu_seconds   REAL,
+    cpu_at_open   REAL,
+    -- The high-water mark of resident memory, in bytes, as of the end of
+    -- this stage — process and children together. CUMULATIVE, not per
+    -- stage: the kernel does not reset it. So the number itself is the peak
+    -- so far, and the RISE from the previous stage is what that stage cost.
+    -- Recorded this way because it needs no sampling thread to be exact.
+    peak_rss      INTEGER
 );
 CREATE INDEX IF NOT EXISTS stage_runs_job ON stage_runs(job_id, started);
 CREATE INDEX IF NOT EXISTS stage_runs_calib ON stage_runs(stage, state, ended);
@@ -157,6 +172,9 @@ _ADDED = (
     ("jobs", "detail", "TEXT NOT NULL DEFAULT ''"),
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
     ("jobs", "published_at", "REAL"),
+    ("stage_runs", "cpu_seconds", "REAL"),
+    ("stage_runs", "cpu_at_open", "REAL"),
+    ("stage_runs", "peak_rss", "INTEGER"),
 )
 
 
@@ -386,14 +404,16 @@ def forget_publications() -> int:
 def stage_begin(job_id: str, stage: str, *, attempt: int = 1,
                 inputs: list[str] | None = None,
                 bytes_in: int | None = None,
-                media_seconds: float | None = None) -> int:
+                media_seconds: float | None = None,
+                cpu_at_open: float | None = None) -> int:
     """Record that a stage started. Returns the row id to finish with."""
     with write() as conn:
         cur = conn.execute(
             "INSERT INTO stage_runs (job_id, stage, attempt, state, started,"
-            " inputs, bytes_in, media_seconds) VALUES (?,?,?,?,?,?,?,?)",
+            " inputs, bytes_in, media_seconds, cpu_at_open)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             (job_id, stage, attempt, RUNNING, time.time(),
-             json.dumps(inputs or []), bytes_in, media_seconds))
+             json.dumps(inputs or []), bytes_in, media_seconds, cpu_at_open))
         return int(cur.lastrowid)
 
 
@@ -404,7 +424,9 @@ def stage_end(run_id: int, *, state: str = DONE,
               error: BaseException | None = None,
               error_class: str | None = None,
               error_message: str | None = None,
-              stderr_tail: str | None = None) -> None:
+              stderr_tail: str | None = None,
+              cpu_seconds: float | None = None,
+              peak_rss: int | None = None) -> None:
     """Close a stage row.
 
     `command` and `stderr_tail` matter more than they look: a render's ffmpeg
@@ -421,15 +443,21 @@ def stage_end(run_id: int, *, state: str = DONE,
         error_class = error_class or type(error).__name__
         error_message = error_message or str(error)
     with write() as conn:
-        started = conn.execute("SELECT started FROM stage_runs WHERE id = ?",
-                               (run_id,)).fetchone()
-        elapsed = (now - started["started"]) if started else None
+        was = conn.execute("SELECT started, cpu_at_open FROM stage_runs"
+                           " WHERE id = ?", (run_id,)).fetchone()
+        elapsed = (now - was["started"]) if was else None
+        # The caller passes what the worker last reported, which is a
+        # running total for the whole attempt. This stage's share is the
+        # rise since it opened.
+        if cpu_seconds is not None and was and was["cpu_at_open"] is not None:
+            cpu_seconds = max(0.0, round(cpu_seconds - was["cpu_at_open"], 3))
         conn.execute(
             "UPDATE stage_runs SET state=?, ended=?, elapsed=?, outputs=?,"
             " command=?, returncode=?, error_class=?, error_message=?,"
-            " stderr_tail=? WHERE id = ?",
+            " stderr_tail=?, cpu_seconds=?, peak_rss=? WHERE id = ?",
             (state, now, elapsed, json.dumps(outputs or []), command,
-             returncode, error_class, error_message, stderr_tail, run_id))
+             returncode, error_class, error_message, stderr_tail,
+             cpu_seconds, peak_rss, run_id))
 
 
 def stage_runs(job_id: str) -> list[sqlite3.Row]:

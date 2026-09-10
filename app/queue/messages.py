@@ -77,6 +77,17 @@ class Event:
     worker: str = ""
     stage: str | None = None
     detail: str = ""
+    # What the work has cost so far, measured where it happens and carried
+    # back rather than sampled from outside. On the compute host nothing
+    # else can see these: the box is created for one job and destroyed, so
+    # a number left behind on it is a number nobody ever reads.
+    #
+    # Both are CUMULATIVE for the attempt, self and children together — the
+    # children are the point, since ffmpeg is what actually burns the
+    # machine. The ledger takes the difference between one stage boundary
+    # and the next.
+    cpu_seconds: float | None = None
+    peak_rss: int | None = None
     # done
     result: str | None = None
     mode: str | None = None       # which alignment actually ran
