@@ -210,20 +210,29 @@ def check_old_databases_gain_the_new_columns() -> str:
         conn = sqlite3.connect(str(path))
         conn.row_factory = sqlite3.Row
         # A jobs table from before any of this existed.
+        # `jobs` as it was before any of this; `stage_runs` absent
+        # entirely, which is the other half of what _migrate has to cope
+        # with — an empty table_info means "no such table", not "no
+        # columns", and it must not try to ALTER one that is not there.
         conn.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, state TEXT)")
         conn.commit()
-
-        store._migrate(conn)
-        have = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
-        missing = sorted({c for _, c, _ in store._ADDED} - have)
-
-        # Running it again must be silent, because it runs on every connect.
-        store._migrate(conn)
-        conn.close()
+        try:
+            store._migrate(conn)
+            have = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+            wanted = {c for t, c, _ in store._ADDED if t == "jobs"}
+            missing = sorted(wanted - have)
+            # Running it again must be silent, because it runs on every connect.
+            store._migrate(conn)
+        finally:
+            # Windows will not delete a file SQLite still holds open, and
+            # the temporary directory is removed on the way out.
+            conn.close()
 
     if missing:
         raise Failed(f"_migrate did not add: {missing}")
-    return f"{len(store._ADDED)} columns added to an old table, twice safely"
+    return (f"{len(store._ADDED)} columns across "
+            f"{len({t for t, _, _ in store._ADDED})} tables, "
+            f"and a missing table skipped")
 
 
 # --------------------------------------------------------------------------

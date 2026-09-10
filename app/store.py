@@ -189,6 +189,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """
     for table in dict.fromkeys(t for t, _, _ in _ADDED):
         have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        # An empty result means the table does not exist, not that it has no
+        # columns — and SCHEMA is about to create it with everything already
+        # in place. Without this the loop reads "no columns present" and
+        # tries to ALTER a table that is not there.
+        if not have:
+            continue
         for owner, column, definition in _ADDED:
             if owner == table and column not in have:
                 conn.execute(
