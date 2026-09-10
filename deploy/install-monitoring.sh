@@ -32,7 +32,7 @@ METRICS="${VSW_METRICS_URL:-127.0.0.1:5000}"
 say "Packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends prometheus adduser libfontconfig1 musl
+apt-get install -y -qq --no-install-recommends prometheus prometheus-node-exporter adduser libfontconfig1 musl
 
 if ! command -v grafana-server >/dev/null 2>&1; then
     say "Grafana"
@@ -61,9 +61,29 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ['127.0.0.1:9090']
+
+  # The machine itself. Our own /metrics reports what a RENDER used; this
+  # reports what the BOX has, which is the other half of the only question
+  # that matters here — whether the next job fits. A render has already been
+  # measured at 2457 MB of 3915 on a 7-minute recording, and the upload cap
+  # is 25 minutes.
+  - job_name: node
+    static_configs:
+      - targets: ['127.0.0.1:9100']
 EOF
 
 say "Loopback only"
+# node_exporter binds to every interface by default and reports the machine's
+# memory, disks, filesystems and network to anyone who asks. Same mistake as
+# Prometheus, same fix, and it is checked at the end.
+if [ -f /etc/default/prometheus-node-exporter ]; then
+    if grep -q '^ARGS=' /etc/default/prometheus-node-exporter; then
+        sed -i 's|^ARGS=.*|ARGS="--web.listen-address=127.0.0.1:9100"|'             /etc/default/prometheus-node-exporter
+    else
+        echo 'ARGS="--web.listen-address=127.0.0.1:9100"'             >> /etc/default/prometheus-node-exporter
+    fi
+fi
+
 # Prometheus binds to every interface by default, and this box has a public
 # address — which puts queue depth, failure counts and throughput on the
 # open internet with no password. The same mistake the RabbitMQ package
@@ -83,6 +103,14 @@ install -d /etc/systemd/system/prometheus.service.d
 cat > /etc/systemd/system/prometheus.service.d/override.conf <<'EOF'
 [Service]
 MemoryMax=350M
+Nice=10
+CPUWeight=20
+EOF
+
+install -d /etc/systemd/system/prometheus-node-exporter.service.d
+cat > /etc/systemd/system/prometheus-node-exporter.service.d/override.conf <<'EOF'
+[Service]
+MemoryMax=64M
 Nice=10
 CPUWeight=20
 EOF
@@ -118,10 +146,28 @@ install -d /etc/grafana/provisioning/datasources /etc/grafana/provisioning/dashb
 
 cat > /etc/grafana/provisioning/datasources/prometheus.yml <<'EOF'
 apiVersion: 1
+
+# Removed before being recreated, so the pinned uids below actually take.
+# Grafana matches an existing datasource by NAME and REFUSES to change its
+# uid: provisioning then fails outright with "data source not found", every
+# module that depends on it fails with it, and the process exits and is
+# restarted by systemd — forever. That is not a theory. Adding `uid:` to a
+# datasource this box already had put Grafana into a crash loop, 50 restarts
+# deep and serving nothing, until these three lines were added.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: VideoSync
+    orgId: 1
+
 datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
+    # Pinned, not generated. The alert rules name this uid, and a datasource
+    # that gets a fresh random one on every rebuild would leave them pointing
+    # at nothing — which shows up as an alert that never fires.
+    uid: prometheus
     url: http://127.0.0.1:9090
     isDefault: true
 EOF
@@ -157,6 +203,26 @@ EOF
 install -m 0644 "$HERE/grafana-dashboard.json" /var/lib/grafana/dashboards/
 chown -R grafana:grafana /var/lib/grafana/dashboards
 
+say "The memory alert"
+# Provisioned as a file, so a rebuilt Grafana still has it. Delivery is a
+# separate question: without an SMTP server the rule still fires and is
+# visible under Alerting, it just does not reach anybody who is not looking.
+install -d /etc/grafana/provisioning/alerting
+install -m 0644 "$HERE/grafana-alerts.yaml" /etc/grafana/provisioning/alerting/
+# Inside the [smtp] section only. The first version of this grepped the whole
+# file for "enabled = true", matched a line 550 lines further down in an
+# unrelated section, and reported "SMTP is configured" about a section that
+# was entirely commented out — a check that answers yes when the answer is no
+# is worse than no check, because it is believed.
+if awk '/^\[smtp\]/{s=1;next} /^\[/{s=0} s' /etc/grafana/grafana.ini |
+       grep -qE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true'; then
+    echo "  SMTP is configured; alerts can be emailed"
+else
+    echo "  NO SMTP — the alert will fire and show in Grafana, but will not"
+    echo "  email anyone. Configure [smtp] in /etc/grafana/grafana.ini and"
+    echo "  add a contact point to send it somewhere."
+fi
+
 # Loopback only. Grafana is reached over an SSH tunnel until there is a
 # reverse proxy in front of it with a password on the door; it ships with a
 # default admin login and must not be left facing the internet.
@@ -166,17 +232,17 @@ if ! grep -q '^http_addr = 127.0.0.1' /etc/grafana/grafana.ini 2>/dev/null; then
 fi
 
 systemctl daemon-reload
-systemctl enable prometheus grafana-server
+systemctl enable prometheus prometheus-node-exporter grafana-server
 # RESTART, not `enable --now`. apt starts both at install time, before any
 # of the configuration above exists — and `--now` leaves an already-running
 # service alone, so it keeps the packaged defaults and scrapes a
 # node_exporter that is not installed instead of this app. That is exactly
 # what happened the first time this ran.
-systemctl restart prometheus grafana-server
+systemctl restart prometheus prometheus-node-exporter grafana-server
 sleep 10
 
 say "Nothing of ours is facing the internet"
-ss -ltn | awk '$4 ~ /:(3000|9090)$/ {print "  " $4}' | while read -r a; do
+ss -ltn | awk '$4 ~ /:(3000|9090|9100)$/ {print "  " $4}' | while read -r a; do
     case "$a" in
         *127.0.0.1:*) echo "  ok       $a" ;;
         *) echo "  EXPOSED  $a  <- this should be loopback only" ;;
@@ -184,7 +250,7 @@ ss -ltn | awk '$4 ~ /:(3000|9090)$/ {print "  " $4}' | while read -r a; do
 done
 
 say "State"
-for unit in prometheus grafana-server; do
+for unit in prometheus prometheus-node-exporter grafana-server; do
     printf '  %-18s %s\n' "$unit" "$(systemctl is-active "$unit")"
 done
 printf '  %-18s %s\n' "scraping" "$METRICS"
