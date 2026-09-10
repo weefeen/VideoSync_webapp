@@ -63,6 +63,19 @@ scrape_configs:
       - targets: ['127.0.0.1:9090']
 EOF
 
+say "Loopback only"
+# Prometheus binds to every interface by default, and this box has a public
+# address — which puts queue depth, failure counts and throughput on the
+# open internet with no password. The same mistake the RabbitMQ package
+# makes, and worth checking on every service this host gains.
+if [ -f /etc/default/prometheus ]; then
+    if grep -q '^ARGS=' /etc/default/prometheus; then
+        sed -i 's|^ARGS=.*|ARGS="--web.listen-address=127.0.0.1:9090"|'             /etc/default/prometheus
+    else
+        echo 'ARGS="--web.listen-address=127.0.0.1:9090"' >> /etc/default/prometheus
+    fi
+fi
+
 say "Keep both out of the renderer's way"
 # 15 days rather than the default 15 GB of history: this is a handful of
 # series scraped twice a minute, and the disk is shared with the videos.
@@ -130,6 +143,14 @@ systemctl enable prometheus grafana-server
 # what happened the first time this ran.
 systemctl restart prometheus grafana-server
 sleep 10
+
+say "Nothing of ours is facing the internet"
+ss -ltn | awk '$4 ~ /:(3000|9090)$/ {print "  " $4}' | while read -r a; do
+    case "$a" in
+        *127.0.0.1:*) echo "  ok       $a" ;;
+        *) echo "  EXPOSED  $a  <- this should be loopback only" ;;
+    esac
+done
 
 say "State"
 for unit in prometheus grafana-server; do
