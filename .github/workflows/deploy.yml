@@ -104,34 +104,43 @@ jobs:
       - name: Can we reach the host at all?
         # Separated from the rsync so a connection problem says so, instead
         # of surfacing as "exit code 1" on a step that was going to copy
-        # 15 MB. Everything below this point assumes the login works, and
-        # this is the cheapest place to find out that it does not.
+        # 15 MB.
+        #
+        # The reason is emitted as a ::error:: annotation, not merely printed.
+        # That is the whole point of this rewrite. GitHub's run summary shows
+        # annotations; a failing `run:` step contributes only "Process
+        # completed with exit code 1" to it, and anything the step wrote goes
+        # to the log, one click further in. Two deploys were reported here as
+        # "exit code 1" with the actual cause sitting unread in the log.
+        #
+        # `ssh -v` so the reason is in the output to be found at all, and a
+        # grep for the handful of messages that distinguish the four ways
+        # this fails.
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
         run: |
           echo "connecting as $USER@$HOST"
-          if ssh -o BatchMode=yes -o ConnectTimeout=15 "$USER@$HOST"                  'echo "reached $(hostname) as $(whoami)"'; then
-            exit 0
-          fi
-          cat >&2 <<'WHY'
+          set +e
+          OUT=$(ssh -v -o BatchMode=yes -o ConnectTimeout=15 "$USER@$HOST" "echo reached" 2>&1)
+          RC=$?
+          set -e
+          echo "$OUT"
+          if [ "$RC" -eq 0 ]; then exit 0; fi
 
-          Could not log in. In order of how often each one is the cause:
+          WHY=$(echo "$OUT" | grep -iE "permission denied|host key verification failed|invalid format|error in libcrypto|connection timed out|connection refused|could not resolve|no matching host key" | head -2 | tr '\n' ' ')
+          echo "::error title=Deploy could not log in::${WHY:-no recognised error, see the log} (user=$USER host=$HOST rc=$RC)"
 
-            * SSH_PRIVATE_KEY is malformed. It must be the WHOLE file,
-              including the -----BEGIN----- and -----END----- lines and the
-              final newline. A key pasted without its last line loads as
-              "invalid format".
-            * SSH_KNOWN_HOSTS does not match. Use every line that
-              `ssh-keyscan <host>` prints, not just one of them: which host
-              key type gets negotiated is not fixed.
-            * DEPLOY_USER is wrong, or its public half is not in that
-              user's ~/.ssh/authorized_keys on the server.
-            * The host is not reachable from a GitHub runner at all.
-
-          Check it from anywhere with the same key:
-            ssh -i <the key> $USER@$HOST true
-          WHY
+          case "$WHY" in
+            *nvalid?format*|*libcrypto*)
+              echo "::error title=How to fix::SSH_PRIVATE_KEY is not a complete key. Re-copy the whole file including the BEGIN and END lines and the final newline." ;;
+            *ost?key?verification*|*o?matching?host?key*)
+              echo "::error title=How to fix::SSH_KNOWN_HOSTS does not match this host. Use every line that 'ssh-keyscan $HOST' prints." ;;
+            *ermission?denied*)
+              echo "::error title=How to fix::The key loaded but the server refused it. Check DEPLOY_USER and that the public half is in that user's authorized_keys." ;;
+            *imed?out*|*efused*|*esolve*)
+              echo "::error title=How to fix::A GitHub runner cannot reach $HOST on port 22. Check the address and any cloud firewall." ;;
+          esac
           exit 1
 
       - name: Send the release
