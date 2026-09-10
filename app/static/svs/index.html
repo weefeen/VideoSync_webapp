@@ -290,12 +290,26 @@ input[type=file]{display:none}
 .partrow.lead .pband .fbav,
 .partrow.lead .pband .fbav.wf svg{width:24px;height:24px}
 .partrow.lead .pband .fbname{font-size:14px}
-/* The member count is the whole point of the Facebook mark, so it stays;
-   the Weefeen strapline is ours and says nothing a visitor needs here. */
+/* Only OUR OWN strapline is dropped up here — it says nothing a visitor
+   needs before uploading. Every other caption stays, because each one is
+   the reason its mark is worth showing: the Facebook member count, and
+   what the Cliburn mark is actually claiming.
+   Written as `.ours` and not `:last-child`, which is what the first
+   version said and was wrong within the hour: svs-wire.js appends the
+   Cliburn band at runtime, so last-child became Cliburn and the rule hid
+   "Same tech used during the 2025 competition edition". Position is not
+   identity. */
 .partrow.lead .pband .fbsub{font-size:11px}
-.partrow.lead .pband:last-child .fbsub{display:none}
+.partrow.lead .pband.ours .fbsub{display:none}
 .partrow.lead .pband .fbmark{width:13px;height:13px;flex:0 0 13px}
-@media(max-width:640px){.partrow.lead .pband .fbsub{display:none}}
+/* Narrow screens wrap rather than drop the captions. Hiding them would
+   silently remove the Cliburn claim and the member count — the two things
+   the marks are there to say — to save a line. Three bands on one row is
+   what does not fit; the words are not the problem. */
+@media(max-width:760px){
+  .partrow.lead .pbands{flex-wrap:wrap;gap:14px 0}
+  .partrow.lead .pband+.pband{border-left:0;padding-left:0}
+}
 .srcinner{max-width:1040px;margin:0 auto;padding:0 40px;display:grid;grid-template-columns:132px minmax(0,1fr);gap:8px 26px;align-items:start}
 .srcinner>.lab{padding-top:2px}
 .srcfoot .srcblock{margin:0;font-size:12.5px;line-height:1.85;color:var(--soft);max-width:66ch;font-variant-numeric:tabular-nums}
@@ -594,7 +608,7 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;bac
           <img class="fbav" src="assets/fb-group-avatar-2x.png" alt="" width="38" height="38"/>
           <span class="fbmeta"><span class="fbnameline"><span class="fbname">FREDERIC CHOPIN</span><span class="fbmark" aria-hidden="true"><svg viewBox="0 0 36 36"><path fill="#1877F2" d="M36 18c0-9.941-8.059-18-18-18S0 8.059 0 18c0 8.984 6.583 16.43 15.188 17.78V23.203h-4.57V18h4.57v-3.965c0-4.51 2.686-7.002 6.797-7.002 1.97 0 4.03.352 4.03.352v4.43h-2.27c-2.235 0-2.933 1.387-2.933 2.81V18h4.992l-.798 5.203h-4.194V35.78C29.417 34.43 36 26.984 36 18Z"/><path fill="#fff" d="m25.006 23.203.798-5.203h-4.992v-3.375c0-1.423.698-2.81 2.933-2.81h2.27v-4.43S25.955 7.033 23.985 7.033c-4.111 0-6.797 2.492-6.797 7.002V18h-4.57v5.203h4.57V35.78a18.14 18.14 0 0 0 5.624 0V23.203h4.194Z"/></svg></span></span><span class="fbsub">Public group · 167K members</span></span>
         </a>
-        <a class="pband" href="#" aria-label="Weefeen">
+        <a class="pband ours" href="#" aria-label="Weefeen">
           <span class="fbav wf" aria-hidden="true"><svg viewBox="0 0 271.923 276.93"><path fill="#552D7B" fill-rule="evenodd" clip-rule="evenodd" d="M135.961 0C60.8743 0 0 61.9968 0 138.46C0 214.933 60.8743 276.93 135.961 276.93C211.048 276.93 271.923 214.933 271.923 138.46C271.923 61.9968 211.048 0 135.961 0ZM190.52 206.493C187.779 197.09 175.254 197.786 160.445 198.608C146.207 199.399 129.856 200.307 118.059 192.469C99.5672 180.196 90.4548 132.541 84.2595 100.141C81.1217 83.7311 78.7321 71.2344 76.2513 69.23C76.1814 68.8286 102.138 76.4552 114.486 135.823C114.818 137.421 115.144 139.019 115.469 140.612C119.201 158.923 122.79 176.529 134.517 186.281C137.344 188.635 141.965 191.396 147.124 192.125C134.74 184.026 128.936 165.076 127.274 146.541C125.051 121.658 122.512 99.6714 107.74 85.472C107.706 85.2994 107.669 85.1238 107.632 84.9479L107.611 84.8486C107.593 84.7641 107.576 84.6796 107.558 84.5955C132.771 91.3346 141.882 117.893 145.432 149.213C145.783 152.299 146.041 155.379 146.294 158.411C147.407 171.709 148.444 184.101 156.947 192.188C159.148 192.123 161.569 192.051 164.081 192.018C156.425 185.164 156.99 171.548 157.588 157.138C157.954 148.299 158.333 139.161 156.835 131.102C154.082 116.27 148.633 104.695 137.419 97.6428C137.559 97.1295 138.23 96.4253 138.433 97.0423C160.675 100.014 174.893 120.905 173.618 145.954C173.382 150.532 172.298 155.54 171.179 160.719C168.915 171.187 166.501 182.348 170.63 192.045C184.432 192.392 197.684 194.929 190.52 206.493Z"/></svg></span>
           <span class="fbmeta"><span class="fbname">Weefeen</span><span class="fbsub">Technology for classical music</span></span>
         </a>
