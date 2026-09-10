@@ -317,7 +317,7 @@
     {
       "type": "timeseries",
       "title": "Memory headroom",
-      "description": "The only graph on this dashboard that predicts an outage rather than describing one. `Used` is total minus MemAvailable - the kernel's own estimate of what a new allocation can actually get, which is the question being asked; MemFree would count the page cache as a crisis. The ceiling is this box's RAM, and the dashed line is where the alert fires. `Highest a render has reached` is our own high-water mark, recorded by the worker in the events it already sends - so it survives the machine that produced it, which matters once the renderer moves to a host that is destroyed after each job. Measured so far: 2457 MB on a 7.1-minute recording, on a 3915 MB box. The upload cap is 25 minutes, and `align` is DTW - its cost is the product of the two sequence lengths, so it grows with the SQUARE of duration. Watch this as longer uploads arrive: the shape of the peak line against recording length is what sizes the compute node.",
+      "description": "The only graph on this dashboard that predicts an outage rather than describing one. `Used` is total minus MemAvailable - the kernel's own estimate of what a new allocation can actually get, which is the question being asked; MemFree would count the page cache as a crisis. The ceiling is this box's RAM, and the dashed line is where the alert fires. `Highest a render has reached` is our own high-water mark, recorded by the worker in the events it already sends - so it survives the machine that produced it, which matters once the renderer moves to a host that is destroyed after each job. Measured so far: 2457 MB on a 7.1-minute recording, on a 3915 MB box. The upload cap is 25 minutes, and `align` is DTW - its cost is the product of the two sequence lengths, so it grows with the SQUARE of duration. Watch this as longer uploads arrive: the shape of the peak line against recording length is what sizes the compute node.  A LIMIT OF THIS PANEL, measured: `align` allocated 2433 MB in 18.6 seconds on a 7.1-minute recording. Prometheus scrapes every 30s, so the blue `Used` line can miss that spike entirely - during the test render it sampled a peak of 2021 MB while the process tree actually reached 2433 MB. The red line does not have this problem: it comes from getrusage in the worker, is exact, and is what to trust for sizing. `Used` is a floor, not a ceiling.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -543,7 +543,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "node_load1 / count(count by (cpu) (node_cpu_seconds_total{mode=\"idle\"}))",
+          "expr": "node_load1 / scalar(count(count by (cpu) (node_cpu_seconds_total{mode=\"idle\"})))",
           "legendFormat": "Load vs cores",
           "range": true
         },
