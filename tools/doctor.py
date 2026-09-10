@@ -20,6 +20,54 @@ from app.settings import settings       # noqa: E402
 OK, BAD, WARN = "  OK  ", " FAIL ", " WARN "
 
 
+def case_trouble(root: pathlib.Path) -> list[tuple[str, str]]:
+    """Parts of a package that only match if case is ignored.
+
+    `app/package.py` looks for fixed names — `score/lines`, `measures.data`,
+    `export.json`. Windows finds those whatever the case on disk; Linux does
+    not. So a package built or renamed on a Windows machine can load
+    perfectly there, be copied to the server, and simply not be found: the
+    piece is reported as having no bands, or no alignment, with nothing
+    saying why.
+
+    That is the same silent shape as the recognition bug — right on one
+    platform, quietly wrong on the other — so it is worth naming here rather
+    than waiting for a render that produces nothing.
+
+    Returns (what was looked for, what is actually on disk).
+    """
+    wanted: set[str] = set()
+    for group in (pkg._LINES_AT, pkg._MEASURES_AT, pkg._MANIFEST_AT,
+                  pkg._CHROMA_AT, pkg._SOURCE_AT):
+        wanted.update(group)
+
+    found: list[tuple[str, str]] = []
+    for relative in sorted(wanted):
+        here = root
+        parts = relative.split("/")
+        for i, part in enumerate(parts):
+            # Compare against the real directory entries, NOT with
+            # `exists()`. On a case-insensitive filesystem `exists()` says
+            # yes for `score/lines` when the folder is called `Lines`, so
+            # the mismatch this exists to find would never be reached — the
+            # first version of this check made exactly that mistake and
+            # reported every package clean.
+            try:
+                names = {entry.name: entry for entry in here.iterdir()}
+            except OSError:
+                break
+            if part in names:
+                here = names[part]
+                continue
+            match = next((entry for name, entry in names.items()
+                          if name.lower() == part.lower()), None)
+            if match is not None:
+                found.append(("/".join(parts[:i + 1]),
+                              match.relative_to(root).as_posix()))
+            break
+    return found
+
+
 def main() -> int:
     print("=== configuration (.env) ===")
     problems = settings.problems()
@@ -86,6 +134,13 @@ def main() -> int:
         if bitmaps and vec:
             carrying_png.append(
                 (name, len(bitmaps), sum(f.stat().st_size for f in bitmaps)))
+
+    # Only meaningful on a case-insensitive filesystem, which is where the
+    # mistake gets made and never noticed.
+    miscased: list[tuple[str, str, str]] = []
+    for name, (p, _kind) in sorted(usable.items()):
+        for wanted, actual in case_trouble(p.root):
+            miscased.append((name, wanted, actual))
 
     for name, reason in sorted(skipped.items()):
         print(f"[{WARN}] {name[:44]:44} {reason}")
