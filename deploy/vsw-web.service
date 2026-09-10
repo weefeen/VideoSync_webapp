@@ -6,10 +6,15 @@
 # It does NOT render when RABBITMQ_URL is set — `vsw-worker.service` does.
 # Two consumers on one queue would let the same task be rendered twice.
 #
-# NOTE: ExecStart is still Flask's development server, which says so on
-# every startup. Replacing it with gunicorn is one line here and a
-# dependency; it is deliberately a separate change from getting these two
-# processes supervised at all, so that each can be proved on its own.
+# ONE worker, and that is not a throughput decision. `create_app()` starts
+# the applier and the janitor as threads, guarded by a module-level flag —
+# which is per PROCESS. Two gunicorn workers would mean two appliers
+# competing for the same events and two janitors publishing the same jobs
+# again. Concurrency comes from threads instead, which share that flag.
+#
+# If the web side ever needs more than one process, the applier and janitor
+# have to move into a unit of their own first. Until then this line is load
+# bearing and `--workers 2` is a bug, not a tuning change.
 
 [Unit]
 Description=VideoSync web app
@@ -26,7 +31,20 @@ Group=vsw
 WorkingDirectory=/srv/vsw/current
 Environment=HOME=/srv/vsw
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/srv/vsw/venv/bin/python run.py --host 127.0.0.1 --port 5000
+# --timeout 900 because an upload may be 4 GB. gunicorn kills a worker it
+# believes is stuck, and a genuinely slow upload looks exactly like one:
+# 4 GB at 5 MB/s is over thirteen minutes inside a single request. The
+# default of 30 seconds would drop large uploads and look like a network
+# fault.
+ExecStart=/srv/vsw/venv/bin/gunicorn \
+    --workers 1 \
+    --threads 8 \
+    --bind 127.0.0.1:5000 \
+    --timeout 900 \
+    --graceful-timeout 30 \
+    --access-logfile - \
+    --error-logfile - \
+    "app.routes:create_app()"
 
 Restart=always
 RestartSec=3

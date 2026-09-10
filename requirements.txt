@@ -11,6 +11,11 @@ Pillow>=10.0            # band raster handling, recolouring, tiling
 # without it, .png/.jpg bands still render.
 cairosvg>=2.7
 
+# The server. Flask's own is single-threaded, reloads on a whim and says on
+# every startup that it is not for production. gunicorn is what the systemd
+# unit runs; `python run.py` still uses Flask's for development.
+gunicorn>=21.2
+
 # The queue, when RABBITMQ_URL is set. Without it the app runs its queue in
 # process and never imports this — so a developer machine needs no broker.
 pika>=1.3

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import logging
 import os
 import pathlib
 import re
@@ -756,7 +757,29 @@ def _safe_stem(name: str | None) -> str:
 # --------------------------------------------------------------------------
 # app
 # --------------------------------------------------------------------------
+def _ensure_logging() -> None:
+    """Make sure something is listening, whatever started this process.
+
+    `run.py` configures logging — but gunicorn never runs `run.py`. It
+    imports `create_app` directly, so under gunicorn everything the applier
+    and the janitor had to say went nowhere again, which is the exact
+    problem configuring it in `run.py` was meant to solve. gunicorn sets up
+    its own `gunicorn.error` and `gunicorn.access` loggers and leaves the
+    root logger alone, so this fills that gap rather than fighting it.
+
+    Only when the root has no handlers: a caller that has already decided
+    how logging works keeps its decision.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
 def create_app() -> Flask:
+    _ensure_logging()
     app = Flask(__name__)
     app.config.update(
         MAX_CONTENT_LENGTH=MAX_UPLOAD_BYTES,
