@@ -95,6 +95,17 @@ Nice=10
 CPUWeight=20
 EOF
 
+say "The Infinity plugin, for the failure table"
+# Counts come from Prometheus; the REASON a job failed cannot. An error
+# message or an ffmpeg command line as a Prometheus label is unbounded
+# cardinality — one new series per distinct failure — so the detail is read
+# straight from the app as JSON, and this is what reads JSON.
+if ! grafana-cli plugins ls 2>/dev/null | grep -q infinity; then
+    grafana-cli plugins install yesoreyeram-infinity-datasource >/dev/null 2>&1         && echo "  installed" || echo "  COULD NOT INSTALL — the failure table will be empty"
+else
+    echo "  already installed"
+fi
+
 say "Wire Grafana to Prometheus, and load the dashboard"
 install -d /etc/grafana/provisioning/datasources /etc/grafana/provisioning/dashboards \
            /var/lib/grafana/dashboards
@@ -107,6 +118,20 @@ datasources:
     access: proxy
     url: http://127.0.0.1:9090
     isDefault: true
+EOF
+
+cat >> /etc/grafana/provisioning/datasources/prometheus.yml <<EOF
+
+  # Reads /api/failures from the app. Restricted to that one host: an
+  # Infinity datasource left unrestricted will fetch any URL a dashboard
+  # names, which is a request-forgery hole with a login on it.
+  - name: VideoSync
+    type: yesoreyeram-infinity-datasource
+    uid: vsw-infinity
+    access: proxy
+    jsonData:
+      allowedHosts:
+        - http://${METRICS}
 EOF
 
 cat > /etc/grafana/provisioning/dashboards/videosync.yml <<'EOF'
