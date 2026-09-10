@@ -170,6 +170,17 @@ def api_metrics():
     return Response(metrics.render(), mimetype="text/plain; version=0.0.4")
 
 
+@bp.get("/api/failures")
+def api_failures():
+    """Why jobs failed, for the dashboard. Not for the public.
+
+    Same rule as /metrics: loopback only, and whatever fronts the site must
+    keep it off the internet. It carries ffmpeg command lines assembled from
+    what visitors chose, which is more than anyone outside needs.
+    """
+    return jsonify(metrics.failures())
+
+
 @bp.get("/api/stats")
 def api_stats():
     """What this install has actually done. Counts, never estimates."""

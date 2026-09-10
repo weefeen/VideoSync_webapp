@@ -134,3 +134,48 @@ def render() -> str:
     out.append(_line("vsw_videos_delivered_total", whole["n"]))
 
     return "\n".join(out) + "\n"
+
+
+def failures(limit: int = 50) -> list[dict]:
+    """Recent failures, with enough to act on rather than only a count.
+
+    Deliberately NOT metrics. A Prometheus label holding an error message
+    or an ffmpeg command line is unbounded cardinality — one new series per
+    distinct failure — which is how a monitoring system is brought down by
+    the thing it is monitoring. Counts belong there; the reason belongs
+    here, keyed by job so the two can be read together.
+
+    The command matters more than it looks: a render's ffmpeg invocation is
+    assembled from the visitor's own crop, colours and panel choices, so
+    without it a failure cannot be reproduced by hand.
+    """
+    rows = store.query(
+        "SELECT j.id, j.created, j.score, j.error AS job_error,"
+        "       s.stage, s.error_class, s.error_message, s.command,"
+        "       s.returncode, s.stderr_tail, s.attempt, s.elapsed"
+        "  FROM jobs j"
+        "  LEFT JOIN stage_runs s"
+        "    ON s.job_id = j.id AND s.state = ? AND s.stage != ?"
+        " WHERE j.state = ?"
+        " ORDER BY j.created DESC LIMIT ?",
+        (store.ERROR, WHOLE, store.ERROR, limit))
+
+    out = []
+    for r in rows:
+        tail = (r["stderr_tail"] or "").strip().splitlines()
+        out.append({
+            # Milliseconds: what Grafana reads as a time axis.
+            "time": int((r["created"] or 0) * 1000),
+            "job": r["id"],
+            "score": r["score"] or "",
+            "stage": r["stage"] or "before any stage",
+            "attempt": r["attempt"] or 1,
+            "error": r["error_class"] or "",
+            "message": (r["error_message"] or r["job_error"] or "")[:400],
+            "returncode": r["returncode"],
+            "command": (r["command"] or "")[:600],
+            # The last few lines are where ffmpeg says what it objected to;
+            # the rest is banner.
+            "stderr": "\n".join(tail[-6:]),
+        })
+    return out
