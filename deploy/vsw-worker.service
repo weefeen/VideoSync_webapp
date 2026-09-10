@@ -26,10 +26,12 @@ Wants=network-online.target
 Requires=rabbitmq-server.service
 
 [Service]
+# WorkingDirectory is the `current` symlink, so a deploy that repoints
+# it changes what these run without the unit being touched.
 Type=simple
 User=vsw
 Group=vsw
-WorkingDirectory=/srv/vsw/app
+WorkingDirectory=/srv/vsw/current
 Environment=HOME=/srv/vsw
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/srv/vsw/venv/bin/python -m app.queue.worker

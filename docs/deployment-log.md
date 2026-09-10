@@ -698,6 +698,87 @@ restarting it.
 
 ---
 
+## 17. The node became a real deploy target
+
+Until now the node was updated by hand — `git fetch && git merge --ff-only`
+as root, then `chown`. That is not what production will do, so it proved
+nothing about deployment, and it had already gone wrong once: `settings.py`
+sat nine lines behind because individual files were being shipped by tar
+while GitHub was unreachable, and only a git comparison caught it.
+
+### What it exposed first
+
+`deploy.sh` built a per-release venv from `requirements.txt` — which has **no
+torch and no librosa**. Those had been installed on the node by hand and
+written down only in this document.
+
+A release built that way would not have failed loudly. Flask starts,
+`create_app()` succeeds, and the old health check called exactly that. It
+would have swapped the symlink, reported healthy, and broken on the first
+upload — because recognition and alignment run in subprocesses whose imports
+nothing at startup touches.
+
+Three fixes: `requirements-engine.txt` pins what the two read-only engine
+repositories need; `bootstrap.sh` builds the venv from both files instead of
+the venv being a manual step recorded nowhere; and the release check now
+imports the engines, not just the app.
+
+### The layout now
+
+    /srv/vsw/
+      releases/<timestamp>-<sha>/   one deploy's code
+      current -> releases/…         what the units run
+      shared/.env                   configuration, mode 600
+      shared/var/                   jobs.sqlite, uploads, videos (864 MB)
+      venv/                         ONE environment, shared
+      scores/  VideoScoreSync/  music_fingerprints/
+
+`/srv/vsw` is the path on every host. Production's storage is on a mounted
+volume, and `/srv/vsw` there is a symlink to `/mnt/volume_1/vsw` — one path
+everywhere, so one set of unit files rather than two that drift.
+
+**The venv is shared, not per-release.** It is 1.5 GB because of torch, so
+five releases would be 7.5 GB of near-identical copies, and its heavy half is
+dictated by repositories that do not change when this app's code does.
+
+The move preserved everything: 5 done jobs and 1 uploaded, the finished
+videos, and 16 checks passing from inside the release.
+
+### Both paths proved
+
+A deploy, run exactly as the workflow will run it:
+
+    Linking shared state -> Dependencies -> Checking the release can start
+    app builds, engines import; 0 configuration warning(s)
+    Switching current -> Restarting our units only -> Health check
+    Healthy. Deployed 20260910001900-608d5fc
+
+And the safety net, with a release that starts, passes the import check, and
+then never serves:
+
+    Health check
+    !!! did not become healthy
+    Rolling back to 20260910001646-…
+    rolled back            site: HTTP 200, units active
+
+**A false test first, worth recording.** The first attempt at breaking a
+release changed `run.py`'s default port — which does nothing, because the
+unit passes `--port 5000` explicitly. It deployed green and I nearly read
+that as "rollback works". A test has to break the thing the check actually
+looks at.
+
+### Still by hand
+
+The GitHub workflow cannot run yet: it needs four secrets, and the private
+key must be generated on the server and pasted into GitHub by a person.
+`deploy/README.md` has the sequence. Until then a deploy is
+`rsync` + `deploy.sh` run by hand, which is what the two runs above were.
+
+`/etc/sudoers.d/vsw-deploy` lets `vsw` restart exactly the two units and
+nothing else, validated with `visudo -cf`.
+
+---
+
 ## Still to do
 
 - Measure seconds-per-second on the plan production will actually use;
