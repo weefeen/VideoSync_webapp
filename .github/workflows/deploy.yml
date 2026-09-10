@@ -91,15 +91,43 @@ jobs:
         id: release
         run: echo "name=$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      - name: Mark
+        run: echo "STAGE=loading the SSH key" >> "$GITHUB_ENV"
+
       - uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Trust the host
+      - name: Is a key actually loaded?
+        # ssh-agent can report success and still leave the agent empty if
+        # the secret is not a key it understands. Everything after this
+        # assumes an identity exists, so it is worth one command to know.
         run: |
+          echo "STAGE=checking the loaded key" >> "$GITHUB_ENV"
+          if ssh-add -l; then
+            echo "an identity is loaded"
+          else
+            echo "::error title=No SSH key is loaded::ssh-agent holds no identities, so SSH_PRIVATE_KEY was empty or not a private key it could parse. Re-copy the whole file including the BEGIN and END lines."
+            exit 1
+          fi
+
+      - name: Trust the host
+        env:
+          KNOWN: ${{ secrets.SSH_KNOWN_HOSTS }}
+        # Through the environment rather than interpolated into the script.
+        # The value is three lines; pasting it inline puts raw newlines in
+        # the middle of a command, which works only by luck of quoting.
+        run: |
+          echo "STAGE=writing known_hosts" >> "$GITHUB_ENV"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+          echo "known_hosts has $(wc -l < ~/.ssh/known_hosts) line(s):"
+          cut -d' ' -f1,2 ~/.ssh/known_hosts
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error title=SSH_KNOWN_HOSTS is empty::The secret has no value. Use every line that 'ssh-keyscan <host>' prints."
+            exit 1
+          fi
 
       - name: Can we reach the host at all?
         # Separated from the rsync so a connection problem says so, instead
@@ -120,6 +148,7 @@ jobs:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
         run: |
+          echo "STAGE=connecting to the host" >> "$GITHUB_ENV"
           echo "connecting as $USER@$HOST"
           set +e
           OUT=$(ssh -v -o BatchMode=yes -o ConnectTimeout=15 "$USER@$HOST" "echo reached" 2>&1)
@@ -150,7 +179,7 @@ jobs:
           REL: ${{ steps.release.outputs.name }}
         run: |
           set -euo pipefail
-          ssh "$USER@$HOST" "mkdir -p /mnt/volume_1/vsw/releases/$REL"
+          ssh "$USER@$HOST" "mkdir -p /srv/vsw/releases/$REL"
           # --delete so a file removed from the repo is removed from the
           # release; the excludes are the things that must never be shipped
           # or must never be overwritten on the server.
@@ -159,7 +188,7 @@ jobs:
             --exclude '.env' --exclude 'var' \
             --exclude '__pycache__' --exclude '*.pyc' \
             --exclude '.venv' \
-            ./ "$USER@$HOST:/mnt/volume_1/vsw/releases/$REL/"
+            ./ "$USER@$HOST:/srv/vsw/releases/$REL/"
 
       - name: Put it live
         env:
@@ -168,11 +197,20 @@ jobs:
           REL: ${{ steps.release.outputs.name }}
         run: |
           set -euo pipefail
-          ssh "$USER@$HOST" "bash /mnt/volume_1/vsw/releases/$REL/deploy/deploy.sh $REL"
+          ssh "$USER@$HOST" "bash /srv/vsw/releases/$REL/deploy/deploy.sh $REL"
 
       - name: Say what is live
         if: always()
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
-        run: ssh "$USER@$HOST" "readlink -f /mnt/volume_1/vsw/current" || true
+        run: ssh "$USER@$HOST" "readlink -f /srv/vsw/current" || true
+
+      - name: Where did it fail?
+        # The last thing to run when something above did not. Without it a
+        # failure contributes only "Process completed with exit code 1" to
+        # the run summary, which names neither the step nor the reason — and
+        # that is exactly how the first three attempts at this were reported.
+        if: failure()
+        run: |
+          echo "::error title=Deploy failed while ${STAGE:-starting up}::The step named above this in the job list is the one that failed. Open it for the detail."
