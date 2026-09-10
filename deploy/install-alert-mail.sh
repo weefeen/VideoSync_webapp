@@ -73,6 +73,17 @@ NOTE
     exit 1
 fi
 
+# Not fatal, because a relay can be configured to accept mail from a trusted
+# address without a login — but said loudly, because on every hosted relay it
+# means the mail will be rejected at AUTH. Silence here would produce a
+# configuration that looks complete, restarts cleanly and delivers nothing.
+if [ -z "$SMTP_PASSWORD" ]; then
+    printf '\n\033[1m  WARNING: SMTP_PASSWORD is empty in %s\033[0m\n' "$ENVFILE"
+    echo "  Everything else will be configured, but unless ${SMTP_HOST} accepts"
+    echo "  unauthenticated mail from this machine, nothing will be delivered."
+    echo
+fi
+
 # Grafana wants host:port in one field.
 HOSTPORT="$SMTP_HOST"
 case "$SMTP_HOST" in
@@ -109,8 +120,16 @@ fi
     [ -n "$SMTP_PASSWORD" ] && echo "password = $QUOTED"
     [ -n "$SMTP_FROM" ] && echo "from_address = ${SMTP_FROM##*<}" | tr -d '>'
     echo 'from_name = VideoSync'
-    case "$SMTP_SSL" in
-        1|true|yes|True) echo 'skip_verify = false' ;;
+    # Two different ways to encrypt, and the port decides which. On 465 the
+    # connection is TLS from the first byte (implicit TLS) and Grafana picks
+    # that up from the port itself — asking for STARTTLS there makes it send
+    # a plaintext command into an encrypted socket and the handshake fails.
+    # On 587 the session opens in the clear and upgrades, and that upgrade is
+    # required rather than merely attempted: `Opportunistic` silently accepts
+    # a downgrade, which means the password can cross the wire in the clear
+    # on any connection that says it cannot do TLS.
+    case "$SMTP_STARTTLS" in
+        1|true|yes|True|TRUE) echo 'startTLS_policy = MandatoryStartTLS' ;;
     esac
 } >> "$INI"
 
