@@ -290,17 +290,14 @@ input[type=file]{display:none}
 .partrow.lead .pband .fbav,
 .partrow.lead .pband .fbav.wf svg{width:24px;height:24px}
 .partrow.lead .pband .fbname{font-size:14px}
-/* Only OUR OWN strapline is dropped up here — it says nothing a visitor
-   needs before uploading. Every other caption stays, because each one is
-   the reason its mark is worth showing: the Facebook member count, and
-   what the Cliburn mark is actually claiming.
-   Written as `.ours` and not `:last-child`, which is what the first
-   version said and was wrong within the hour: svs-wire.js appends the
-   Cliburn band at runtime, so last-child became Cliburn and the rule hid
-   "Same tech used during the 2025 competition edition". Position is not
-   identity. */
+/* Every caption stays. Each one is the reason its mark is worth showing —
+   the Facebook member count, what the Cliburn mark claims, and what
+   Weefeen is. Two earlier versions of this hid one of them to save a
+   line: first by `:last-child`, which svs-wire.js turned into the Cliburn
+   band when it appends at runtime, then deliberately for Weefeen's own
+   strapline. Both were noticed immediately by the owner, which is the
+   answer: a caption somebody put there is not spare room. */
 .partrow.lead .pband .fbsub{font-size:11px}
-.partrow.lead .pband.ours .fbsub{display:none}
 .partrow.lead .pband .fbmark{width:13px;height:13px;flex:0 0 13px}
 /* Narrow screens wrap rather than drop the captions. Hiding them would
    silently remove the Cliburn claim and the member count — the two things
