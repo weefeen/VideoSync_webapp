@@ -1,0 +1,39 @@
+[Unit]
+# Decides whether a compute machine should exist, and makes it so.
+#
+# ONE INSTANCE, ON THE WEB BOX. Being one process makes the ordinary case
+# trivially exclusive; the lease row in `compute` covers somebody starting a
+# second by mistake, and the provider's label uniqueness is the final
+# referee.
+Description=VideoSync compute scaler
+Documentation=https://github.com/weefeen/VideoSync_webapp
+After=network-online.target vsw-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vsw
+Group=vsw
+WorkingDirectory=/srv/vsw/current
+Environment=HOME=/srv/vsw
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/vsw/venv/bin/python -m app.compute.scaler
+Restart=always
+RestartSec=15
+
+# SIGTERM stops the loop and destroys NOTHING. A restart must not delete a
+# machine that is mid-render; the next tick reconciles against the provider
+# and decides again with the queue in front of it.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+# It holds the one credential that can spend money, so it gets no more of
+# the machine than it needs.
+Nice=5
+MemoryMax=256M
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

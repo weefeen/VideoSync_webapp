@@ -153,6 +153,14 @@ class Settings:
     compute_max_creates_per_hour: int = 4
     # Passed to each machine at create, so somebody can get in and look.
     compute_ssh_key: str = ""
+    # OFF until somebody turns it on. Everything up to creating runs and is
+    # recorded regardless; this is the first code here that can spend money
+    # without a person watching, and a switch is a different kind of safety
+    # from a limit one hopes holds.
+    compute_enabled: bool = False
+    # Where a compute node reaches the broker: the web box's VLAN address,
+    # never its public one.
+    compute_broker_host: str = "10.0.0.2"
     geoip_db: pathlib.Path | None = None
     vss_root: pathlib.Path | None = None
     sync_python: str = ""
@@ -379,6 +387,10 @@ def load() -> Settings:
         compute_max_creates_per_hour=int(
             _number("COMPUTE_MAX_CREATES_PER_HOUR", 4)),
         compute_ssh_key=os.getenv("COMPUTE_SSH_KEY", "").strip(),
+        compute_enabled=os.getenv("COMPUTE_ENABLED", "").strip().lower()
+        in ("1", "true", "yes"),
+        compute_broker_host=os.getenv("COMPUTE_BROKER_HOST",
+                                      "10.0.0.2").strip(),
         geoip_db=_one("GEOIP_DB"),
         vss_root=_one("VSS_ROOT"),
         sync_python=os.getenv("SYNC_PYTHON", "").strip().strip('"'),

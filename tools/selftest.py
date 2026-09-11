@@ -1283,6 +1283,84 @@ def check_a_stored_project_explains_itself() -> str:
             f"recorded, no personal data")
 
 
+def check_the_scaler_cannot_run_away() -> str:
+    """Off by default, bounded when on, and honest about what exists.
+
+    This is the first code here that can spend money without a person
+    watching, so the guards are checked as properties rather than trusted to
+    have been written:
+
+      * nothing is created while COMPUTE_ENABLED is off, however loudly the
+        queue asks.
+      * the hourly ceiling is counted from machines that WERE created, not
+        from what this process remembers intending — a scaler restarting in
+        a loop would otherwise reset its own count each time and create
+        without limit, which is the exact failure the ceiling exists for.
+      * two machines existing is refused rather than reconciled by guessing.
+        Deleting the wrong one is worse than doing nothing and saying so.
+    """
+    from app import store
+    from app.compute import driver as drv
+    from app.compute import scaler as scl
+    from app.settings import settings
+
+    fake = drv.FakeDriver()
+    s = scl.Scaler(driver=fake)
+
+    # -- off means off ---------------------------------------------------
+    store.write_returning("DELETE FROM jobs RETURNING id")
+    store.put_job({"id": "scaler-1", "created": time.time(), "name": "a.mp4",
+                   "upload": "a.mp4", "state": store.QUEUED,
+                   "queued_at": time.time()})
+    with store.write() as conn:
+        conn.execute("UPDATE compute SET state='none', idle_since=NULL,"
+                     " machine_id=NULL WHERE singleton = 1")
+
+    if settings.compute_enabled:
+        raise Failed("COMPUTE_ENABLED is on during the checks; it must "
+                     "default to off so nothing is created by a test run")
+    did = s.tick()
+    if fake.creates:
+        raise Failed(f"created a machine with the switch off: {did}")
+    if "would create" not in did["did"]:
+        raise Failed(f"expected a would-create while off, got {did['did']!r}")
+
+    # -- the ceiling counts what happened, not what we remember ----------
+    store.write_returning("DELETE FROM compute_events RETURNING id")
+    ceiling = settings.compute_max_creates_per_hour
+    for n in range(ceiling):
+        store.compute_record_create(9000 + n, f"vsw-compute-{n}")
+    if store.compute_creates_this_hour() != ceiling:
+        raise Failed(f"the ledger counted {store.compute_creates_this_hour()} "
+                     f"of {ceiling} creates")
+
+    # A brand new Scaler — as after a restart — must still see them.
+    fresh = scl.Scaler(driver=drv.FakeDriver())
+    if store.compute_creates_this_hour() < ceiling:
+        raise Failed("a restarted scaler forgot the creates already made; "
+                     "the ceiling would reset on every crash")
+
+    # -- two machines is refused, not guessed at -------------------------
+    crowded = drv.FakeDriver()
+    crowded.create("vsw-compute-a", "p", "i", "r", "", [])
+    crowded.create("vsw-compute-b", "p", "i", "r", "", [])
+    try:
+        scl.Scaler(driver=crowded).tick()
+    except drv.ComputeError:
+        pass
+    else:
+        raise Failed("two machines existing was not refused; picking one to "
+                     "delete is how the wrong one goes")
+    if crowded.destroys:
+        raise Failed("it deleted something while confused about how many "
+                     "machines exist")
+
+    store.write_returning("DELETE FROM jobs RETURNING id")
+    store.write_returning("DELETE FROM compute_events RETURNING id")
+    return (f"off by default; ceiling of {ceiling} survives a restart; "
+            f"a crowded account is refused, not guessed")
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -1321,6 +1399,7 @@ def main() -> int:
         check_mail_looks_like_mail,
         check_the_driver_will_not_delete_what_is_not_ours,
         check_a_stored_project_explains_itself,
+        check_the_scaler_cannot_run_away,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

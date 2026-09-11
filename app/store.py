@@ -215,6 +215,9 @@ CREATE TABLE IF NOT EXISTS compute (
     -- hourly rate this is the monthly bill, and it is the number the whole
     -- scale-to-zero design exists to make small.
     would_run   REAL NOT NULL DEFAULT 0,
+    -- What actually exists at the provider, as last seen.
+    machine_id    INTEGER,
+    machine_label TEXT,
     creates     INTEGER NOT NULL DEFAULT 0,
     destroys    INTEGER NOT NULL DEFAULT 0,
     updated     REAL
@@ -290,6 +293,8 @@ _ADDED = (
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
     ("jobs", "published_at", "REAL"),
     ("jobs", "object_key", "TEXT"),
+    ("compute", "machine_id", "INTEGER"),
+    ("compute", "machine_label", "TEXT"),
     ("stage_runs", "cpu_seconds", "REAL"),
     ("stage_runs", "cpu_at_open", "REAL"),
     ("stage_runs", "peak_rss", "INTEGER"),
@@ -905,3 +910,39 @@ def compute_events(limit: int = 100) -> list[sqlite3.Row]:
     """The decisions, newest first."""
     return query("SELECT * FROM compute_events ORDER BY at DESC LIMIT ?",
                  (limit,))
+
+
+def compute_creates_this_hour() -> int:
+    """How many machines have actually been created in the last hour.
+
+    The ceiling is counted from what WAS created, not from what the scaler
+    remembers intending. A process that restarts in a loop would otherwise
+    reset its own count each time and create without limit — which is the
+    exact failure the ceiling exists to prevent.
+    """
+    row = one("SELECT COUNT(*) AS n FROM compute_events"
+              " WHERE action = 'created' AND at >= ?", (time.time() - 3600,))
+    return int(row["n"]) if row else 0
+
+
+def compute_record_create(machine_id: int, label: str) -> None:
+    """A machine really exists now. Written immediately, before anything
+    else can fail: a create that is not recorded is a machine nothing
+    remembers and nothing will ever delete."""
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO compute_events (at, action, reason, ready, unacked)"
+            " VALUES (?,?,?,?,?)",
+            (time.time(), "created", f"{label} ({machine_id})", 0, 0))
+        conn.execute("UPDATE compute SET machine_id = ?, machine_label = ?"
+                     " WHERE singleton = 1", (machine_id, label))
+
+
+def compute_record_destroy(machine_id: int) -> None:
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO compute_events (at, action, reason, ready, unacked)"
+            " VALUES (?,?,?,?,?)",
+            (time.time(), "destroyed", str(machine_id), 0, 0))
+        conn.execute("UPDATE compute SET machine_id = NULL,"
+                     " machine_label = NULL WHERE singleton = 1")
