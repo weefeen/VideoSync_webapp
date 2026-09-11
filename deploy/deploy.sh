@@ -142,13 +142,31 @@ if [ -z "$ok" ]; then
 fi
 
 say "Healthy. Pruning old releases, keeping $KEEP"
+# PAST THE POINT OF NO FAILURE. The release is live and answering; from here
+# on this script is tidying up, and tidying up must not be able to report a
+# working deploy as a broken one.
+#
+# It did exactly that once. Old releases had `__pycache__` directories owned
+# by root, written when the app was run by hand as root during an earlier
+# deploy. The prune runs as the deploy user, which cannot unlink a file
+# inside a directory it does not own, so `rm -rf` returned "Permission
+# denied", `set -e` fired, and the workflow went red — minutes after the new
+# release had gone live and passed its health check. The site was fine and
+# the deploy was reported as failed, which is the worst way round.
+#
+# So: every failure here is reported and none is fatal.
 cd "$ROOT/releases"
 # Never remove the one `current` points at, whatever the ordering says.
 ls -1dt */ 2>/dev/null | tail -n "+$((KEEP + 1))" | while read -r old; do
     old="${old%/}"
     [ "$ROOT/releases/$old" = "$(readlink -f "$ROOT/current")" ] && continue
-    rm -rf -- "$ROOT/releases/$old"
-    echo "removed $old"
-done
+    if rm -rf -- "$ROOT/releases/$old" 2>/dev/null; then
+        echo "removed $old"
+    else
+        echo "could NOT remove $old — left in place. Usually a file owned by"
+        echo "  another user; 'sudo chown -R \$(id -un):\$(id -gn) $ROOT/releases'"
+        echo "  clears it. This has not affected the deploy."
+    fi
+done || true
 
 say "Deployed $RELEASE"

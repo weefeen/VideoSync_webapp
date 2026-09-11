@@ -179,6 +179,7 @@ jobs:
           REL: ${{ steps.release.outputs.name }}
         run: |
           set -euo pipefail
+          echo "STAGE=sending the release" >> "$GITHUB_ENV"
           ssh "$USER@$HOST" "mkdir -p /srv/vsw/releases/$REL"
           # --delete so a file removed from the repo is removed from the
           # release; the excludes are the things that must never be shipped
@@ -197,6 +198,7 @@ jobs:
           REL: ${{ steps.release.outputs.name }}
         run: |
           set -euo pipefail
+          echo "STAGE=running deploy.sh on the host" >> "$GITHUB_ENV"
           ssh "$USER@$HOST" "bash /srv/vsw/releases/$REL/deploy/deploy.sh $REL"
 
       - name: Say what is live
@@ -211,6 +213,13 @@ jobs:
         # failure contributes only "Process completed with exit code 1" to
         # the run summary, which names neither the step nor the reason — and
         # that is exactly how the first three attempts at this were reported.
+        #
+        # EVERY STEP ABOVE MUST SET `STAGE` AS ITS FIRST LINE. A step that
+        # does not leaves the previous step's marker standing, and this
+        # reports the wrong cause with complete confidence. It did: a deploy
+        # that failed while pruning old releases was announced as "failed
+        # while connecting to the host", and the SSH logs it sent everybody
+        # to showed a connection that had worked perfectly.
         if: failure()
         run: |
           echo "::error title=Deploy failed while ${STAGE:-starting up}::The step named above this in the job list is the one that failed. Open it for the detail."
