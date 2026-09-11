@@ -707,7 +707,21 @@ def api_identify(job_id: str):
         _identifications[job_id] = {"state": "running"}
 
     def work() -> None:
-        outcome = _identify_now(job)
+        # A CATCH-ALL, because the alternative is a job stuck forever.
+        # `_identify_now` handles the recogniser's own failures, but a
+        # malformed verdict raises a plain KeyError/ValueError deeper in the
+        # parse; unhandled, this thread dies with `_identifications[job_id]`
+        # left at "running", the page polls out to a timeout, and a retry
+        # POST returns that same stale "running" — so the upload can never be
+        # identified again without restarting the process. Any escape becomes
+        # an error the visitor sees and can retry past.
+        try:
+            outcome = _identify_now(job)
+        except Exception as exc:                     # noqa: BLE001
+            logger.exception("identify %s crashed", job_id)
+            outcome = {"state": "error", "recognised": False,
+                       "error": "The recogniser hit an unexpected problem. "
+                                "Please try again."}
         with _identify_lock:
             _identifications[job_id] = outcome
 

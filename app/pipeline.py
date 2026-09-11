@@ -121,7 +121,18 @@ def run(p: pkg.ScorePackage, video: pathlib.Path, job_id: str,
     try:
         rnd.render(timed, video, output, style, meta or {}, on_progress)
     except rnd.RenderError as exc:
-        raise PipelineError(str(exc)) from exc
+        # Carry the diagnostic fields across the re-raise. A ToolFailed (which
+        # is a RenderError) holds the exact ffmpeg command, its return code
+        # and the tail of its stderr; `PipelineError(str(exc))` alone threw
+        # all three away, so the worker's `getattr(exc, "command", ...)` got
+        # nothing and stage_runs.command / returncode / stderr_tail and
+        # /api/failures were ALWAYS empty — the whole "reproduce the failing
+        # invocation" path was dead despite the code being written for it.
+        failure = PipelineError(str(exc))
+        failure.command = getattr(exc, "command", []) or []
+        failure.returncode = getattr(exc, "returncode", None)
+        failure.stderr = getattr(exc, "stderr", "") or ""
+        raise failure from exc
 
     return JobResult(output=output, mode=mode, measures=measures,
                      job_dir=job_dir, package_name=p.name)

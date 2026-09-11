@@ -79,10 +79,28 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
     def say(kind: str, **fields) -> None:
         # Every event carries the running cost, so a stage boundary is
         # also a measurement point and nothing extra has to be scheduled.
+        #
+        # PUBLISHING MUST NOT BE ABLE TO FAIL THE RENDER. `publish` opens a
+        # fresh connection per message and raises TransportError on any broker
+        # hiccup. Left to propagate it did two wrong things: a `progress`
+        # publish is called from inside the render via on_progress, so a
+        # transient failure unwound a render twenty minutes in as "could not
+        # publish"; and a `done` publish that failed fell into the caller's
+        # `except Exception`, which overwrote the just-written DONE record
+        # with FAILED — reporting a finished, stored, delivered video as
+        # failed. The render's real outcome is already on disk in the attempt
+        # record before any terminal event is published, and the webside
+        # sweep re-offers a job whose outcome never arrived, so a dropped
+        # event is recovered rather than lost. So this swallows and logs.
         cpu, rss = usage()
-        publish(Event(job_id=task.job_id, type=kind, attempt=task.attempt,
-                      seq=next(seq), worker=me,
-                      cpu_seconds=cpu, peak_rss=rss, **fields))
+        try:
+            publish(Event(job_id=task.job_id, type=kind, attempt=task.attempt,
+                          seq=next(seq), worker=me,
+                          cpu_seconds=cpu, peak_rss=rss, **fields))
+        except Exception:                              # noqa: BLE001
+            logger.warning("job %s: could not publish %s event (the outcome "
+                           "is recorded; the sweep will carry it)",
+                           task.job_id, kind, exc_info=True)
 
     if task.kind == "ping":
         # Answered without touching ffmpeg, so the round trip through a real

@@ -36,6 +36,7 @@ import shlex
 import logging
 import subprocess
 import tempfile
+import uuid
 from typing import Callable
 
 from PIL import Image, ImageOps
@@ -770,6 +771,7 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
     output.parent.mkdir(parents=True, exist_ok=True)
     workdir = pathlib.Path(tempfile.mkdtemp(prefix="videosync-"))
     temps: list[str] = []
+    partial: pathlib.Path | None = None
     try:
         on_progress("strip", "timing bands to the performance")
         strip = _band_strip(pkg, images, info["duration"], info["fps"],
@@ -823,11 +825,21 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
             cmd += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k",
                     "-ar", "48000", "-ac", "2"]
         # ffmpeg writes beside the real name and Python renames on success,
-        # so a run that dies part-way leaves `.part.mp4` rather than a file
+        # so a run that dies part-way leaves a partial file rather than one
         # that looks exactly like a finished video. That matters once a task
         # can be redelivered: "is the output already there?" has to mean
         # "did a render finish", and a half-written file answers it wrongly.
-        partial = output.with_suffix(".part" + output.suffix)
+        #
+        # The partial name is UNIQUE PER RENDER, not a fixed `.part.mp4`. A
+        # broker reconnect can redeliver a task whose first render is still
+        # running on this same host, so two renders of one job overlap. With
+        # a shared partial they wrote the same file, and whichever finished
+        # first `os.replace`d the OTHER's half-written partial onto the
+        # output — a corrupt video that HEADs at the right size. Each render
+        # now owns its own partial and promotes only its own complete file,
+        # so an overlap wastes CPU but can never publish a torn file.
+        partial = output.with_suffix(f".part-{uuid.uuid4().hex[:8]}"
+                                     + output.suffix)
         partial.unlink(missing_ok=True)
         cmd += ["-c:v", "libx264", "-crf", str(style.crf), "-preset", "medium",
                 "-pix_fmt", "yuv420p", "-t", f"{info['duration']:.3f}",
@@ -853,6 +865,15 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
                               f"{' · panel' if layout.panel else ''}"
                               f" · bg {style.background}")
         _run(cmd, "Rendering the video")
+    except BaseException:
+        # A failed render must not leave its partial behind. The name is now
+        # unique per render, so unlike the old fixed `.part.mp4` it is not
+        # cleared by the next attempt — clean it here instead of accumulating
+        # one orphan per failure. `partial` may be None if the failure came
+        # before the encode was set up.
+        if partial is not None:
+            partial.unlink(missing_ok=True)
+        raise
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         for path in temps:
