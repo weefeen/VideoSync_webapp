@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import time
 
-from .. import limits, notify, pipeline, stats, store
+from .. import limits, notify, pipeline, stats, storage, store
 from ..settings import settings
 from .messages import Event
 
@@ -147,6 +147,17 @@ def _done(event: Event, row) -> bool:
     store.update_job(event.job_id, **fields)
     _close_open_run(event, state=store.DONE,
                     outputs=[event.result] if event.result else None)
+
+    # Whether the recogniser was right, kept beside the alignment it
+    # produced. Only here is both halves known: the verdict is in
+    # `recognitions` and the visitor's choice is on the job row, and the
+    # worker has never seen either. Never allowed to fail the job — the
+    # video is delivered either way.
+    try:
+        storage.store_verdict(event.job_id, row["score"] or "")
+    except Exception:                                    # noqa: BLE001
+        logger.warning("job %s: the verdict could not be stored",
+                       event.job_id, exc_info=True)
     # Counted here rather than at submit, so the tally means delivered and
     # not attempted.
     stats.record_video()

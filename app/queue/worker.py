@@ -135,6 +135,34 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
                 detail="putting the result somewhere it survives")
             size = storage.put(result.output, object_key)
 
+            # And everything else the job made: the alignment, the measures,
+            # the per-attempt record. 0.2 MB against a 131 MB video, and the
+            # half that is expensive to recreate — for a corpus it is the
+            # valuable half. Once the renderer is a machine that is
+            # destroyed afterwards, not keeping these means losing them.
+            #
+            # AFTER the video and never allowed to fail the job: the video
+            # is what was promised, it is already confirmed stored above,
+            # and a working file that will not upload is worth a log line
+            # rather than a render thrown away.
+            try:
+                # Written first, so it is stored along with what it
+                # describes rather than needing a second pass.
+                storage.write_manifest(
+                    job_dir, task.job_id,
+                    package=task.package, mode=result.mode,
+                    style=task.style, duration=task.duration,
+                    output=result.output, output_bytes=size,
+                    elapsed=round(time.time() - began, 1))
+                kept = storage.put_tree(job_dir, task.job_id,
+                                        output=result.output)
+                if kept["stored"]:
+                    say("progress", stage="store",
+                        detail=f"kept {len(kept['stored'])} working file(s)")
+            except Exception:                          # noqa: BLE001
+                logger.warning("job %s: working files could not be "
+                               "stored", task.job_id, exc_info=True)
+
         elapsed = round(time.time() - began, 1)
         # Recorded BEFORE the event is published. If this worker dies in the
         # gap, the redelivery finds the record and republishes the outcome

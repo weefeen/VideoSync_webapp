@@ -35,6 +35,7 @@ import os
 import pathlib
 import pkgutil
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -1212,6 +1213,76 @@ def check_the_driver_will_not_delete_what_is_not_ours() -> str:
             f"a foreign machine survived both")
 
 
+def check_a_stored_project_explains_itself() -> str:
+    """Everything a job produced is kept, and the manifest says what it is.
+
+    A folder holding `measures.data`, `performance.npy` and a video is not
+    self-describing. Which score was it aligned against? Which engraving of
+    it? Reference recording or direct? Which librosa produced those numbers?
+    Without that written down beside them the corpus is a pile of arrays,
+    and the answer cannot be reconstructed once the machine that made it has
+    been destroyed.
+
+    Also checks what must NOT be in it. These objects are kept indefinitely
+    for training while the job row is deleted on request, so a manifest
+    carrying an address, an email or an uploaded file name would quietly
+    undo that promise.
+    """
+    import json
+
+    from app import storage
+
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="vsw-project-"))
+    try:
+        (folder / "measures.data").write_text("1 0.0\n2 1.5\n")
+        (folder / "sync").mkdir()
+        (folder / "sync" / "performance.npy").write_bytes(b"\x93NUMPY fake")
+        output = folder / "piece_synced.mp4"
+        output.write_bytes(b"video")
+        # A render in progress is not a result.
+        (folder / "piece.part.mp4").write_bytes(b"half a video")
+
+        written = storage.write_manifest(
+            folder, "job123", package="Op.39_Scherzo_(Breitkopf)",
+            mode="reference", style={"aspect": "16/9"},
+            duration=424.0, output=output, output_bytes=5, elapsed=448.0)
+        manifest = json.loads(written.read_text(encoding="utf-8"))
+
+        for key in ("job", "score_package", "alignment_mode", "media_seconds",
+                    "produced_by", "files", "schema"):
+            if key not in manifest:
+                raise Failed(f"the manifest has no {key!r}")
+        if manifest["alignment_mode"] != "reference":
+            raise Failed("the alignment mode was not recorded, and it changes "
+                         "what the numbers in measures.data mean")
+
+        listed = {f["path"] for f in manifest["files"]}
+        if "measures.data" not in listed or "sync/performance.npy" not in listed:
+            raise Failed(f"the manifest does not list the work: {listed}")
+
+        # No personal data, checked as a property of the whole document
+        # rather than field by field — a future field could reintroduce it.
+        blob = json.dumps(manifest).lower()
+        for forbidden in ("@", "email", "client", "ip_address", "upload_name"):
+            if forbidden in blob:
+                raise Failed(
+                    f"the manifest contains {forbidden!r}. These objects "
+                    f"outlive the job row on purpose; personal data in them "
+                    f"defeats deleting a visitor's recording on request")
+
+        # The part file must not be offered for storage.
+        storage.reset()
+        plan = [p.name for p in sorted(folder.rglob("*")) if p.is_file()]
+        if "piece.part.mp4" not in plan:
+            raise Failed("the fixture is wrong; there is no part file to skip")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        storage.reset()
+
+    return (f"{len(manifest['files'])} files listed, mode and package "
+            f"recorded, no personal data")
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -1249,6 +1320,7 @@ def main() -> int:
         check_a_machine_is_only_wanted_while_there_is_work,
         check_mail_looks_like_mail,
         check_the_driver_will_not_delete_what_is_not_ours,
+        check_a_stored_project_explains_itself,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
