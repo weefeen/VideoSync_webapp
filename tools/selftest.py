@@ -1095,11 +1095,19 @@ def check_mail_looks_like_mail() -> str:
             raise Failed(f"outgoing mail has no {header} header")
 
     cte = (m.get("Content-Transfer-Encoding") or "").lower()
-    if cte == "base64":
+    if cte != "7bit":
         raise Failed(
-            "the body is base64. A short plain-text message encoded that way "
-            "is scored as obfuscation; quoted-printable keeps the typography "
-            "and stays readable on the wire")
+            f"the body is {cte}, not 7bit. Anything else means a relay may "
+            f"re-encode or re-wrap it, and A2 relays our signed mail through "
+            f"MailChannels — a changed body breaks the DKIM body hash, which "
+            f"is what Yahoo reported")
+
+    longest = max((len(ln) for ln in m.get_content().splitlines()), default=0)
+    if longest > 72:
+        raise Failed(
+            f"a body line is {longest} characters. Long lines force soft "
+            f"wrapping, and a relay that re-wraps differently changes the "
+            f"body a signature was computed over")
 
     # Readable on the wire is the property, not the encoding's name.
     if "A line." not in m.as_string():

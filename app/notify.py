@@ -18,7 +18,9 @@ from __future__ import annotations
 import logging
 import re
 import smtplib
+import socket
 import ssl
+import unicodedata
 from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid
 
@@ -100,9 +102,8 @@ def _compose(subject: str, address: str, body: str) -> EmailMessage:
         message to base64, because that is what `set_content` picks for
         non-ASCII. A short plain-text message that arrives entirely base64
         is what obfuscators send to hide wording from filters, and it is
-        scored as such. Quoted-printable keeps the typography AND leaves the
-        text readable on the wire, which is what an honest message looks
-        like.
+        scored as such. The body is now 7-bit and hard-wrapped — see
+        `_plain`, which also explains why quoted-printable was not enough.
 
     The domain in the Message-ID is taken from the sending address, so it
     aligns with From and SPF instead of leaking the machine's hostname.
@@ -118,8 +119,80 @@ def _compose(subject: str, address: str, body: str) -> EmailMessage:
     # RFC 3834: this is machine-generated and nobody should auto-reply to it.
     # It also tells a receiver the mail is transactional rather than bulk.
     message["Auto-Submitted"] = "auto-generated"
-    message.set_content(body, cte="quoted-printable")
+    # Absent, and the relay's scanner fires MISSING_XM_UA: every real mail
+    # client identifies itself, so a message from none looks machine-made in
+    # the way that matters.
+    message["X-Mailer"] = "VideoSync"
+    message.set_content(_plain(body), cte="7bit")
     return message
+
+
+def _plain(body: str) -> str:
+    """Plain ASCII, hard-wrapped, so nothing downstream needs to re-encode it.
+
+    A2 signs our mail and then relays it through MailChannels, and Yahoo
+    reports the signature as broken — with the published key verified
+    byte-for-byte against the one A2 generated. So something alters the
+    message between the signature and the recipient, and the body hash is
+    the fragile part.
+
+    One class of that is ours to remove. A single em-dash forced the whole
+    message to quoted-printable, which soft-wraps long lines with `=`
+    continuations; a relay that re-wraps them differently changes the body
+    and breaks the hash. Pure 7-bit ASCII, hard-wrapped short, gives a relay
+    nothing to rewrite.
+
+    Typography lost: an em-dash becomes a hyphen. A dash is a small price for
+    a message that arrives.
+    """
+    swaps = {"—": "-", "–": "-", "’": "'", "‘": "'",
+             "“": '"', "”": '"', "…": "...", " ": " "}
+    for bad, good in swaps.items():
+        body = body.replace(bad, good)
+    # Anything still outside ASCII — a piece title with an accent, and this
+    # library is full of French ones — would put the message back on
+    # quoted-printable. Decomposed and stripped of its accents rather than
+    # replaced: "3ème Scherzo" becomes "3eme Scherzo", which is readable,
+    # where the obvious `errors="replace"` gives "3?me Scherzo", which looks
+    # like the mail is broken.
+    body = unicodedata.normalize("NFKD", body)
+    body = body.encode("ascii", "ignore").decode("ascii")
+
+    out = []
+    for para in body.split("\n"):
+        if len(para) <= 72:
+            out.append(para)
+            continue
+        line = ""
+        for word in para.split(" "):
+            if line and len(line) + 1 + len(word) > 72:
+                out.append(line)
+                line = word
+            else:
+                line = f"{line} {word}" if line else word
+        if line:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _helo_name() -> str:
+    """What this machine calls itself in the SMTP greeting.
+
+    Python defaults to the system hostname, and this box's is literally
+    `localhost` — so every message arrived announcing `HELO [127.0.0.1]`, and
+    the relay's own scanner fired IE_MM_RCVD_HELO_LOOPBACK_IP on it. A
+    loopback address in a greeting from a public host is a thing only
+    misconfigured senders and spam software do.
+
+    Taken from PUBLIC_BASE_URL, which is the one name this install is already
+    known by and already holds a certificate for.
+    """
+    base = (settings.public_base_url or "").strip()
+    host = base.split("//", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    if host and "." in host and not host.startswith("127."):
+        return host
+    name = socket.getfqdn()
+    return name if "." in name and name != "localhost" else ""
 
 
 def _send(message, address: str) -> None:
@@ -130,13 +203,14 @@ def _send(message, address: str) -> None:
     mail stops arriving and the half that still works hides it.
     """
     try:
+        helo = _helo_name() or None
         if settings.smtp_ssl:
             server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port,
-                                      timeout=30,
+                                      timeout=30, local_hostname=helo,
                                       context=ssl.create_default_context())
         else:
             server = smtplib.SMTP(settings.smtp_host, settings.smtp_port,
-                                  timeout=30)
+                                  timeout=30, local_hostname=helo)
         with server:
             if settings.smtp_starttls and not settings.smtp_ssl:
                 server.starttls(context=ssl.create_default_context())
