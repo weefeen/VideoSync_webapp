@@ -35,7 +35,7 @@ import logging
 import signal
 import time
 
-from .. import storage, store
+from .. import limits, notify, storage, store
 from ..settings import settings
 from . import cloudinit
 from .driver import ComputeError, Driver, LinodeDriver, Machine
@@ -75,6 +75,30 @@ class Scaler:
             return "no COMPUTE_IMAGE to boot from"
         return ""
 
+
+    # -- saying so -------------------------------------------------------
+    def _alarm(self, kind: str, detail: str) -> str:
+        """Record a refusal or failure, and tell the operator about it.
+
+        EVERY condition the scaler will not resolve on its own comes through
+        here. A refusal nobody hears about is indistinguishable from a
+        failure: the queue simply stops moving and the first anybody knows
+        is a visitor asking where their video went.
+
+        Deduped in the database rather than in memory, so a scaler that
+        restarts in a loop does not send the same message on every start —
+        and so the hour between repeats survives the restart too.
+        """
+        logger.error("%s: %s", kind, detail)
+        try:
+            if store.compute_alarm(kind) and limits.allowed("mail_compute", "all"):
+                notify.send_alarm(kind, detail)
+        except Exception:                                # noqa: BLE001
+            # Never allowed to mask the condition it is reporting.
+            logger.warning("could not send the alarm for %s", kind,
+                           exc_info=True)
+        return f"{kind}: {detail}"
+
     # -- what a machine is told at birth ---------------------------------
     def _user_data(self) -> str:
         source = ""
@@ -105,6 +129,13 @@ class Scaler:
         elif not wanted and live:
             acted = self._destroy(live)
 
+        # A tick that got all the way here is a working tick. Clearing
+        # explicitly means the NEXT failure is reported immediately rather
+        # than waiting out the hour between repeats.
+        was = store.compute_alarm_cleared()
+        if was:
+            logger.info("recovered from: %s", was)
+
         return {**shadow, "machine": live.id if live else None, "did": acted}
 
     def _reconcile(self) -> Machine | None:
@@ -114,13 +145,24 @@ class Scaler:
         try:
             ours = self.driver.find_ours()
         except ComputeError as exc:
-            logger.warning("could not list machines: %s", exc)
             # Unknown is not "none". Returning None here would look like
             # "no machine exists" and create a second one.
+            self._alarm(
+                "cannot reach the provider",
+                f"Listing machines failed: {exc}. Nothing has been created "
+                f"or deleted — an API failure and an empty account look the "
+                f"same to the decision, and treating one as the other is how "
+                f"a second machine gets made alongside a render.")
             raise
         if len(ours) > 1:
-            logger.error("%d machines named %s exist; expected at most one. "
-                         "Not touching any of them.", len(ours), LABEL)
+            names = ", ".join(f"{m.label} ({m.id})" for m in ours)
+            self._alarm(
+                "more than one compute machine",
+                f"{len(ours)} machines exist where there should be at most "
+                f"one: {names}. One of them may be rendering somebody's "
+                f"video, and there is no way to tell which — so nothing has "
+                f"been deleted. Delete the idle one by hand in Cloud "
+                f"Manager, and the scaler will carry on.")
             raise ComputeError("more than one compute machine exists")
         return ours[0] if ours else None
 
@@ -129,9 +171,14 @@ class Scaler:
             return f"would create ({self.why_not()})"
         made = store.compute_creates_this_hour()
         if made >= settings.compute_max_creates_per_hour:
-            logger.error("refusing to create: %d already this hour, the "
-                         "ceiling is %d", made, settings.compute_max_creates_per_hour)
-            return "refused, at the hourly ceiling"
+            return self._alarm(
+                "hourly create ceiling reached",
+                f"{made} machines have been created in the last hour and the "
+                f"ceiling is {settings.compute_max_creates_per_hour}. No more "
+                f"will be created until the hour rolls. Either traffic is "
+                f"genuinely that busy, or something is creating and losing "
+                f"machines in a loop — the second is what the ceiling is for, "
+                f"so check before raising it.")
         keys = [settings.compute_ssh_key] if settings.compute_ssh_key else []
         label = f"{LABEL}-{int(time.time())}"
         try:
@@ -139,8 +186,14 @@ class Scaler:
                 label, settings.compute_plan, settings.compute_image,
                 settings.compute_region, self._user_data(), keys)
         except ComputeError as exc:
-            logger.error("create failed: %s", exc)
-            return f"create failed: {exc}"
+            # NOT retried here. A create that failed may still have made a
+            # machine, and retrying is how one becomes three; the next tick
+            # reconciles against the provider and will find it.
+            return self._alarm(
+                "could not create a machine",
+                f"{exc}\n\nWork is queued and nothing is rendering it. The "
+                f"next tick will look again in case the machine was in fact "
+                f"created.")
         store.compute_record_create(machine.id, machine.label)
         return f"created {machine.label} ({machine.id})"
 
@@ -150,8 +203,11 @@ class Scaler:
         try:
             self.driver.destroy(machine.id)
         except ComputeError as exc:
-            logger.error("destroy failed: %s", exc)
-            return f"destroy failed: {exc}"
+            return self._alarm(
+                "could not destroy a machine",
+                f"{machine.label} ({machine.id}) is still running and still "
+                f"being charged for: {exc}. It will be retried, but if this "
+                f"persists delete it in Cloud Manager.")
         store.compute_record_destroy(machine.id)
         return f"destroyed {machine.label}"
 
@@ -167,8 +223,11 @@ class Scaler:
                     logger.info("%s", did["did"])
             except ComputeError as exc:
                 logger.warning("tick skipped: %s", exc)
-            except Exception:                            # noqa: BLE001
+            except Exception as exc:                     # noqa: BLE001
                 logger.exception("tick failed")
+                self._alarm("the scaler hit an unexpected error",
+                            f"{type(exc).__name__}: {exc}\n\nThe loop is "
+                            f"still running and will try again.")
             for _ in range(int(every)):
                 if self._stop:
                     break

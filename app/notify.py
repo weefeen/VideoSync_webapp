@@ -227,6 +227,33 @@ def _send(message, address: str) -> None:
         raise MailError(f"{type(exc).__name__}: {exc}") from exc
 
 
+def send_alarm(kind: str, detail: str) -> None:
+    """Tell the operator the scaler has stopped and will not act.
+
+    Sent when it finds something it refuses to resolve by guessing — two
+    machines where there should be one, a create that failed, the hourly
+    ceiling reached. All of those leave the system in a state that is safe
+    but stuck, and stuck is invisible: the queue simply stops moving and
+    nobody is told.
+
+    Goes to ALERT_EMAIL, not to a visitor.
+    """
+    to = (settings.alert_email or "").strip()
+    if not to or not settings.can_email:
+        return
+    to = one_address(to)
+    message = _compose(
+        f"Compute scaler stopped: {kind}", to,
+        f"The scaler has found something it will not resolve on its own, "
+        f"and has stopped acting until somebody looks.\n\n"
+        f"{detail}\n\n"
+        f"Nothing has been created or deleted. Renders already running are "
+        f"unaffected; new ones will queue until this is cleared.\n\n"
+        f"- VideoSync\n")
+    _send(message, to)
+    logger.info("told the operator the scaler is stuck: %s", kind)
+
+
 def send_compute(action: str, reason: str, *, ready: int = 0,
                  unacked: int = 0, shadow: bool = True,
                  hours: float | None = None,

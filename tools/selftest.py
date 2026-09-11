@@ -1355,10 +1355,32 @@ def check_the_scaler_cannot_run_away() -> str:
         raise Failed("it deleted something while confused about how many "
                      "machines exist")
 
+    # -- a stuck condition must not become 120 emails an hour ------------
+    # The tick runs every 30s and a stuck condition stays stuck, so the
+    # naive version mails on every pass — which is the same as mailing
+    # nobody, because the hundredth is not read.
+    store.compute_alarm_cleared()
+    if not store.compute_alarm("two machines"):
+        raise Failed("a new condition was not reported at all")
+    if store.compute_alarm("two machines"):
+        raise Failed("the same condition reported twice in a row; at 30s "
+                     "ticks that is 120 identical emails an hour")
+    # A DIFFERENT condition is news, even within the hour.
+    if not store.compute_alarm("cannot reach the provider"):
+        raise Failed("a different condition was suppressed as a repeat")
+
+    # Recovering and failing again is reported at once, not after an hour.
+    if store.compute_alarm_cleared() != "cannot reach the provider":
+        raise Failed("clearing did not report what had been wrong")
+    if not store.compute_alarm("cannot reach the provider"):
+        raise Failed("after recovering, the same failure was suppressed — a "
+                     "flapping condition would go unreported")
+    store.compute_alarm_cleared()
+
     store.write_returning("DELETE FROM jobs RETURNING id")
     store.write_returning("DELETE FROM compute_events RETURNING id")
     return (f"off by default; ceiling of {ceiling} survives a restart; "
-            f"a crowded account is refused, not guessed")
+            f"a crowded account is refused; alarms deduped but not muted")
 
 
 def check_linux_configuration_has_no_windows_paths() -> str:

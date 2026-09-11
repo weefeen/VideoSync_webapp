@@ -218,6 +218,12 @@ CREATE TABLE IF NOT EXISTS compute (
     -- What actually exists at the provider, as last seen.
     machine_id    INTEGER,
     machine_label TEXT,
+    -- The last thing the scaler refused to act on, and when it
+    -- last said so. Without these the tick would mail on every
+    -- pass: at 30-second ticks that is 120 identical messages
+    -- an hour, which is the same as sending none.
+    alarm         TEXT,
+    alarm_at      REAL,
     creates     INTEGER NOT NULL DEFAULT 0,
     destroys    INTEGER NOT NULL DEFAULT 0,
     updated     REAL
@@ -295,6 +301,8 @@ _ADDED = (
     ("jobs", "object_key", "TEXT"),
     ("compute", "machine_id", "INTEGER"),
     ("compute", "machine_label", "TEXT"),
+    ("compute", "alarm", "TEXT"),
+    ("compute", "alarm_at", "REAL"),
     ("stage_runs", "cpu_seconds", "REAL"),
     ("stage_runs", "cpu_at_open", "REAL"),
     ("stage_runs", "peak_rss", "INTEGER"),
@@ -946,3 +954,40 @@ def compute_record_destroy(machine_id: int) -> None:
             (time.time(), "destroyed", str(machine_id), 0, 0))
         conn.execute("UPDATE compute SET machine_id = NULL,"
                      " machine_label = NULL WHERE singleton = 1")
+
+
+def compute_alarm(kind: str, repeat_after: float = 3600.0) -> bool:
+    """Record a condition the scaler will not act on. True if it is worth
+    telling somebody.
+
+    The tick runs every thirty seconds and a stuck condition stays stuck, so
+    the naive version sends 120 identical messages an hour — which is the
+    same as sending none, because nobody reads the hundredth. This returns
+    True the first time a condition appears, and then at most once an hour
+    while it persists.
+
+    Clearing is explicit rather than implicit: `compute_alarm_cleared()` is
+    called when a tick completes normally, so the NEXT occurrence is treated
+    as new and reported at once rather than waiting out the hour.
+    """
+    now = time.time()
+    row = compute_row()
+    same = (row["alarm"] or "") == kind
+    last = row["alarm_at"] or 0.0
+    tell = (not same) or (now - last) >= repeat_after
+    if tell:
+        with write() as conn:
+            conn.execute("UPDATE compute SET alarm = ?, alarm_at = ?"
+                         " WHERE singleton = 1", (kind, now))
+    return tell
+
+
+def compute_alarm_cleared() -> str:
+    """A tick completed normally. Returns what had been wrong, if anything."""
+    row = compute_row()
+    was = row["alarm"] or ""
+    if was:
+        with write() as conn:
+            conn.execute("UPDATE compute SET alarm = NULL, alarm_at = NULL"
+                         " WHERE singleton = 1")
+    return was
