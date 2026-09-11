@@ -22,8 +22,15 @@ fronts the site must not expose /metrics.
 """
 from __future__ import annotations
 
+import logging
+import threading
+
+from . import limits
+from . import notify
 from . import store
 from .settings import settings
+
+logger = logging.getLogger(__name__)
 
 # The stage a job is in tells you where the queue is stuck, so every stage
 # is listed even at zero — a series that only appears under load is a
@@ -141,6 +148,8 @@ def render() -> str:
     # before it is given the power to spend money — and so the grace period
     # is chosen from evidence rather than guessed. THE SCRAPE IS THE TICK.
     shadow = store.compute_tick(settings.compute_grace_seconds)
+    if shadow.get("event"):
+        _tell_the_operator(shadow)
 
     family("vsw_queue_ready", "gauge",
            "Jobs accepted and not yet started — what a scaler reads as "
@@ -259,3 +268,33 @@ def compute_decisions(limit: int = 100) -> list[dict]:
         "unacked": r["unacked"],
         "idle_seconds": r["idle"],
     } for r in store.compute_events(limit)]
+
+
+def _tell_the_operator(shadow: dict) -> None:
+    """Mail the operator when a machine would come up or go away.
+
+    On a thread and never allowed to raise: this is called from the metrics
+    endpoint, and a monitoring scrape that fails because a mail server was
+    slow would take the dashboard down with it — the instrument breaking
+    because of the thing it is instrumenting.
+    """
+    event = shadow["event"]
+    hours = shadow["would_run"] / 3600.0
+
+    def work() -> None:
+        try:
+            if not limits.allowed("mail_compute", "all"):
+                logger.info("not mailing the compute notice: over the daily cap")
+                return
+            notify.send_compute(
+                event["action"], event["reason"],
+                ready=shadow["ready"], unacked=shadow["unacked"],
+                # Until a provider call exists, nothing is really created.
+                # Saying otherwise would be a lie in the one channel that has
+                # to stay trustworthy.
+                shadow=True,
+                hours=hours, cost=hours * settings.compute_hourly_cost)
+        except Exception:                             # noqa: BLE001
+            logger.warning("could not send the compute notice", exc_info=True)
+
+    threading.Thread(target=work, name="compute-mail", daemon=True).start()

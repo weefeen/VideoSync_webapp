@@ -82,6 +82,12 @@ RULES = {
     "mail_email": Rule(_n("LIMIT_MAIL_PER_EMAIL_WEEK", 4), WEEK, "mail cap reached"),
     "mail_queued_email": Rule(_n("LIMIT_QUEUED_MAIL_PER_EMAIL_WEEK", 4), WEEK,
                               "queued-notice cap reached"),
+    # Operational mail, in its OWN bucket. A scaler that flaps would
+    # otherwise spend the allowance belonging to the message that tells
+    # somebody their video is ready — the same mistake the queued notice
+    # made, and the reason that one has its own bucket too.
+    "mail_compute": Rule(_n("LIMIT_COMPUTE_MAIL_PER_DAY", 40), DAY,
+                         "compute-notice cap reached"),
     "mail_total": Rule(_n("LIMIT_MAIL_PER_DAY", 200), DAY, "daily mail cap reached"),
 }
 

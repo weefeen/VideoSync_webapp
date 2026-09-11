@@ -126,6 +126,9 @@ class Settings:
     # Grace is the single largest cost lever: creating costs ~2 minutes of a
     # visitor's wait, so tearing down the instant a job ends makes the next
     # one pay that again. Ten minutes is the design's starting figure.
+    # Where operational mail goes. The operator's own mailbox,
+    # never a visitor's, and nothing a visitor causes reaches it.
+    alert_email: str = ""
     compute_grace_seconds: float = 600.0
     # What an hour of the plan costs, for turning hours into money on the
     # dashboard. 8 GB / 4 dedicated cores is the size the measurements argue
@@ -346,6 +349,7 @@ def load() -> Settings:
         object_bucket=os.getenv("OBJECT_BUCKET", "").strip(),
         object_key=os.getenv("OBJECT_KEY", "").strip(),
         object_secret=os.getenv("OBJECT_SECRET", "").strip(),
+        alert_email=os.getenv("ALERT_EMAIL", "").strip(),
         compute_grace_seconds=_number("COMPUTE_GRACE_SECONDS", 600.0),
         compute_hourly_cost=_number("COMPUTE_HOURLY_COST", 0.108),
         geoip_db=_one("GEOIP_DB"),

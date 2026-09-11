@@ -800,9 +800,17 @@ def compute_tick(grace_seconds: float) -> dict[str, Any]:
                 (now, event[0], event[1], ready, unacked,
                  None if idle_since is None else round(now - idle_since, 1)))
 
-    return {"state": state, "ready": ready, "unacked": unacked,
-            "idle_seconds": 0.0 if idle_since is None else now - idle_since,
-            "would_run": would_run, "creates": creates, "destroys": destroys}
+    result = {"state": state, "ready": ready, "unacked": unacked,
+              "idle_seconds": 0.0 if idle_since is None else now - idle_since,
+              "would_run": would_run, "creates": creates,
+              "destroys": destroys}
+    # Only when the decision actually FLIPPED, never on the ticks in between.
+    # The tick runs on every scrape; mailing per tick would be two an hour
+    # forever and the messages would stop being read, which is the same as
+    # not sending them.
+    if event:
+        result["event"] = {"action": event[0], "reason": event[1]}
+    return result
 
 
 def compute_events(limit: int = 100) -> list[sqlite3.Row]:

@@ -150,6 +150,52 @@ def _send(message, address: str) -> None:
         raise MailError(f"{type(exc).__name__}: {exc}") from exc
 
 
+def send_compute(action: str, reason: str, *, ready: int = 0,
+                 unacked: int = 0, shadow: bool = True,
+                 hours: float | None = None,
+                 cost: float | None = None) -> None:
+    """Tell the operator a compute machine came up or went away.
+
+    Goes to ALERT_EMAIL, never to a visitor: this is an operational fact and
+    the address is the operator's own mailbox.
+
+    `shadow` says whether a machine really was created. While the scaler is
+    in shadow nothing is created at all, and a message that said "created" of
+    a machine that does not exist would be a lie that costs trust in every
+    later message. It says "would have" until the scaler is real.
+
+    Its own subject prefix so these thread separately from visitor mail, and
+    its own rate-limit bucket at the caller, so a flapping scaler cannot
+    spend the allowance of the mail that tells somebody their video is ready.
+    """
+    to = (settings.alert_email or "").strip()
+    if not to or not settings.can_email:
+        return
+    to = one_address(to)
+
+    verb = {"would-create": "would have been created",
+            "would-destroy": "would have been destroyed",
+            "created": "was created",
+            "destroyed": "was destroyed"}.get(action, action)
+    mark = "[shadow] " if shadow else ""
+
+    lines = [f"A compute machine {verb}.", "", f"Why: {reason}", "",
+             f"Queue at that moment: {ready} waiting, {unacked} being rendered."]
+    if hours is not None:
+        money = f" (about ${cost:.2f})" if cost is not None else ""
+        lines += ["", f"Machine-hours so far: {hours:.2f}{money}."]
+    if shadow:
+        lines += ["", "NOTHING WAS ACTUALLY CREATED OR DESTROYED. The scaler "
+                      "is recording what it would do, so its decisions can be "
+                      "judged against real traffic before it is given the "
+                      "power to spend money."]
+    lines += ["", "— VideoSync"]
+
+    message = _compose(f"{mark}Compute: {verb}", to, "\n".join(lines) + "\n")
+    _send(message, to)
+    logger.info("told the operator a machine %s", verb)
+
+
 def send_queued(job_id: str, address: str, piece: str = "",
                 ahead: int = 0, minutes: float | None = None) -> None:
     """Send one "we have it, here is roughly how long" message.
