@@ -2174,6 +2174,67 @@ def check_the_bot_check_is_wired_and_inert_by_default() -> str:
     return "off with no keys, both-or-neither to switch on, wired into upload"
 
 
+def check_a_compute_node_gets_no_dangerous_secret() -> str:
+    """The .env sent to a disposable render node withholds what could hurt.
+
+    A compute node is the box that runs strangers' media through ffmpeg,
+    torch and librosa — the component most likely to be compromised — and it
+    is thrown away after each use. What travels to it in cloud-init decides
+    the blast radius of a compromise. Three things must never reach it:
+
+      * the Linode token (it can create and destroy machines — spend money),
+      * the SMTP password and ALERT_EMAIL (it sends no mail),
+      * the Turnstile secret (it serves no pages and checks no bots),
+
+    and the full-bucket object-storage key must be replaced by a SCOPED one
+    when configured, so a popped node cannot read or delete every visitor's
+    video and the DB backups.
+    """
+    from app.compute import cloudinit
+
+    source = "\n".join([
+        "LINODE_TOKEN=MONEY",
+        "SMTP_PASSWORD=mailpw",
+        "ALERT_EMAIL=op@example.com",
+        "TURNSTILE_SECRET=botsecret",
+        "OBJECT_ENDPOINT=eu.example.com",
+        "OBJECT_BUCKET=vsw",
+        "OBJECT_KEY=FULLKEY",
+        "OBJECT_SECRET=FULLSECRET",
+        "OBJECT_KEY_COMPUTE=SCOPEDKEY",
+        "OBJECT_SECRET_COMPUTE=SCOPEDSECRET",
+        "SCORE_ROOT_DIGITAL=/srv/vsw/scores",
+    ])
+    env = cloudinit.environment(source, "amqp://vsw:pw@10.0.0.2:5672/vsw")
+
+    for poison, what in (("MONEY", "the Linode token"),
+                         ("mailpw", "the SMTP password"),
+                         ("op@example.com", "ALERT_EMAIL"),
+                         ("botsecret", "the Turnstile secret"),
+                         ("FULLSECRET", "the FULL-BUCKET object secret"),
+                         ("FULLKEY", "the full-bucket object key")):
+        if poison in env:
+            raise Failed(f"a compute node's .env carries {what}. That box runs "
+                         f"attacker-supplied media and is disposable; this is "
+                         f"exactly what must not travel to it.")
+
+    if "SCOPEDKEY" not in env or "SCOPEDSECRET" not in env:
+        raise Failed("the scoped compute object-storage key was configured "
+                     "but did not reach the node; it would have no way to "
+                     "upload the result")
+
+    # And with no scoped key, the full key is sent but marked, so nobody
+    # believes compute is contained when it is not.
+    no_scope = "\n".join(["OBJECT_KEY=FULLKEY", "OBJECT_SECRET=FULLSECRET"])
+    env2 = cloudinit.environment(no_scope, "amqp://vsw:pw@10.0.0.2:5672/vsw")
+    if "OBJECT_SCOPED=NO" not in env2:
+        raise Failed("with no scoped key the full key is sent, but nothing "
+                     "marks that the node is NOT contained — turning compute "
+                     "on would silently hand it the full bucket")
+
+    return "linode/smtp/alert/turnstile/full-bucket withheld; scoped key sent"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2336,6 +2397,7 @@ def main() -> int:
         check_a_cross_site_request_is_refused,
         check_a_job_id_is_not_guessable,
         check_the_bot_check_is_wired_and_inert_by_default,
+        check_a_compute_node_gets_no_dangerous_secret,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

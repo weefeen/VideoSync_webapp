@@ -35,8 +35,19 @@ import shlex
 
 # Never sent to a compute node, whatever the source .env happens to contain.
 # Matched as prefixes, so SMTP_PASSWORD goes with the rest of the family.
+#
+# TURNSTILE_ is withheld because the worker serves no pages and checks no
+# bots — the secret would be sitting on the most-exposed box (the one running
+# strangers' media through ffmpeg) for nothing.
+#
+# OBJECT_KEY / OBJECT_SECRET are withheld here and re-emitted below, so the
+# node can be given a SCOPED credential instead of the web box's full-bucket
+# one. The full key can read and delete every visitor's video and every DB
+# backup; handing that to the box most likely to be popped by hostile media
+# undoes the disposable-node containment. See `environment`.
 WITHHELD = ("LINODE_TOKEN", "SMTP_", "ALERT_EMAIL", "COMPUTE_",
-            "TRUST_PROXY", "PUBLIC_BASE_URL", "GEOIP_DB")
+            "TRUST_PROXY", "PUBLIC_BASE_URL", "GEOIP_DB", "TURNSTILE_",
+            "OBJECT_KEY", "OBJECT_SECRET")
 
 WORKER_UNIT = """[Unit]
 Description=VideoSync render worker
@@ -73,12 +84,14 @@ def environment(source: str, broker_url: str,
     Removing what must not travel is a rule that stays correct as settings
     are added.
     """
+    values: dict[str, str] = {}
     out = []
     for line in source.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
-        name = stripped.split("=", 1)[0].strip()
+        name, value = (p.strip() for p in stripped.split("=", 1))
+        values[name] = value
         if any(name.startswith(p) for p in WITHHELD):
             continue
         if name in ("RABBITMQ_URL", "WORK_DIR"):
@@ -87,6 +100,23 @@ def environment(source: str, broker_url: str,
 
     out.append(f"RABBITMQ_URL={broker_url}")
     out.append(f"WORK_DIR={work_dir}")
+
+    # The object-storage credential the node uploads results with. Prefer a
+    # SCOPED one — OBJECT_KEY_COMPUTE / OBJECT_SECRET_COMPUTE on the web box —
+    # emitted under the ordinary names the worker reads. That key should be
+    # limited to writing under jobs/ with no delete and no read of backups/,
+    # so a compromised node cannot wipe the bucket or read other visitors'
+    # videos. If it is not configured, the web box's full-bucket key is sent
+    # as before and a marker line records that the containment is not in
+    # place — visible in the node's .env and in `redacted` output, so nobody
+    # turns compute on believing it is scoped when it is not.
+    key = values.get("OBJECT_KEY_COMPUTE") or values.get("OBJECT_KEY", "")
+    secret = values.get("OBJECT_SECRET_COMPUTE") or values.get("OBJECT_SECRET", "")
+    scoped = bool(values.get("OBJECT_KEY_COMPUTE"))
+    if key or secret:
+        out.append(f"OBJECT_KEY={key}")
+        out.append(f"OBJECT_SECRET={secret}")
+        out.append(f"# OBJECT_SCOPED={'yes' if scoped else 'NO-full-bucket-key'}")
     return "\n".join(out) + "\n"
 
 
