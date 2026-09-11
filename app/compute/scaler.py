@@ -123,11 +123,19 @@ class Scaler:
                                     settings.compute_keep_if_arrivals)
         wanted = shadow["state"] == "wanted"
 
+        # There is actual work, right now.
+        busy = (shadow["ready"] + shadow["unacked"]) > 0
+
         acted = ""
-        if wanted and not live:
+        if wanted and not live and busy:
             acted = self._create()
         elif not wanted and live:
             acted = self._destroy(live)
+        # `wanted` with no machine and NO WORK is not a reason to create one.
+        # The hour-aligned rule holds the state at `wanted` through the hour
+        # already paid for, which is right for KEEPING a machine and
+        # meaningless without one — it would otherwise create a machine to
+        # sit idle until the boundary it was waiting for.
 
         # A tick that got all the way here is a working tick. Clearing
         # explicitly means the NEXT failure is reported immediately rather

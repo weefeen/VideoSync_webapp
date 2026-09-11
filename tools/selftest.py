@@ -1325,6 +1325,21 @@ def check_the_scaler_cannot_run_away() -> str:
     if "would create" not in did["did"]:
         raise Failed(f"expected a would-create while off, got {did['did']!r}")
 
+    # -- and `wanted` with no work is NOT a reason to create -------------
+    # The hour-aligned rule holds the state at `wanted` through the hour
+    # already paid for. That is right for KEEPING a machine and meaningless
+    # without one: acting on it would create a machine to sit idle until
+    # the boundary it was waiting for.
+    store.write_returning("DELETE FROM jobs RETURNING id")
+    idle = scl.Scaler(driver=drv.FakeDriver())
+    after = idle.tick()
+    if after["state"] != "wanted":
+        raise Failed("the fixture is wrong; the state should still be wanted")
+    if after["did"]:
+        raise Failed(
+            f"acted on an empty queue: {after['did']!r}. A paid hour is a "
+            f"reason to keep a machine, never a reason to make one")
+
     # -- the ceiling counts what happened, not what we remember ----------
     store.write_returning("DELETE FROM compute_events RETURNING id")
     ceiling = settings.compute_max_creates_per_hour
