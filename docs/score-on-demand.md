@@ -10,7 +10,8 @@ render, and anything that parks a visitor's job or promises them a mail (§6).
 
 **Alive:** the demand mail (§7), because knowing *what* to engrave is useful
 however fast the engraving is. Revised per the owner: **every request mails
-immediately**, with the count in the subject — not batched. See the note in §7.
+immediately, with no batching and no bookkeeping** — the second person never
+generates a mail, because by then the score is published. See §7.
 
 **Also alive, independent of all of it:** §1 is a set of verified findings
 about the code, three of them live defects. Those are in `status.md`.
@@ -341,22 +342,33 @@ the `jobs` row. A check builds the body from a fixture whose name, email and
 client are poison strings and asserts none of them appear — the same shape as
 `check_the_courtesy_mail_cannot_starve_the_promise`.
 
-**Not batched — decided by the owner.** The draft grouped repeat requests for
-a piece already reported: the first mailed at once, and further asks only after
-24 hours and only if the count had grown, so a piece that went viral produced
-one mail a day rather than forty. The owner's answer was that an email as soon
-as a request arrives is better, and it is his inbox.
+**No batching, no bookkeeping — and the reason matters.** The draft grouped
+repeat requests for a piece already reported: the first mailed at once, further
+asks only after 24 hours and only if the count had grown, so a piece that went
+viral produced one mail a day rather than forty. It proposed a `demand_mail`
+table to track that.
 
-So: **every `unavailable` recognition mails immediately**, with the count in
-the subject — `Score wanted: Op. 25 · Etude No. 11 (3rd request)` — so a repeat
-is obvious without opening it. The counts still come from `recognitions` and
-are never duplicated elsewhere.
+The owner's answer removed the problem rather than the mechanism: **the second
+person will not generate a mail, because by then the score is published.** He
+engraves on the first mail, so a piece stops being `unavailable` before anyone
+else asks for it. Repeats only exist inside the gap between the first request
+and publication, and he intends that gap to be short.
+
+So the rule is one line, with no state of its own:
+
+> On an `unavailable` recognition, mail the owner.
+
+A published piece is not `unavailable`, so silence after publication is
+automatic and needs no check for it. There is no `demand_mail` table, no
+timestamps, no count-has-grown comparison, and no count in the subject — a
+count that reads "(1st request)" on almost every mail is noise, and in the rare
+gap case two mails say the same thing a count would.
 
 The one backstop kept is the `mail_demand` bucket at 20/day. Not to spare the
 owner, who has asked for the volume, but because every mail bucket in this
 system also protects the others: `history.md` records the queued notice
 silently eating the ready mail when they shared one allowance, and a piece
-going viral must not be able to do the same to the visitors' mail.
+going viral in the gap must not be able to do the same to the visitors' mail.
 
 `unrecognised` outcomes are not demand. There is no piece to name.
 
