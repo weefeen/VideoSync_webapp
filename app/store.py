@@ -258,23 +258,6 @@ MIN_DAYS_OF_EVIDENCE = 7
 # States a job can be in. `queued` is the new one and the point of this
 # module: work that has been accepted but has not started.
 QUEUED, RUNNING, DONE, ERROR = "queued", "running", "done", "error"
-# Asked for, and not renderable yet because no score is installed for the
-# piece. NOT a failure and NOT in the queue: every other query selects by
-# explicit state, so no worker reaches a held job and `compute_tick` never
-# counts one as work wanting a machine.
-#
-# It exists because the alternative is that the request dies at the door.
-# There are about 235 Chopin scores in principle and the library holds a
-# handful, so "we do not have that one" is the common answer today — and
-# refusing meant the upload, the address and the recognition were all thrown
-# away, leaving nothing to continue when the score was engraved an hour
-# later.
-#
-# Released by hand with `tools/retrigger.py`, never automatically: the
-# operator is the one who knows whether the package he just built is right,
-# and a render that starts on its own can only be judged after it has spent
-# the machine time.
-HELD = "held"
 LIVE = (QUEUED, RUNNING)
 
 _lock = threading.RLock()
@@ -448,20 +431,6 @@ def waiting() -> list[sqlite3.Row]:
     """
     return query("SELECT * FROM jobs WHERE state = ?"
                  " ORDER BY priority DESC, queued_at, id", (QUEUED,))
-
-
-def held() -> list[sqlite3.Row]:
-    """Requests waiting for a score nobody has engraved yet.
-
-    Oldest first. The person who has waited longest is the one to release
-    first, and it is the order the operator will want to read them in.
-
-    Deliberately not folded into `waiting()`: that function is the line, and
-    the line is what the worker serves and what the queue position is
-    counted against. A held job is not in the line. It is not anywhere until
-    somebody installs a score and releases it.
-    """
-    return query("SELECT * FROM jobs WHERE state = ? ORDER BY created", (HELD,))
 
 
 def running() -> sqlite3.Row | None:

@@ -1,46 +1,55 @@
-"""Release a request that could not be rendered when it was made.
+"""Start a render on a visitor's behalf, or run a failed one again.
 
-Two kinds of job end up here.
+A request for a piece with no score installed is refused, and that is the
+end of it: nothing is parked and nothing waits. What survives is the trace -
+the recording on disk under its job id, the recognition in its table, and
+the mail this sent you, which carries the job id, the folder name to build
+and the visitor's address.
 
-A HELD job was asked for when no score was installed for the piece. The
-recording, the address and the score name the visitor chose were all kept,
-so once the package is on the server there is nothing missing — the job just
-has to be put back in the queue.
+So once the score is engraved and on the server, one command finishes the
+job somebody asked for days ago:
 
-A FAILED job ran and did not finish. Its score may have been wrong, the
-engraving may have had a bad band, or ffmpeg may have died. Releasing it
-starts a fresh attempt against whatever is on disk now.
+    python tools/retrigger.py <job_id> --score "<folder name>" --email <addr>
 
-Nothing releases either kind on its own, deliberately. A held job becomes
-renderable the moment a folder appears in the score root, and a render costs
-real minutes on a machine somebody is paying for; the person who built the
-package is the one who knows whether it is finished, so the trigger is his.
+The address is typed in from that mail because the refused request never
+stored it. Leave `--email` off and the video is made but nobody is told.
+
+The other use is a render that ran and failed - a bad band in the engraving,
+a recording over the memory cap, ffmpeg dying. Its address is on the row
+already, so it needs nothing but the job id.
 
 Usage:
-    python tools/retrigger.py                 # what is waiting, and why
-    python tools/retrigger.py <job_id>        # release that one
-    python tools/retrigger.py --held          # every held job that can now run
-    python tools/retrigger.py --failed        # every failed job, again
+    python tools/retrigger.py                       # what failed, and what
+                                                    # was asked for and refused
+    python tools/retrigger.py <job_id> --score S --email A
+    python tools/retrigger.py <job_id>              # run a failed job again
+    python tools/retrigger.py --failed              # every failed job again
+
+Nothing here runs on its own. A render costs real minutes on a machine
+somebody is paying for, and the person who built the package is the one who
+knows whether it is finished.
 
 This writes the job row and stops there. It never talks to the broker: the
-web process sweeps for queued work that was never handed over and offers it
-within about half a minute. That is the same path a lost handover already
-takes, so there is one recovery route rather than two, and this works
-whether the queue is RabbitMQ or in-process.
+web process already sweeps for queued work that was never handed over and
+offers it within about half a minute. That is the same path a lost handover
+takes, so there is one recovery route rather than two, and it works whether
+the queue is RabbitMQ or in-process.
 
-The web application does NOT need restarting. It does need to be running,
-or nothing will pick the job up until it is.
+The web application does NOT need restarting. It does need to be running, or
+nothing will pick the job up until it is.
 """
 
 import argparse
+import json
 import pathlib
 import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from app import pipeline                        # noqa: E402
-from app import store                           # noqa: E402
+from app import notify                            # noqa: E402
+from app import pipeline                          # noqa: E402
+from app import store                             # noqa: E402
 
 WIDTH = 78
 
@@ -56,31 +65,40 @@ def _age(seconds: float | None) -> str:
     return f"{delta / 86400:.0f} d"
 
 
-def _installed(score: str | None) -> bool:
-    """Is there a package this job could run against right now?"""
-    return bool(score) and pipeline.find_package(score) is not None
+def _refused() -> list:
+    """Uploads that were named and had no score, newest first.
+
+    Reconstructed from `recognitions`, because the request itself left no row
+    of its own - that is what "it died" means. `outcome = 'unavailable'` is
+    exactly "we named the piece and have no score for it".
+    """
+    return store.query(
+        "SELECT r.job_id, r.at, r.title, r.candidates, r.duration,"
+        "       j.upload, j.state"
+        "  FROM recognitions r JOIN jobs j ON j.id = r.job_id"
+        " WHERE r.outcome = 'unavailable'"
+        " ORDER BY r.at DESC LIMIT 30")
 
 
-def show() -> int:
-    """List what is waiting. Returns the number of releasable jobs."""
-    held = store.held()
+def _editions(candidates_json: str | None) -> list[str]:
+    """The folder names that recording backs, in the order offered."""
+    try:
+        candidates = json.loads(candidates_json or "[]")
+    except (TypeError, ValueError):
+        return []
+    names: list[str] = []
+    for candidate in candidates:
+        for name in candidate.get("editions") or []:
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def show() -> None:
+    """What failed, and what was asked for and refused."""
     failed = store.query(
         "SELECT * FROM jobs WHERE state = ? ORDER BY finished DESC LIMIT 20",
         (store.ERROR,))
-
-    ready = 0
-
-    print()
-    print("HELD - asked for before the score existed")
-    print("-" * WIDTH)
-    if not held:
-        print("  nothing held")
-    for row in held:
-        can = _installed(row["score"])
-        ready += can
-        mark = "READY" if can else "no score yet"
-        print(f"  {row['id']}  waited {_age(row['created']):>7}  [{mark}]")
-        print(f"      wants: {row['score']}")
 
     print()
     print("FAILED - ran and did not finish")
@@ -95,71 +113,104 @@ def show() -> int:
             print(f"      error: {str(row['error'])[:60]}")
 
     print()
-    if ready:
-        print(f"{ready} held job(s) can run now:  "
-              f"python tools/retrigger.py --held")
+    print("REFUSED - named the piece, no score installed")
+    print("-" * WIDTH)
+    refused = _refused()
+    if not refused:
+        print("  nothing refused")
+    for row in refused:
+        names = _editions(row["candidates"])
+        wanted = names[0] if names else "(no edition offered)"
+        have = pipeline.find_package(wanted) is not None if names else False
+        gone = not pathlib.Path(row["upload"] or "").is_file()
+        mark = "SCORE IS NOW INSTALLED" if have else "no score"
+        if gone:
+            mark = "recording gone"
+        minutes = f"{row['duration'] / 60:.1f} min" if row["duration"] else "?"
+        print(f"  {row['job_id']}  {_age(row['at']):>7} ago  "
+              f"{minutes:>9}  [{mark}]")
+        print(f"      {row['title'] or ''}")
+        print(f"      wants: {wanted}")
+        if have and not gone:
+            print(f"      python tools/retrigger.py {row['job_id']} "
+                  f'--score "{wanted}" --email <from the mail>')
+
     print()
-    return ready
+    print("An address is not stored for a refused request. It is in the mail")
+    print("that reported it, and is typed back in with --email.")
+    print()
 
 
-def release(row, *, force: bool = False) -> bool:
-    """Put one job back in the queue. True if it was released.
-
-    The mode is deliberately not carried over from the held row — it was
-    never chosen, because choosing it needs the package and the package did
-    not exist. `pipeline.choose_mode` settles it here against the real
-    thing.
-    """
+def start(row, score: str | None, address: str | None) -> bool:
+    """Queue one job. True if it was queued."""
     job_id = row["id"]
-    score = row["score"]
-    package = pipeline.find_package(score) if score else None
+    score = score or row["score"]
+    if not score:
+        print(f"  {job_id}: no score given and none on the row - use --score")
+        return False
 
+    upload = pathlib.Path(row["upload"] or "")
+    if not upload.is_file():
+        print(f"  {job_id}: the recording is gone from {upload}")
+        return False
+
+    package = pipeline.find_package(score)
     if package is None:
-        if not force:
-            print(f"  {job_id}: no package named {score!r} - not released")
-            return False
-        print(f"  {job_id}: no package named {score!r} - releasing anyway, "
-              f"it will fail")
+        print(f"  {job_id}: no package named {score!r}. Build it first, or "
+              f"check the name character for character - the lookup is exact.")
+        return False
 
-    mode = row["mode"]
-    if package is not None:
-        try:
-            mode = pipeline.choose_mode(package, None)
-        except Exception as exc:                       # noqa: BLE001
-            print(f"  {job_id}: {package.name} cannot be rendered - {exc}")
-            return False
+    try:
+        mode = pipeline.choose_mode(package, None)
+    except Exception as exc:                           # noqa: BLE001
+        print(f"  {job_id}: {package.name} cannot be rendered - {exc}")
+        return False
 
-    store.update_job(
-        job_id,
+    fields = dict(
         state=store.QUEUED,
+        score=package.name,
         mode=mode,
-        # A fresh attempt, so a message still in flight from the previous run
+        # A fresh attempt, so a message still in flight from a previous run
         # cannot be mistaken for this one's and overwrite what it produces.
         attempt=(row["attempt"] or 1) + 1,
         queued_at=time.time(),
-        # NULL is what tells the sweep this work was never handed over. It is
-        # the whole mechanism by which this script reaches the worker.
+        # NULL is what tells the sweep this work was never handed over, and
+        # is the whole mechanism by which this script reaches the worker.
         published_at=None,
         started=None, finished=None,
         error=None, result=None,
         stage=None, detail="")
-    print(f"  {job_id}: queued against {score}")
+
+    if address:
+        try:
+            fields["email"] = notify.one_address(address)
+        except notify.MailError:
+            print(f"  {job_id}: {address!r} does not look like one address")
+            return False
+
+    store.update_job(job_id, **fields)
+    told = fields.get("email") or row["email"]
+    print(f"  {job_id}: queued against {package.name}")
+    print(f"      {'mails ' + told if told else 'NOBODY WILL BE TOLD - no address'}")
     return True
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("job_id", nargs="?", help="the job to release")
-    parser.add_argument("--held", action="store_true",
-                        help="release every held job whose score is installed")
+    parser = argparse.ArgumentParser(
+        description="Start a render on a visitor's behalf, or run a failed "
+                    "one again.")
+    parser.add_argument("job_id", nargs="?", help="the job to render")
+    parser.add_argument("--score", help="the package folder name to render "
+                                        "against. Needed for a refused "
+                                        "request, which never stored one.")
+    parser.add_argument("--email", help="where to send the finished video. "
+                                        "Typed in from the mail that "
+                                        "reported the request.")
     parser.add_argument("--failed", action="store_true",
-                        help="try every failed job again")
-    parser.add_argument("--force", action="store_true",
-                        help="release even with no package, so it fails "
-                             "visibly rather than sitting held")
+                        help="run every failed job again")
     args = parser.parse_args()
 
-    if not (args.job_id or args.held or args.failed):
+    if not (args.job_id or args.failed):
         show()
         return 0
 
@@ -169,28 +220,24 @@ def main() -> int:
         if row is None:
             print(f"no job {args.job_id!r}")
             return 1
-        if row["state"] not in (store.HELD, store.ERROR, store.DONE):
-            print(f"job {args.job_id} is {row['state']}; only held, failed "
-                  f"or finished jobs can be released")
+        if row["state"] in store.LIVE:
+            print(f"job {args.job_id} is already {row['state']}")
             return 1
         rows = [row]
-    else:
-        if args.held:
-            rows += list(store.held())
-        if args.failed:
-            rows += list(store.query(
-                "SELECT * FROM jobs WHERE state = ? ORDER BY finished",
-                (store.ERROR,)))
+    elif args.failed:
+        rows = list(store.query(
+            "SELECT * FROM jobs WHERE state = ? ORDER BY finished",
+            (store.ERROR,)))
 
     if not rows:
-        print("nothing to release")
+        print("nothing to do")
         return 0
 
     print()
-    released = sum(release(r, force=args.force) for r in rows)
+    queued = sum(start(r, args.score, args.email) for r in rows)
     print()
-    print(f"{released} of {len(rows)} released. The web application picks "
-          f"them up within about half a minute.")
+    print(f"{queued} of {len(rows)} queued. The web application picks them "
+          f"up within about half a minute.")
     print()
     return 0
 

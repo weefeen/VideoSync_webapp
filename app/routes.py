@@ -872,11 +872,18 @@ def api_render(job_id: str):
         return jsonify({"error": "Pick a score first."}), 400
 
     package = pipeline.find_package(score)
-    # Not installed, and never offered for this recording either: that is a
-    # name somebody invented, and it is refused as it always was. Not
-    # installed but genuinely one of this recording's editions is a piece
-    # nobody has engraved yet, and it is held instead — see `Registry.hold`.
-    if package is None and score not in _editions_offered(job.id):
+    if package is None:
+        # The request dies here, as it always did. Nothing is parked and the
+        # visitor is told plainly that the score is not in the library.
+        #
+        # What is new is that it leaves a trace worth acting on: if the
+        # recogniser itself offered this edition for this recording, then it
+        # is a piece nobody has engraved rather than a name somebody
+        # invented, and the operator is told so — with the folder name to
+        # produce, and with the address, so the render can be started on the
+        # visitor's behalf once the score exists.
+        if score in _editions_offered(job.id):
+            jobs.say_a_score_is_wanted(job, score, address)
         return jsonify({"error": f"No score package named {score!r}."}), 400
 
     try:
@@ -889,19 +896,13 @@ def api_render(job_id: str):
     # the allowance rather than testing it, and it used to run before the
     # score was resolved — so asking for a piece this install does not have
     # cost one of the three renders that address gets for a week, and
-    # returned an error for it. A held request does spend one, because it is
-    # going to be rendered; a refusal now spends nothing.
+    # returned an error for it.
     try:
         limits.guard("render_ip", limits.client_key(request))
         if address:
             limits.guard("render_email", address)
     except limits.Refused as exc:
         return jsonify({"error": str(exc)}), 429, {"Retry-After": str(exc.retry_after)}
-
-    if package is None:
-        job.email = address
-        jobs.registry.hold(job, score, style, body.get("meta") or {})
-        return jsonify({"job": job.public(), "held": True}), 202
 
     mode = body.get("mode") or None
     try:

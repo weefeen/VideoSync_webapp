@@ -1460,105 +1460,6 @@ def check_the_recogniser_is_marked_right_or_wrong() -> str:
     return "accepted, overridden and unrecognised all distinguished"
 
 
-def check_a_request_without_a_score_is_kept() -> str:
-    """Asking for a piece nobody has engraved holds the job instead of losing it.
-
-    There are about 235 Chopin scores in principle and the library holds a
-    handful, so "we do not have that one" is the ordinary answer today. It
-    used to be a 400: the recording stayed on disk, the recognition stayed in
-    its table, and THE ADDRESS WAS THROWN AWAY - so engraving the score an
-    hour later left no way to deliver it to the person who prompted it.
-
-    Four properties, and the third is the one that could cost money.
-
-      * a held job keeps all three things a render needs later: the
-        recording, the address, and the score name the visitor chose.
-      * it is not in the queue. Every other query selects by explicit state,
-        so `waiting`, `unfinished` and `position` must all ignore it - a held
-        job quoted a queue position would be promising a wait it cannot
-        estimate.
-      * IT MUST NOT MAKE THE SCALER WANT A MACHINE. A hundred requests
-        parked waiting for engravings that take days, each one counting as
-        work, would hold a Linode open around the clock for nothing. This is
-        the failure the whole compute design was built to prevent, arriving
-        through a side door.
-      * releasing it - what `tools/retrigger.py` writes - puts it back as
-        queued work the sweep will hand over, on a fresh attempt so a late
-        message from the previous run cannot overwrite this one's result.
-    """
-    from app import jobs, store
-
-    upload = ROOT / "tools" / "selftest.py"      # any file that exists
-    job = jobs.Job(id="held-check", original_name="perf.mp4",
-                   upload_path=upload, client="203.0.113.9", duration=272.0)
-    job.save()
-    job.email = "visitor@example.invalid"
-    wanted = "Op.25_12 Etudes_(Breitkopf)__025-11-BH"
-    # style=None rather than a real one: building a Style pulls in the
-    # renderer, and these checks run where cairo is absent.
-    jobs.registry.hold(job, wanted, None, {})
-
-    row = store.get_job("held-check")
-    if row["state"] != store.HELD:
-        raise Failed(f"the request came back {row['state']!r}, not held")
-    for column, expected in (("email", "visitor@example.invalid"),
-                             ("score", wanted)):
-        if row[column] != expected:
-            raise Failed(
-                f"a held job lost its {column}: {row[column]!r}. All three of "
-                f"the recording, the address and the score name have to "
-                f"survive, or releasing it later cannot finish the job.")
-    if row["mode"] is not None:
-        raise Failed("a held job stored a mode. The mode is chosen against "
-                     "the real package, which does not exist yet, so storing "
-                     "one now is a guess nobody will recheck.")
-
-    if any(r["id"] == "held-check" for r in store.waiting()):
-        raise Failed("a held job is in the queue. A worker will take it and "
-                     "fail, because there is no score to render against.")
-    if any(r["id"] == "held-check" for r in store.unfinished()):
-        raise Failed("a held job is in unfinished(), so a restart would "
-                     "treat it as work to resume")
-    if store.position("held-check") is not None:
-        raise Failed("a held job was given a queue position. It is not in "
-                     "the line and there is no honest wait to quote.")
-    if not any(r["id"] == "held-check" for r in store.held()):
-        raise Failed("a held job is not listed by held(), so retrigger.py "
-                     "cannot find it and nobody will ever release it")
-
-    decision = store.compute_tick(grace_seconds=600.0)
-    if decision.get("action") not in (None, "none", ""):
-        raise Failed(
-            f"a held job made the scaler decide {decision.get('action')!r}. "
-            f"Held work is not work: requests can sit for days waiting for an "
-            f"engraving, and counting them would hold a machine open around "
-            f"the clock with nothing to render.")
-
-    # What tools/retrigger.py writes.
-    store.update_job("held-check", state=store.QUEUED, mode="reference",
-                     attempt=(row["attempt"] or 1) + 1,
-                     queued_at=time.time() - 60, published_at=None,
-                     started=None, finished=None, error=None, result=None,
-                     stage=None, detail="")
-    back = store.get_job("held-check")
-    if back["state"] != store.QUEUED:
-        raise Failed("releasing a held job did not queue it")
-    if back["attempt"] != (row["attempt"] or 1) + 1:
-        raise Failed("releasing did not start a fresh attempt, so a late "
-                     "message from the previous run could overwrite this one")
-    if back["email"] != "visitor@example.invalid":
-        raise Failed("the address did not survive release")
-    if not any(r["id"] == "held-check"
-               for r in store.unpublished(older_than=30.0)):
-        raise Failed(
-            "the sweep will not offer the released job. `published_at` being "
-            "NULL is the whole mechanism by which retrigger.py reaches the "
-            "worker without talking to the broker itself.")
-
-    return ("held keeps recording, address and score; invisible to the queue "
-            "and to the scaler; released as a fresh attempt the sweep offers")
-
-
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -1710,7 +1611,6 @@ def main() -> int:
         check_the_scaler_cannot_run_away,
         check_the_recogniser_is_marked_right_or_wrong,
         check_the_page_is_actually_styled,
-        check_a_request_without_a_score_is_kept,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

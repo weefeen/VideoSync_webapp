@@ -9,6 +9,16 @@ delivery van. The performer's name, the title panel, the file name — none
 of it appears. What does appear is the piece as *our* library names it,
 and a link.
 
+ONE EXCEPTION, and it is deliberate. `send_wanted` goes to the operator's
+own mailbox and carries the visitor's address, because a request refused for
+want of a score never got as far as storing one — so without it the person
+who prompted an hour of engraving could not be sent the result. It is the
+address alone: still no filename, no client address and no free text, so a
+visitor cannot put words of their own into mail the operator reads. The cost
+is a second copy of an address, in a mailbox, which deleting a recording
+does not reach. The operator asked for this knowing that, and `Privacy.html`
+says it plainly.
+
 Failing to send never fails a render. The video exists either way, and the
 page shows the link itself; the mail is a convenience on top of that.
 """
@@ -390,41 +400,43 @@ def send_ready(job_id: str, address: str, piece: str = "",
 
 
 def send_wanted(*, job_id: str, score: str, title: str = "",
-                minutes: float | None = None, country: str = "") -> None:
-    """Tell the operator somebody wants a video of a piece we cannot engrave.
+                minutes: float | None = None, country: str = "",
+                address: str = "") -> None:
+    """Tell the operator a request died because no score was installed.
 
-    Goes to ALERT_EMAIL. This is the whole of the demand loop: there is no
-    backlog page to review, no table tracking what has been reported and
-    nothing to switch off later. The volume falls as the library fills and
-    reaches zero when it is complete, because a piece stops being reported
-    the moment its package is on disk.
+    Goes to ALERT_EMAIL. This is the whole of the demand loop: nothing is
+    parked, there is no backlog page and nothing to switch off later. The
+    volume falls as the library fills and reaches zero when it is complete,
+    because a piece stops being reported the moment its package is on disk.
 
-    SENT WHEN A REQUEST IS HELD, not when a piece is merely recognised. The
-    difference is somebody committing: they chose a look, gave an address and
-    pressed the button. A visitor who listened out of curiosity and wandered
-    off is not a reason to spend an hour engraving, and would be most of the
-    volume if recognition were the trigger.
+    Everything needed to finish the job by hand is in this message - the job
+    id, the folder name to build, and the visitor's address - because the
+    request itself is gone. The recording stays on the server under that job
+    id, so one command starts the render on the visitor's behalf.
 
-    Every held request sends one. No grouping and no per-piece bucket: an
-    earlier design grouped repeats for a piece already reported, which solved
-    a problem that does not arise - the operator engraves on the first
-    message, so the second person finds the score published and is never
-    held at all.
+    THE ADDRESS IS HERE ON PURPOSE, and it is the one exception to "an
+    address lives on the job row and nowhere else". A refused request never
+    got as far as storing it. The operator chose this knowing that a mailbox
+    is a second copy which deleting a recording does not reach; the privacy
+    page says as much.
 
-    NOTHING THE VISITOR TYPED APPEARS HERE. Not their filename, not their
-    address, not the address they came from. The folder name is our own
-    catalogue's, the duration was measured from the recording, and the
-    country was resolved from a local file at upload time.
+    Nothing else the visitor supplied appears. Not their filename, not the
+    address they connected from, no free text of any kind: a visitor must
+    never be able to put words of their own into mail sent to the operator.
     """
     to = (settings.alert_email or "").strip()
     if not to or not settings.can_email:
         return
     to = one_address(to)
 
-    named = title or score
-    lines = [f"Somebody wants a video of {named}, and there is no score",
-             "installed for it. Their recording and their address are kept;",
-             "the request is on hold until the package exists.",
+    # `library._readable` joins opus and title with a middle dot, which
+    # `_plain` transliterates to nothing and leaves a double space, and
+    # which forces the subject through RFC 2047 encoding for one
+    # character. A hyphen says the same thing in ASCII.
+    named = (title or score).replace("·", "-")
+    lines = [f"Somebody asked for {named} and we have no score for it,",
+             "so the request was refused. Their recording is still on the",
+             "server.",
              ""]
 
     # The most useful line in the message. Resolution is an exact dictionary
@@ -436,19 +448,29 @@ def send_wanted(*, job_id: str, score: str, title: str = "",
     if minutes is not None:
         over = "   OVER THE 8-MINUTE CAP" if minutes > 8.0 else ""
         lines += [f"Their recording runs {minutes:.1f} minutes.{over}", ""]
-
     if country:
         lines += [f"Played from: {country}", ""]
 
-    lines += ["When the package is on the server:",
-              "",
-              "    python tools/retrigger.py --held",
-              "",
-              f"That releases this request (job {job_id}) and any other",
-              "waiting on a score that now exists. They are rendered and the",
-              "ordinary 'your video is ready' mail goes out. Nothing releases",
-              "them on its own - you are the one who knows the engraving is",
-              "finished.",
+    # The three arguments as fields rather than as one command line. The
+    # body is hard-wrapped at 72 columns to keep a relay from re-wrapping it
+    # and breaking the DKIM body hash, and an edition name is routinely
+    # longer than that - so a copy-paste command would arrive split down the
+    # middle of the very string that has to be exact.
+    lines += ["Once the package is on the server:", "",
+              "    python tools/retrigger.py JOB --score SCORE --email TO",
+              "", "with", "",
+              f"    JOB    {job_id}",
+              f"    SCORE  {score}"]
+    if address:
+        lines += [f"    TO     {address}", "",
+                  "That renders it and mails them the link.", ""]
+    else:
+        lines += ["", "No address was given, so nobody can be told when it "
+                      "is finished.", "Leave --email off and the video is "
+                      "made but not delivered.", ""]
+
+    lines += ["Nothing happens on its own. You are the one who knows the",
+              "engraving is finished.",
               "",
               "- VideoSync"]
 
