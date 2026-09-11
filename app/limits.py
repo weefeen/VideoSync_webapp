@@ -71,7 +71,17 @@ RULES = {
                          "That address has made as many videos as it can "
                          "this week."),
     # Mail goes to an address someone typed, so it is capped hardest.
-    "mail_email": Rule(_n("LIMIT_MAIL_PER_EMAIL_WEEK", 3), WEEK, "mail cap reached"),
+    #
+    # TWO BUCKETS, NOT ONE, and the reason matters. The "your video is ready"
+    # mail carries the promise: somebody waited up to an hour for it. The
+    # "you are queued" mail is a courtesy. With one shared allowance the
+    # courtesy spends the promise's budget — at 3 renders and 3 mails a week,
+    # adding a second mail per render meant the ready mail for renders 2 and
+    # 3 was refused, silently, and the person who waited longest got nothing.
+    # Separate buckets make that impossible rather than merely unlikely.
+    "mail_email": Rule(_n("LIMIT_MAIL_PER_EMAIL_WEEK", 4), WEEK, "mail cap reached"),
+    "mail_queued_email": Rule(_n("LIMIT_QUEUED_MAIL_PER_EMAIL_WEEK", 4), WEEK,
+                              "queued-notice cap reached"),
     "mail_total": Rule(_n("LIMIT_MAIL_PER_DAY", 200), DAY, "daily mail cap reached"),
 }
 

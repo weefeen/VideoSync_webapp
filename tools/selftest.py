@@ -938,6 +938,52 @@ def check_a_result_is_safe_before_it_is_announced() -> str:
     return "short and missing objects both rejected; unconfigured is inert"
 
 
+def check_the_courtesy_mail_cannot_starve_the_promise() -> str:
+    """The "queued" notice must never spend the "ready" mail's allowance.
+
+    This exists because adding the queued notice DID exactly that. Both mails
+    drew on one `mail_email` bucket of 3 a week against a render allowance of
+    3 a week, so the second render's "your video is ready" was refused — and
+    `_maybe_mail` skips silently when refused, so the person who waited an
+    hour simply got nothing. The courtesy mail turned into a way of losing
+    the mail that mattered.
+
+    Two buckets make that impossible rather than unlikely, and this checks the
+    property rather than the number: exhausting the queued allowance must
+    leave the ready allowance untouched.
+    """
+    from app import limits
+
+    limits._counters._hits.clear()                  # noqa: SLF001
+    who = "someone@example.com"
+
+    # Burn the queued allowance right down.
+    burnt = 0
+    while limits.allowed("mail_queued_email", who):
+        burnt += 1
+        if burnt > 50:
+            raise Failed("the queued-notice allowance appears to be unlimited")
+    if burnt == 0:
+        raise Failed("the queued-notice allowance was already empty")
+
+    # The promise must still be sendable, at least as many times as that
+    # address may render — otherwise somebody's finished video goes unannounced.
+    ready = 0
+    while limits.allowed("mail_email", who):
+        ready += 1
+        if ready > 50:
+            break
+    renders = limits.RULES["render_email"].limit
+    if ready < renders:
+        raise Failed(
+            f"after the queued notices ran out, only {ready} ready-mails "
+            f"remain for an address allowed {renders} renders — a finished "
+            f"video would go unannounced")
+
+    limits._counters._hits.clear()                  # noqa: SLF001
+    return f"{burnt} queued notices burnt, {ready} ready-mails still available"
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -971,6 +1017,7 @@ def main() -> int:
         check_the_readme_layout_is_real,
         check_the_visitor_list_counts_honestly,
         check_a_result_is_safe_before_it_is_announced,
+        check_the_courtesy_mail_cannot_starve_the_promise,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

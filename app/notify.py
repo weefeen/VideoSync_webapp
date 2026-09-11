@@ -73,6 +73,94 @@ def one_address(raw: str) -> str:
     return raw
 
 
+def _send(message, address: str) -> None:
+    """Hand one message to the relay. Raises MailError if it cannot.
+
+    One copy, used by both messages. Two copies of this drift: the day
+    somebody fixes a TLS detail in one and not the other is the day half the
+    mail stops arriving and the half that still works hides it.
+    """
+    try:
+        if settings.smtp_ssl:
+            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port,
+                                      timeout=30,
+                                      context=ssl.create_default_context())
+        else:
+            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port,
+                                  timeout=30)
+        with server:
+            if settings.smtp_starttls and not settings.smtp_ssl:
+                server.starttls(context=ssl.create_default_context())
+            if settings.smtp_user:
+                server.login(settings.smtp_user, settings.smtp_password)
+            # Recipients named explicitly rather than read back out of the
+            # header, so the envelope cannot grow past what was validated
+            # even if the header is later built differently.
+            server.send_message(message, to_addrs=[address])
+    except (OSError, smtplib.SMTPException) as exc:
+        raise MailError(f"{type(exc).__name__}: {exc}") from exc
+
+
+def send_queued(job_id: str, address: str, piece: str = "",
+                ahead: int = 0, minutes: float | None = None) -> None:
+    """Send one "we have it, here is roughly how long" message.
+
+    Sent because a render can take the better part of an hour and silence
+    for that long reads as failure — at which point people upload the same
+    recording again, which costs another render and lengthens the queue that
+    caused it.
+
+    Carries the SAME link as the ready mail, deliberately. One address that
+    works from the moment of submission is a page somebody can bookmark, keep
+    open, or come back to — so a mail that goes to spam costs a notification
+    rather than the video.
+
+    Deliberately vague about time. `minutes` comes from measurements that
+    move, and a promise of "12 minutes" that becomes 40 is worse than "about
+    quarter of an hour". Rounded outward for that reason.
+    """
+    if not settings.can_email:
+        raise MailError(settings.why_cannot_email())
+    address = one_address(address)
+
+    if minutes is None:
+        when = "We will email you as soon as it is finished."
+    elif minutes < 12:
+        when = ("It should be ready in about ten minutes. We will email you "
+                "when it is.")
+    elif minutes < 40:
+        when = (f"It should be ready in about half an hour. We will email you "
+                f"when it is.")
+    else:
+        when = (f"It should take about {round(minutes / 30) / 2:.1f} hours. "
+                f"We will email you when it is finished.")
+
+    # "3 ahead of you" is honest and useless; what a person wants to know is
+    # whether anything is wrong. Position is mentioned only when there IS a
+    # queue, because "you are first" invites the question why it is not done.
+    line = ""
+    if ahead == 1:
+        line = "There is one video ahead of yours. "
+    elif ahead > 1:
+        line = f"There are {ahead} videos ahead of yours. "
+
+    named = f" of {piece}" if piece else ""
+    message = EmailMessage()
+    message["Subject"] = "We are making your score video"
+    message["From"] = settings.smtp_from
+    message["To"] = address
+    message.set_content(
+        f"We have your recording{named} and it is being made into a video.\n\n"
+        f"{line}{when}\n\n"
+        f"You can also follow it here, or come back to it later:\n\n"
+        f"{_link(job_id)}\n\n"
+        f"You do not need to keep the page open.\n\n"
+        f"— Weefeen\n")
+    _send(message, address)
+    logger.info("told %s that job %s is queued (%d ahead)",
+                address, job_id, ahead)
+
+
 def send_ready(job_id: str, address: str, piece: str = "",
                finished: float | None = None) -> None:
     """Send one "it's ready" message. Raises MailError if it cannot."""
@@ -105,22 +193,5 @@ def send_ready(job_id: str, address: str, piece: str = "",
         f"— Weefeen\n"
     )
 
-    try:
-        if settings.smtp_ssl:
-            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port,
-                                      timeout=30, context=ssl.create_default_context())
-        else:
-            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30)
-        with server:
-            if settings.smtp_starttls and not settings.smtp_ssl:
-                server.starttls(context=ssl.create_default_context())
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
-            # Recipients named explicitly rather than read back out of
-            # the header, so the envelope cannot grow past what was
-            # validated even if the header is later built differently.
-            server.send_message(message, to_addrs=[address])
-    except (OSError, smtplib.SMTPException) as exc:
-        raise MailError(f"{type(exc).__name__}: {exc}") from exc
-
+    _send(message, address)
     logger.info("told %s that job %s is ready", address, job_id)

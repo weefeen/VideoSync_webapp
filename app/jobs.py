@@ -36,6 +36,8 @@ import time
 import uuid
 from typing import Any
 
+from . import limits
+from . import notify
 from . import paths as jobpaths
 from . import pipeline
 from . import render as rnd
@@ -287,6 +289,7 @@ class Registry:
         except Exception:                        # noqa: BLE001
             logger.exception("job %s could not be handed to the queue; "
                              "the sweep will offer it again", job.id)
+        _say_it_is_queued(job)
 
     # -- the workers -----------------------------------------------------
 
@@ -314,3 +317,48 @@ def new_job(original_name: str, upload_path: pathlib.Path,
 def job_paths(job: Job) -> jobpaths.JobPaths:
     """This job's folder, in the layout the engine uses."""
     return jobpaths.for_job(job.id, pathlib.Path(job.upload_path).suffix)
+
+
+def _say_it_is_queued(job: Job) -> None:
+    """Tell the visitor we have it, roughly how long, and where to look.
+
+    A render can take the better part of an hour and silence for that long
+    reads as failure — at which point people upload the same recording again,
+    which costs another render and lengthens the queue that caused the wait.
+
+    Its own allowance, not the ready mail's. A courtesy must never be able to
+    spend the budget of the message that carries the promise: with one shared
+    cap, adding this mail refused the "your video is ready" mail for somebody
+    who had waited an hour, silently.
+
+    On a thread, because this holds an SMTP conversation with a relay on the
+    other side of the internet and the visitor is waiting for the response to
+    their render request. Never allowed to fail the submission: the job is
+    queued either way, and a missing courtesy is not worth a 500.
+    """
+    address = (job.email or "").strip()
+    if not address or not settings.can_email:
+        return
+    if not limits.allowed("mail_queued_email", address.lower()):
+        logger.info("not sending a queued notice to %s: over its allowance",
+                    address)
+        return
+    if not limits.allowed("mail_total", "all"):
+        logger.warning("daily mail cap reached; no queued notice to %s", address)
+        return
+
+    eta = _eta_for(job)
+    ahead = store.position(job.id) or 0
+
+    def work() -> None:
+        try:
+            notify.send_queued(job.id, address,
+                               piece=job.score or "",
+                               ahead=ahead,
+                               minutes=(eta / 60.0) if eta else None)
+        except Exception:                            # noqa: BLE001
+            logger.warning("could not send a queued notice to %s for job %s",
+                           address, job.id, exc_info=True)
+
+    threading.Thread(target=work, name=f"queued-mail-{job.id}",
+                     daemon=True).start()
