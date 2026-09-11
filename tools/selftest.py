@@ -1066,6 +1066,56 @@ def check_a_machine_is_only_wanted_while_there_is_work() -> str:
             f"{held:.1f}s billed and the clock stopped")
 
 
+def check_mail_looks_like_mail() -> str:
+    """The headers a receiver expects, and a body it can read.
+
+    Every one of these was missing when Yahoo filed the first real message as
+    spam, and all three were ours rather than the relay's:
+
+      * `Date` — mandatory under RFC 5322, and `smtplib.send_message` does
+        NOT add it. Scored on its own as MISSING_DATE.
+      * `Message-ID` — same omission, scored as MISSING_MID, and without it
+        no client can thread or de-duplicate.
+      * a base64 body. One em-dash in "— Weefeen" was enough for
+        `set_content` to choose base64 for the whole message, and a short
+        plain-text mail that arrives entirely base64 is what obfuscators
+        send to keep wording away from filters.
+
+    The Message-ID domain is checked too: taken from the machine's hostname
+    it would disagree with From and SPF, which is itself a signal.
+    """
+    from app import notify
+    from app.settings import settings
+
+    m = notify._compose("Subject here", "someone@example.com",   # noqa: SLF001
+                        "A line.\n\n— Weefeen\n")
+
+    for header in ("Date", "Message-ID", "From", "To", "Subject"):
+        if not m.get(header):
+            raise Failed(f"outgoing mail has no {header} header")
+
+    cte = (m.get("Content-Transfer-Encoding") or "").lower()
+    if cte == "base64":
+        raise Failed(
+            "the body is base64. A short plain-text message encoded that way "
+            "is scored as obfuscation; quoted-printable keeps the typography "
+            "and stays readable on the wire")
+
+    # Readable on the wire is the property, not the encoding's name.
+    if "A line." not in m.as_string():
+        raise Failed("the body is not legible in the encoded message")
+
+    sender = settings.smtp_from or ""
+    if "@" in sender:
+        domain = sender.rsplit("@", 1)[-1].strip("> ").strip()
+        if domain and domain not in m["Message-ID"]:
+            raise Failed(
+                f"Message-ID {m['Message-ID']} does not carry {domain}; a "
+                f"message id that disagrees with From is itself a signal")
+
+    return f"Date, Message-ID, {cte} body, id aligned with the sender"
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -1101,6 +1151,7 @@ def main() -> int:
         check_a_result_is_safe_before_it_is_announced,
         check_the_courtesy_mail_cannot_starve_the_promise,
         check_a_machine_is_only_wanted_while_there_is_work,
+        check_mail_looks_like_mail,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

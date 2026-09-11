@@ -20,7 +20,7 @@ import re
 import smtplib
 import ssl
 from email.message import EmailMessage
-from email.utils import getaddresses
+from email.utils import formatdate, getaddresses, make_msgid
 
 from . import retention
 from .settings import settings
@@ -83,6 +83,43 @@ def one_address(raw: str) -> str:
     if not _ADDRESS.match(raw):
         raise MailError("That is not an address we can send to.")
     return raw
+
+
+def _compose(subject: str, address: str, body: str) -> EmailMessage:
+    """One message, with the headers a receiver expects to find.
+
+    Written because Yahoo filed the first real message as spam, and three of
+    the reasons were ours:
+
+      * NO `Date`. RFC 5322 makes it mandatory and `smtplib.send_message`
+        does not add it — a widespread and costly assumption. SpamAssassin
+        scores `MISSING_DATE` on its own.
+      * NO `Message-ID`. Same omission, scored as `MISSING_MID`, and without
+        it a mail client cannot thread or de-duplicate either.
+      * BASE64 BODY. A single em-dash in "— Weefeen" pushed the whole
+        message to base64, because that is what `set_content` picks for
+        non-ASCII. A short plain-text message that arrives entirely base64
+        is what obfuscators send to hide wording from filters, and it is
+        scored as such. Quoted-printable keeps the typography AND leaves the
+        text readable on the wire, which is what an honest message looks
+        like.
+
+    The domain in the Message-ID is taken from the sending address, so it
+    aligns with From and SPF instead of leaking the machine's hostname.
+    """
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = settings.smtp_from
+    message["To"] = address
+    message["Date"] = formatdate(localtime=True)
+    sender = settings.smtp_from
+    domain = sender.rsplit("@", 1)[-1].strip("> ").strip() or "localhost"
+    message["Message-ID"] = make_msgid(domain=domain)
+    # RFC 3834: this is machine-generated and nobody should auto-reply to it.
+    # It also tells a receiver the mail is transactional rather than bulk.
+    message["Auto-Submitted"] = "auto-generated"
+    message.set_content(body, cte="quoted-printable")
+    return message
 
 
 def _send(message, address: str) -> None:
@@ -157,11 +194,8 @@ def send_queued(job_id: str, address: str, piece: str = "",
         line = f"There are {ahead} videos ahead of yours. "
 
     named = f" of {piece}" if piece else ""
-    message = EmailMessage()
-    message["Subject"] = "We are making your score video"
-    message["From"] = settings.smtp_from
-    message["To"] = address
-    message.set_content(
+    message = _compose(
+        "We are making your score video", address,
         f"We have your recording{named} and it is being made into a video.\n\n"
         f"{line}{when}\n\n"
         f"You can also follow it here, or come back to it later:\n\n"
@@ -194,16 +228,12 @@ def send_ready(job_id: str, address: str, piece: str = "",
 
     # `piece` comes from our own library, never from the uploader.
     named = f" of {piece}" if piece else ""
-    message = EmailMessage()
-    message["Subject"] = "Your score video is ready"
-    message["From"] = settings.smtp_from
-    message["To"] = address
-    message.set_content(
+    message = _compose(
+        "Your score video is ready", address,
         f"Your video{named} has finished rendering.\n\n"
         f"{_link(job_id)}\n\n"
         f"{window}\n\n"
-        f"— Weefeen\n"
-    )
+        f"— Weefeen\n")
 
     _send(message, address)
     logger.info("told %s that job %s is ready", address, job_id)
