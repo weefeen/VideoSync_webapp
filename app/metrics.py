@@ -137,6 +137,26 @@ def render() -> str:
            "The largest memory any render has ever reached on this host.")
     out.append(_line("vsw_peak_rss_bytes", int(whole["rss"])))
 
+    # How full the bucket is. 250 GB comes with the flat monthly fee, so
+    # this is the number that says when storage stops being free-at-the-
+    # margin and a colder tier starts being worth its complexity — a
+    # decision that should arrive as a graph, not as a surprise on a bill.
+    stored = store.one(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes), 0) AS bytes"
+        " FROM jobs WHERE object_key IS NOT NULL AND object_key != ''")
+    family("vsw_stored_objects", "gauge",
+           "Finished videos confirmed in the bucket.")
+    out.append(_line("vsw_stored_objects", stored["n"] if stored else 0))
+    family("vsw_stored_bytes", "gauge",
+           "Bytes of finished video in the bucket, from the recorded sizes. "
+           "Against the 250 GB included in the flat fee, this is how much "
+           "runway is left before storage costs anything extra.")
+    out.append(_line("vsw_stored_bytes", int(stored["bytes"]) if stored else 0))
+    family("vsw_storage_included_bytes", "gauge",
+           "Storage included in the monthly fee, so the graph carries the "
+           "line it is being judged against.")
+    out.append(_line("vsw_storage_included_bytes", 250 * 1000 ** 3))
+
     family("vsw_videos_delivered_total", "counter",
            "Videos finished. Counted at delivery, never at submission.")
     out.append(_line("vsw_videos_delivered_total", whole["n"]))
@@ -193,6 +213,13 @@ def render() -> str:
            "scale-to-zero design exists to keep small.")
     out.append(_line("vsw_compute_would_run_seconds_total",
                      round(shadow["would_run"], 1)))
+
+    family("vsw_compute_paid_seconds_left", "gauge",
+           "Seconds left in the hour already paid for. The provider rounds "
+           "partial hours up, so a machine is released near zero rather than "
+           "when it happens to go idle.")
+    out.append(_line("vsw_compute_paid_seconds_left",
+                     round(shadow.get("paid_left", 0.0), 1)))
 
     family("vsw_compute_hourly_cost", "gauge",
            "What an hour of the chosen plan costs, so the dashboard can turn "

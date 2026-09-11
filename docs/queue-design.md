@@ -60,6 +60,47 @@ abuse are `render_ip`, `render_email`, and the bot check still to come.
 Consequently the scaler watches **`vsw.render` only**. There is no identify
 queue for it to watch, which also matches the topology that actually exists.
 
+**Billing, verified 2026-09-11 against the provider's own documentation.**
+Three facts change what the scaler should do, and two of them contradict
+what §9 assumed:
+
+| fact | consequence |
+|---|---|
+| *"Usage is always rounded up to the nearest hour."* | A ten-minute render costs a **whole hour**. `COMPUTE_GRACE_SECONDS=600` was therefore actively wasteful: releasing a machine after ten idle minutes throws away fifty minutes already paid for, makes the next visitor wait ~2 min for a fresh boot, and bills a **second** hour if work arrives inside the same clock hour. The rule is now **hour-aligned** — hold until the paid hour is nearly over, then release only if still idle. |
+| Powered-off instances are **still billed** | §9.1 already said this and was right. Destroying is the only thing that stops the meter. |
+| **No monthly cap on G8 dedicated plans since 1 July 2026** | Pure hourly, uncapped. Break-even against a permanent machine is roughly **24 renders a day**; below that scale-to-zero wins, above it a permanent machine is cheaper *and* simpler. That comparison is what "What it would have cost" on the dashboard exists to make. |
+
+**Object storage is Linode's, not AWS's, and it has NO cold tier.** §10.4's
+Glacier lifecycle does not apply: Linode Object Storage lifecycle rules do
+expiry and abandoned-upload cleanup only, with no storage class to
+transition into. It is **$5/month flat for 250 GB and 1 TB of transfer**,
+$0.02/GB beyond. At ~148 MB kept per job that is about **1,700 videos**
+before storage costs anything extra, so archiving to a colder provider saves
+nothing until the low terabytes — it was considered on 2026-09-11 and
+deliberately deferred. `vsw_stored_bytes` against
+`vsw_storage_included_bytes` on the dashboard is what will say when to
+revisit, so the decision arrives as a graph rather than as a bill.
+
+**The 8 GB compute node in §9.1 is too small for the advertised cap.** The
+aligner is `librosa.sequence.dtw(..., subseq=False)` — full DTW, no band —
+so it allocates the whole N×M matrix in float64 and memory grows with the
+SQUARE of duration. Measured: 2.43 GB for a 7.1-minute recording, against
+2.51 GB predicted, so the model is confirmed.
+
+| plan | longest recording |
+|---|---|
+| 3.9 GB (today) | ~7 min |
+| **8 GB (as designed)** | **~11 min** |
+| 32 GB | ~24 min |
+| 64 GB | ~35 min |
+
+`MAX_DURATION_MINUTES` is **7** on the test node because that is what it
+survives; there is no graceful failure past it, only the OOM killer choosing
+a process that may be the web app. Restoring 25 minutes needs either a 32 GB
+plan or a **banded (Sakoe-Chiba) DTW in VideoScoreSync**, which would make
+memory linear rather than quadratic and put 25 minutes on a small machine.
+That change is in a read-only dependency and the owner has deferred it.
+
 **Still open — the owner's call:**
 
 | # | Decision | Section |

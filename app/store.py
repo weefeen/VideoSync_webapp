@@ -43,6 +43,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import pathlib
 import sqlite3
 import threading
@@ -233,6 +234,12 @@ CREATE TABLE IF NOT EXISTS compute_events (
 );
 CREATE INDEX IF NOT EXISTS compute_events_at ON compute_events(at);
 """
+
+# How close to the end of a paid hour a machine may be released. Linode
+# rounds partial hours up, so the last minutes of an hour are already bought
+# and there is nothing to save by giving them back early; this only has to be
+# long enough that the destroy completes before the next hour starts.
+RELEASE_WINDOW = 180.0
 
 # States a job can be in. `queued` is the new one and the point of this
 # module: work that has been accepted but has not started.
@@ -781,11 +788,30 @@ def compute_tick(grace_seconds: float) -> dict[str, Any]:
     else:
         if idle_since is None:
             idle_since = now
-        if state == "wanted" and (now - idle_since) >= grace_seconds:
-            state, destroys = "none", destroys + 1
-            event = ("would-destroy",
-                     f"nothing ready and nothing running for "
-                     f"{int(now - idle_since)}s")
+        if state == "wanted":
+            # HOUR-ALIGNED, because that is how the provider bills. Linode
+            # rounds every partial hour UP to a whole one, so a machine that
+            # has been up for six minutes has already cost a full hour.
+            # Destroying it at ten idle minutes therefore throws away
+            # fifty minutes that are paid for, makes the next visitor wait
+            # ~2 minutes for a fresh boot, AND bills a second hour if work
+            # arrives before the first one is up.
+            #
+            # So the question is not "has it been idle long enough" but
+            # "is the hour we bought nearly over". Idle time still has to
+            # clear `grace_seconds` first: a machine released seconds after
+            # a job ends, merely because the hour happened to be ending,
+            # would be torn down in exactly the moment a second upload is
+            # most likely.
+            began = row["since"] or now
+            paid_until = began + math.ceil(max(now - began, 1) / 3600.0) * 3600
+            near_the_boundary = (paid_until - now) <= RELEASE_WINDOW
+            long_enough_idle = (now - idle_since) >= grace_seconds
+            if near_the_boundary and long_enough_idle:
+                state, destroys = "none", destroys + 1
+                event = ("would-destroy",
+                         f"idle {int(now - idle_since)}s and the paid hour "
+                         f"ends in {int(paid_until - now)}s")
 
     with write() as conn:
         conn.execute(
@@ -800,7 +826,10 @@ def compute_tick(grace_seconds: float) -> dict[str, Any]:
                 (now, event[0], event[1], ready, unacked,
                  None if idle_since is None else round(now - idle_since, 1)))
 
+    began = row["since"] or now
+    paid_until = began + math.ceil(max(now - began, 1) / 3600.0) * 3600
     result = {"state": state, "ready": ready, "unacked": unacked,
+              "paid_left": max(0.0, paid_until - now) if state == "wanted" else 0.0,
               "idle_seconds": 0.0 if idle_since is None else now - idle_since,
               "would_run": would_run, "creates": creates,
               "destroys": destroys}

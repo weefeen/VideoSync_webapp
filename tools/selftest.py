@@ -1033,17 +1033,30 @@ def check_a_machine_is_only_wanted_while_there_is_work() -> str:
 
     store.update_job("shadow-1", state=store.DONE, finished=time.time())
     store.compute_tick(grace)                       # idle starts here
+    time.sleep(grace + 0.3)
+
+    # Idle well past the grace, but the paid hour has barely begun. It must
+    # STAY UP: the provider rounds partial hours up, so that hour is already
+    # bought, and releasing it early buys nothing while costing the next
+    # visitor a ~2 minute boot.
     early = store.compute_tick(grace)
     if early["state"] != "wanted":
         raise Failed(
-            f"torn down after {early['idle_seconds']:.1f}s against a "
-            f"{grace}s grace — creating costs ~2 minutes of somebody's wait, "
-            f"so an early teardown makes the next job pay it again")
+            f"released after {early['idle_seconds']:.1f}s idle with most of "
+            f"the paid hour left. Linode rounds partial hours up, so that "
+            f"time is already paid for; giving it back early wastes it and "
+            f"makes the next job wait for a fresh boot")
 
-    time.sleep(grace + 0.3)
+    # Now wind the clock so the paid hour is nearly over. Same idle time,
+    # opposite answer — which is the whole point of the rule.
+    with store.write() as conn:
+        conn.execute("UPDATE compute SET since = ? WHERE singleton = 1",
+                     (time.time() - 3600 + 60,))
     gone = store.compute_tick(grace)
     if gone["state"] != "none" or gone["destroys"] != 1:
-        raise Failed(f"never torn down despite passing the grace: {gone}")
+        raise Failed(
+            f"not released even though the paid hour is ending and it has "
+            f"been idle throughout: {gone}")
 
     # The bill must stop when the machine would. One more tick in `none`
     # must not add to it.
@@ -1062,8 +1075,8 @@ def check_a_machine_is_only_wanted_while_there_is_work() -> str:
         raise Failed("a decision was recorded with no reason")
 
     store.write_returning("DELETE FROM jobs RETURNING id")
-    return (f"wanted while busy, held {grace}s past idle, then released; "
-            f"{held:.1f}s billed and the clock stopped")
+    return (f"wanted while busy, HELD through the paid hour despite being "
+            f"idle, released at the boundary; {held:.1f}s billed")
 
 
 def check_mail_looks_like_mail() -> str:
