@@ -17,22 +17,6 @@ em{font-style:italic}
 .lab{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:var(--faint)}
 .num{font-variant-numeric:tabular-nums}
 
-/* ── the delivery box ──────────────────────────────────────────────────
- * Created by svs-wire.js while a render runs, and until now styled by
- * nothing at all: the markup went into the page and there was no rule for
- * .delivery, .stat, .what, .rail or .get anywhere. The progress bar and the
- * download link were present in the DOM and invisible on the screen, so a
- * finished video said "your video is below" above nothing. */
-.delivery{display:flex;flex-direction:column;gap:10px;margin:22px 0 4px;padding:18px 20px;background:var(--surface);border:1px solid var(--hair);border-radius:4px}
-.delivery .stat{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:var(--faint)}
-.delivery .what{font-size:14px;color:var(--soft)}
-.delivery .rail{display:block;height:3px;background:var(--hair-2);border-radius:2px;overflow:hidden}
-.delivery .rail i{display:block;height:100%;width:0;background:var(--b3);border-radius:2px;transition:width .5s ease}
-/* The one thing on the page somebody has waited up to an hour for, so it
- * looks like the primary action rather than a link in a paragraph. */
-.delivery .get{align-self:flex-start;margin-top:6px;font-family:Fraunces,serif;font-size:16px;background:var(--b1);color:#fff;border:0;border-bottom:0;border-radius:3px;padding:12px 22px;transition:background .16s}
-.delivery .get:hover{background:var(--mag);color:#fff;border-bottom:0}
-
 /* ── shell ── */
 .top{max-width:1040px;margin:0 auto;padding:34px 40px 0;display:flex;align-items:baseline;justify-content:space-between;gap:24px}
 .topright{display:flex;flex-direction:column;align-items:flex-end;gap:11px}

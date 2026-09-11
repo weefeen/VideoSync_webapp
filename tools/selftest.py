@@ -1460,6 +1460,116 @@ def check_the_recogniser_is_marked_right_or_wrong() -> str:
     return "accepted, overridden and unrecognised all distinguished"
 
 
+def check_the_page_is_actually_styled() -> str:
+    """Everything the script puts on the page can be seen, and the CSS parses.
+
+    THREE DEFECTS IN ONE DAY were visible on the page and green in every
+    check: captions that vanished, a title animation that stopped, and a
+    download button that was in the DOM and invisible because no rule for
+    `.delivery`, `.stat`, `.rail` or `.get` existed anywhere. The other 26
+    checks verify behaviour and none of them look at what is rendered, which
+    is the gap that keeps producing them.
+
+    This is not a browser and cannot see a layout. It checks two things that
+    are decidable from the source and that all three of those bugs would
+    have failed:
+
+      * every class the script assigns has a rule somewhere — a stylesheet,
+        a <style> block the script injects, or an explicit note that it is
+        styled inline.
+      * the CSS braces balance. An unterminated @media block swallows every
+        rule after it, which is how the title animation was lost: the rules
+        were present, inside a block that never closed.
+    """
+    import re
+
+    web = ROOT / "app" / "static" / "svs"
+    scripts = sorted(web.glob("*.js"))
+    sheets = [web / "index.html", *sorted(web.glob("*.css"))]
+
+    # Where a rule can legitimately live: a stylesheet, or a <style> block
+    # the script writes into the page at runtime.
+    #
+    # ONLY the <style> blocks of the HTML, never the whole file. Reading it
+    # whole was the first version of this and it made the check useless: a
+    # class named in a comment, in prose, or in the page's own JavaScript
+    # counted as styled, so deleting every `.delivery` rule still passed.
+    # Verified by doing exactly that.
+    css = ""
+    for sheet in sheets:
+        text = sheet.read_text(encoding="utf-8", errors="ignore")
+        if sheet.suffix == ".html":
+            text = "\n".join(
+                re.findall(r"<style[^>]*>(.*?)</style>", text, re.S))
+        css += "\n" + text
+    # Comments too: a rule discussed in a comment is not a rule.
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    for p in scripts:
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        for block in re.findall(r"<style[^>]*>(.*?)</style>", text, re.S):
+            css += "\n" + block
+        # Template literals assigned to the .textContent of a <style> this
+        # script created. The element is never actually called `style` — it
+        # is bandCSS, clashCSS, countCSS — so the names are read out of the
+        # createElement calls rather than assumed.
+        names = re.findall(
+            r"""(?:const|let|var)\s+(\w+)\s*=\s*document\.createElement\("""
+            r"""['"]style['"]\)""", text)
+        for name in names:
+            for block in re.findall(
+                    name + r"\.textContent\s*=\s*`(.*?)`", text, re.S):
+                css += "\n" + block
+
+    # Classes positioned entirely by `el.style`, with no rule by design.
+    # Listed explicitly, because "it has no CSS" is exactly the bug this
+    # check exists to find — an exemption has to be a decision.
+    INLINE_ONLY = {
+        # Positioned entirely by el.style, with no rule by design.
+        "panelfoot",    # Object.assign(foot.style, …) in svs-wire.js
+        # These have no rule and do not need one: each renders on its own.
+        # Listed rather than filtered by element type, so adding a class
+        # that genuinely needs styling still fails.
+        "samplevid",    # a <video>; it has intrinsic size and controls
+        "vector",       # a modifier on .realband, which IS styled
+        "half",         # a <div> of text in svs-min.js; inherits the page
+    }
+
+    made = set()
+    for p in scripts:
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(r"""class=\\?["']([a-zA-Z0-9 _-]+)""", text):
+            made.update(m.group(1).split())
+        for m in re.finditer(r"""className\s*=\s*["']([a-zA-Z0-9 _-]+)""", text):
+            made.update(m.group(1).split())
+
+    styled = set(re.findall(r"\.([a-zA-Z][a-zA-Z0-9_-]*)", css))
+    invisible = sorted(made - styled - INLINE_ONLY)
+    if invisible:
+        raise Failed(
+            "the script creates these and nothing styles them, so they go "
+            "into the page and cannot be seen: "
+            + ", ".join("." + c for c in invisible)
+            + ". If one is positioned by el.style, add it to INLINE_ONLY "
+              "with the reason.")
+
+    # Braces, ignoring comments and strings well enough for a stylesheet.
+    for sheet in sheets:
+        text = sheet.read_text(encoding="utf-8", errors="ignore")
+        if sheet.suffix == ".html":
+            text = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, re.S))
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        opened, closed = text.count("{"), text.count("}")
+        if opened != closed:
+            raise Failed(
+                f"{sheet.name} has {opened} '{{' and {closed} '}}'. An "
+                f"unterminated block swallows every rule after it — which is "
+                f"how the title animation was lost, with the rules present "
+                f"and trapped inside a @media that never closed.")
+
+    return (f"{len(made)} script-made classes all styled; braces balance in "
+            f"{len(sheets)} stylesheet(s)")
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -1500,6 +1610,7 @@ def main() -> int:
         check_a_stored_project_explains_itself,
         check_the_scaler_cannot_run_away,
         check_the_recogniser_is_marked_right_or_wrong,
+        check_the_page_is_actually_styled,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

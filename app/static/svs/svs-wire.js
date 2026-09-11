@@ -1271,11 +1271,13 @@ document.addEventListener('DOMContentLoaded', resumeFromLink);
 
 async function watchRender(job){
   rememberJob(job);
-  const box = deliveryBox();
-  if(!box) return;
-  const stat = box.querySelector('.stat');
-  const what = box.querySelector('.what');
-  const bar = box.querySelector('.rail i');
+  // Re-acquired on every pass, not held from the first. `deliveryBox()`
+  // creates the box if it is absent, and anything that re-renders the done
+  // section — a later draw(), the motion script — throws away whatever was
+  // inserted into it. Holding the reference meant the box could vanish and
+  // never come back, leaving a page that says "your video is below" above
+  // nothing at all.
+  if(!deliveryBox()) return;
   const started = Date.now();
 
   while(Date.now() - started < 40 * 60 * 1000){
