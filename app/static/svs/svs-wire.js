@@ -1171,6 +1171,38 @@ function deliveryBox(){
   return box;
 }
 
+/* Say what is true of THIS job, not what is true of a job just submitted.
+ *
+ * `correctDoneCopy` is right for somebody who has this second pressed the
+ * button: it changes "check your inbox" into "stay here, it is rendering".
+ * It was also being used for somebody arriving from the link in the
+ * finished-video email — who was then told to wait for something that had
+ * already finished half an hour earlier. The mail said ready; the page said
+ * rendering; both were ours.
+ */
+function copyForState(state){
+  const section = document.querySelector('section[data-s="done"]');
+  if(!section) return;
+  const heading = section.querySelector('h1');
+  const first = section.querySelector('.confirm > p');
+
+  if(state === 'done'){
+    if(heading) heading.innerHTML = `It's <em>ready</em>.`;
+    if(first) first.textContent =
+      'Your video is below. The link in your email brings you back here.';
+  }else if(state === 'error'){
+    if(heading) heading.innerHTML = `It <em>stopped</em>.`;
+    if(first) first.textContent = 'What went wrong is below.';
+  }else{
+    if(heading) heading.innerHTML = `It's <em>rendering</em>. `
+      + `You can close this &mdash; we will email you when it is done.`;
+    if(first) first.textContent =
+      'It takes a few minutes. Nothing else is needed from you.';
+  }
+  // So the one-shot guard in correctDoneCopy cannot overwrite this later.
+  section.dataset.corrected = '1';
+}
+
 /* Say what is true on the screen that claimed an email. */
 function correctDoneCopy(){
   const section = document.querySelector('section[data-s="done"]');
@@ -1229,7 +1261,7 @@ async function resumeFromLink(){
   if(!s || !s.id) return;
 
   JOB = job;
-  correctDoneCopy();
+  copyForState(s.state);
   S.screen = 'done';
   draw();
   // Picks up wherever it is: still queued, mid-render, finished, or failed.
@@ -1263,6 +1295,7 @@ async function watchRender(job){
     if(active) what.textContent = STAGE_WORDS[active] || active;
 
     if(s.state === 'done'){
+      copyForState('done');
       stat.textContent = 'Ready';
       bar.style.width = '100%';
       const size = s.output_bytes ? ` · ${(s.output_bytes / 1e6).toFixed(0)} MB` : '';
@@ -1273,6 +1306,7 @@ async function watchRender(job){
       return;
     }
     if(s.state === 'error'){
+      copyForState('error');
       stat.textContent = 'Stopped';
       what.textContent = s.error || 'The render did not finish.';
       bar.style.width = '100%';
