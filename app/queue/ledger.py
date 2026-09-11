@@ -95,6 +95,15 @@ def _progress(event: Event, row) -> bool:
     of detail without advancing the stage, which is the rule the in-memory
     version used and the one both front-ends were written against.
     """
+    # A terminal job takes no more progress. Checked FIRST, before
+    # `_turn_stage` — a late or redelivered progress event for a job already
+    # DONE or ERROR used to open a fresh stage_runs row that nothing then
+    # closed, because the close only happens at the next milestone or at the
+    # terminal event, both already past. That left an orphan open stage row
+    # on the record for every out-of-order progress event.
+    if row["state"] in (store.DONE, store.ERROR):
+        return False
+
     stage = event.stage if event.stage in pipeline.STAGES else row["stage"]
     # A milestone stage begins: close the one before it and open this one.
     # This is what makes "where does the time actually go" answerable —
@@ -110,8 +119,6 @@ def _progress(event: Event, row) -> bool:
                     event.job_id)
         store.update_job(event.job_id, state=store.RUNNING,
                          worker=event.worker or row["worker"])
-    elif row["state"] in (store.DONE, store.ERROR):
-        return False
     store.set_progress(event.job_id, stage, event.detail, LEASE_SECONDS)
     return True
 
