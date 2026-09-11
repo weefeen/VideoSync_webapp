@@ -2125,6 +2125,55 @@ def check_a_job_id_is_not_guessable() -> str:
     return "job id is the full uuid4; download is private, no-store"
 
 
+def check_the_bot_check_is_wired_and_inert_by_default() -> str:
+    """A human-check that guards the upload, and is off until configured.
+
+    The unauthenticated upload→recognise→render chain is the expensive thing
+    an automated agent abuses, and it is the security review's standing top
+    finding. Turnstile is the guard. Two properties matter:
+
+      * INERT BY DEFAULT. With no keys set, `verify` passes and the upload
+        endpoint does not demand a token — a local install and any deployment
+        without keys works exactly as before. Both keys are required to turn
+        it on; a site key alone would draw a widget whose token nothing
+        checks, which only looks protected.
+      * WIRED WHERE IT MATTERS. `api_upload` calls the check, so turning the
+        keys on actually gates the entrance to the chain. A check built but
+        not called is the failure this suite exists to catch.
+    """
+    import dataclasses
+    from app import botcheck, settings as settings_mod
+
+    s = settings_mod.settings
+    # As shipped (no keys in the test env) the check must be inert.
+    if s.bot_check:
+        raise Failed("bot_check is on with no keys configured; the default "
+                     "must be off so an unconfigured install still works")
+    if not botcheck.verify(""):
+        raise Failed("with the check off, verify('') must pass — otherwise "
+                     "every upload is refused on an install with no keys")
+
+    # Both-or-neither: a lone site key must NOT switch it on.
+    half = dataclasses.replace(s, turnstile_site_key="x", turnstile_secret="")
+    if half.bot_check:
+        raise Failed("a site key alone turned the check on; without the "
+                     "secret the token cannot be verified, so the widget "
+                     "would only look like protection")
+    both = dataclasses.replace(s, turnstile_site_key="x", turnstile_secret="y")
+    if not both.bot_check:
+        raise Failed("both keys set but bot_check is still off")
+
+    # And the guard is actually called at the upload entrance.
+    src = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    start = src.find("def api_upload(")
+    body = src[start:src.find("def ", start + 10)]
+    if "botcheck.verify(" not in body:
+        raise Failed("api_upload never calls botcheck.verify; the check is "
+                     "built but does not guard the endpoint it exists for")
+
+    return "off with no keys, both-or-neither to switch on, wired into upload"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2286,6 +2335,7 @@ def main() -> int:
         check_the_duration_cap_fails_safe,
         check_a_cross_site_request_is_refused,
         check_a_job_id_is_not_guessable,
+        check_the_bot_check_is_wired_and_inert_by_default,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

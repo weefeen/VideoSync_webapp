@@ -175,6 +175,16 @@ class Settings:
     smtp_ssl: bool = False           # implicit TLS, usually port 465
     smtp_starttls: bool = True       # upgrade in place, usually port 587
     public_base_url: str = ""        # where a link in the mail should point
+    # Cloudflare Turnstile — a CAPTCHA that is free, needs no account beyond
+    # a Cloudflare login, and does NOT require the domain to be on Cloudflare.
+    # It is the one control that stands between an automated agent and the
+    # expensive, unauthenticated upload→recognise→render chain. Unset, the
+    # check is skipped and the site behaves exactly as before — the same
+    # "configured or inert" pattern as mail — so this can ship dark and go
+    # live the moment the keys are added to .env. The secret is a credential
+    # and belongs only in .env; the site key is public and reaches the page.
+    turnstile_site_key: str = ""
+    turnstile_secret: str = ""
     # How long the emailed link keeps working. Afterwards the video is
     # archived rather than deleted — still ours, no longer a download.
     #
@@ -241,6 +251,16 @@ class Settings:
         if self.pair_list and not self.pair_list.is_file():
             return f"PAIR_LIST is set but there is no file at {self.pair_list}."
         return ""
+
+    @property
+    def bot_check(self) -> bool:
+        """Whether a Turnstile token is demanded before an upload.
+
+        On only when BOTH keys are set. The site key alone would render a
+        widget whose token nothing checks — worse than none, because it
+        looks protected — so both or neither.
+        """
+        return bool(self.turnstile_site_key and self.turnstile_secret)
 
     @property
     def can_email(self) -> bool:
@@ -403,6 +423,8 @@ def load() -> Settings:
         smtp_ssl=_flag("SMTP_SSL", False),
         smtp_starttls=_flag("SMTP_STARTTLS", True),
         public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/"),
+        turnstile_site_key=os.getenv("TURNSTILE_SITE_KEY", "").strip(),
+        turnstile_secret=os.getenv("TURNSTILE_SECRET", "").strip(),
         retention_hot_hours=_number("RETENTION_HOT_HOURS", 48.0),
         archive_transition_days=int(_number("ARCHIVE_TRANSITION_DAYS", 3)),
     )

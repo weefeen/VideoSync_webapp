@@ -19,6 +19,7 @@ from flask import (Blueprint, Flask, current_app, jsonify, redirect,
 
 from . import jobs, package as pkg, pipeline
 from .queue import webside
+from . import botcheck
 from . import identify as ident
 from . import library
 from . import limits
@@ -175,6 +176,12 @@ def api_library():
                     # Asked so the interface never promises a message this
                     # install cannot send.
                     "can_email": settings.can_email,
+                    # The Turnstile site key, when configured. The page renders
+                    # the widget only if this is present — an empty string
+                    # means the check is off and the page must not draw one.
+                    # The site key is public by design (Cloudflare shows it in
+                    # the widget markup); the secret never leaves the server.
+                    "turnstile_site_key": settings.turnstile_site_key,
                     # Stated so the free-tier copy quotes the number that is
                     # enforced, instead of drifting away from it.
                     "videos_per_week": limits.RULES["render_ip"].limit,
@@ -784,6 +791,22 @@ def api_upload():
         limits.guard("upload_ip", limits.client_key(request))
     except limits.Refused as exc:
         return jsonify({"error": str(exc)}), 429, {"Retry-After": str(exc.retry_after)}
+
+    # Is there a human here. Upload is the entrance to the whole expensive
+    # chain — recognise, then render — so the bot check sits here and guards
+    # all of it at once. Inert until Turnstile keys are configured (see
+    # `settings.bot_check`), so this is a no-op today and becomes the real
+    # defence the moment the keys are added. Checked after the rate limit so
+    # a flood is turned away cheaply before any outbound verify call.
+    if settings.bot_check:
+        token = (request.form.get("cf-turnstile-response")
+                 or request.headers.get("CF-Turnstile-Response") or "")
+        if not botcheck.verify(token, limits.client_key(request)):
+            return jsonify({
+                "error": "We could not tell that you are human. Please "
+                         "complete the check and try again.",
+                "bot_check": True,
+            }), 403
 
     # The rights confirmation is a checkbox in the page, which means a
     # script never sees it. Asserted here as well, so accepting somebody

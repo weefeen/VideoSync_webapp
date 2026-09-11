@@ -57,7 +57,11 @@ async function loadLibrary(){
                videosPerWeek: data.videos_per_week || 0,
                retentionHours: data.retention_hours || 48,
                maxUploadMb: data.max_upload_mb || 0,
-               maxMinutes: data.max_minutes || 0 };
+               maxMinutes: data.max_minutes || 0,
+               // Empty unless the operator configured Turnstile. When set, an
+               // upload carries a token the server checks; when empty, this
+               // whole path is dormant and the site works as before.
+               turnstileSiteKey: data.turnstile_site_key || '' };
     if(Array.isArray(data.works) && data.works.length) WORKS = data.works;
   }catch(err){
     // No server: keep the shipped library so the whole interface still
@@ -116,14 +120,62 @@ function listenTick(){
   setBar(UPLOAD_SHARE + (1 - UPLOAD_SHARE) * Math.min(1, gone / LISTEN_ESTIMATE));
 }
 
+/* Cloudflare Turnstile — a token proving there is a human here, acquired
+ * right before the upload so it is fresh (the upload fires the moment a file
+ * is chosen, not minutes later at the design stage). Dormant unless the
+ * operator configured a site key: with none, this resolves to '' and the
+ * server, also unconfigured, waves the upload through. */
+let _turnstileLoad = null;
+function _loadTurnstile(){
+  if(_turnstileLoad) return _turnstileLoad;
+  _turnstileLoad = new Promise((resolve, reject) => {
+    if(window.turnstile) return resolve();
+    const s = document.createElement('script');
+    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    s.async = true; s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('the human-check could not load'));
+    document.head.appendChild(s);
+  });
+  return _turnstileLoad;
+}
+
+function botToken(){
+  const key = SERVER.turnstileSiteKey;
+  if(!key) return Promise.resolve('');
+  return _loadTurnstile().then(() => new Promise((resolve, reject) => {
+    // A small, unobtrusive widget bottom-right. Managed mode solves silently
+    // most of the time and only shows an interactive challenge when Cloudflare
+    // is unsure — which is the whole point, so it must be visible.
+    let box = document.getElementById('cf-turnstile-box');
+    if(!box){
+      box = document.createElement('div');
+      box.id = 'cf-turnstile-box';
+      box.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999';
+      document.body.appendChild(box);
+    }
+    box.innerHTML = '';
+    let settled = false;
+    const done = t => { if(!settled){ settled = true; resolve(t); } };
+    window.turnstile.render(box, {
+      sitekey: key,
+      callback: t => done(t),
+      'error-callback': () => { if(!settled){ settled = true;
+        reject(new Error('the human-check did not pass')); } },
+      'timeout-callback': () => done(''),
+    });
+  }));
+}
+
 /* fetch cannot report how much of a body has gone out; XHR can. */
-function postUpload(name, blob){
+function postUpload(name, blob, token){
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('video', blob, name);
     // The server asserts this too: the tick is in the page, and a script
     // never sees a page. Sent because the gate was actually accepted.
     form.append('rights', 'true');
+    if(token) form.append('cf-turnstile-response', token);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', API.upload);
     xhr.upload.onprogress = e => {
@@ -352,7 +404,12 @@ async function uploadAndIdentify(name, blob){
 
   let data;
   try{
-    data = await postUpload(name, blob);
+    // The human-check first, so its token is fresh when the upload lands.
+    // Resolves to '' instantly when Turnstile is not configured.
+    let token = '';
+    try{ token = await botToken(); }
+    catch(err){ return failed(err.message || 'Please complete the check and try again.'); }
+    data = await postUpload(name, blob, token);
     uploadDone = true;              // the file is there; now it is listening
     listenStarted = Date.now();
   }catch(err){
