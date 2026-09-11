@@ -9,6 +9,20 @@ So this looks. It builds a source clip in each shape, renders a single frame
 of every template that shape can use, and lays them out side by side with
 their settings written underneath.
 
+THESE ARE REAL RENDERS. Not a mock, not a drawing of what the output would
+be: this calls `render.render` - the same function `pipeline.py:122` calls
+for a visitor's job, with the same Style object - and then takes frame one
+out of the mp4 it produced. Every layout decision, every colour, the panel,
+the band, the encoder flags: all of it is the code that makes the video,
+because a preview produced by a second code path is a preview that can be
+wrong about the first.
+
+The one thing that is not the same is WHICH BAR OF MUSIC is showing. A real
+job renders against an alignment measured from that performance; this has no
+performance to align, so the band follows the package's own reference timing.
+The frame is the frame - the notes in it are simply not the notes that
+recording is playing at that instant.
+
     python tools/preview_matrix.py                     # find a video itself
     python tools/preview_matrix.py --video FILE        # use this recording
     python tools/preview_matrix.py --out DIR           # where the sheets go
@@ -26,6 +40,7 @@ anything it calls.
 import argparse
 import math
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,6 +72,13 @@ SOURCES = [
 
 LABEL_H = 46
 PAD = 18
+
+
+def slug(label: str) -> str:
+    """A filename from a template's label, readable in a directory listing."""
+    out = label.replace("·", " ").replace("%", "pc")
+    out = re.sub(r"[^A-Za-z0-9]+", "-", out).strip("-").lower()
+    return out or "frame"
 
 
 def nearest_frame(ratio: float) -> str:
@@ -223,22 +245,28 @@ def main() -> int:
     for name, w, h in SOURCES:
         source = make_source(video, work / f"src-{name}.mp4", w, h)
         frame = nearest_frame(w / h)
+        # One directory per input shape, holding every template at FULL SIZE
+        # plus the sheet. The sheet is for taking them all in at once; the
+        # frames are for looking at one properly, which a row of thumbnails
+        # cannot replace - seeing detail is the point of this tool.
+        shape_dir = out_dir / f"{name}_{w}x{h}"
+        shape_dir.mkdir(parents=True, exist_ok=True)
         cells = []
         for label, style in templates_for(frame):
-            tag = f"{name}-{label.replace(' ', '').replace('·', '-')}"
             t0 = time.time()
-            cells.append((label, frame_of(pkg, source, style, work, tag)))
-            print(f"  {name:>5} {label:<34} {time.time() - t0:5.1f}s")
-        title = (f"input {w}\u00d7{h}  \u2192  output "
-                 f"{rnd.ASPECTS[frame][0]}\u00d7{rnd.ASPECTS[frame][1]}"
+            img = frame_of(pkg, source, style, work, f"{name}-{slug(label)}")
+            img.save(shape_dir / f"{slug(label)}.png")
+            cells.append((label, img))
+            print(f"  {name:>6} {label:<34} {time.time() - t0:5.1f}s")
+        title = (f"input {w}×{h}  →  output "
+                 f"{rnd.ASPECTS[frame][0]}×{rnd.ASPECTS[frame][1]}"
                  f"    ({len(cells)} templates)")
-        path = out_dir / f"{name}.png"
-        sheet(cells, title).save(path)
-        written.append(path)
-        print(f"  -> {path}")
+        sheet(cells, title).save(shape_dir / "_sheet.png")
+        written.append(shape_dir)
+        print(f"  -> {shape_dir}  ({len(cells)} frames + _sheet.png)")
         print()
 
-    print(f"{len(written)} sheets in {time.time() - started:.0f}s")
+    print(f"{len(written)} folders in {time.time() - started:.0f}s")
     return 0
 
 
