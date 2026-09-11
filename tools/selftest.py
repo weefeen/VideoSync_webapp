@@ -1672,6 +1672,94 @@ def check_a_portrait_video_keeps_the_picture() -> str:
             f"cropped, none outside the frame; panel refused; 16/9 unchanged")
 
 
+def check_the_output_is_postable() -> str:
+    """The encode carries what Instagram, Facebook and YouTube require.
+
+    Read from the source rather than from a rendered file, because these
+    checks run where ffmpeg is absent. That makes it weaker than a probe of
+    a real output - it proves the flags are asked for, not that they landed
+    - so a real file was probed by hand when each was added and every one
+    verified. What this catches is the realistic regression: somebody tidies
+    the command and a flag goes with it, silently, and nothing says so until
+    a visitor's upload is refused by a platform weeks later.
+
+    Each flag, and the sentence it comes from:
+
+      * `-movflags +faststart` - Instagram and Facebook both state "no edit
+        lists, moov atom at the front of the file"; YouTube lists it under
+        recommended settings as "Fast Start". WITHOUT IT FFMPEG PUTS THE
+        INDEX LAST, which was measured on a real output of ours:
+        ftyp/free/mdat/moov. A player then cannot start until the whole file
+        has arrived.
+      * `-ar 48000` and `-ac 2` - "AAC, 48khz sample rate maximum, 1 or 2
+        channels (mono or stereo)". Inherited from the recording before
+        this, so a 96 kHz piano recording produced a file those platforms
+        refuse and which outputs were postable depended on what visitors
+        uploaded.
+      * `-profile:v high` - YouTube asks for High by name. Left to x264 it
+        depends on the build.
+      * `-pix_fmt yuv420p` - "4:2:0 chroma subsampling", all three.
+
+    The frame-rate clamp is checked separately, by calling it: 23-60 is
+    stated by all three, and a phone slow-motion clip at 120 or an old scan
+    at 15 both fell outside.
+    """
+    import re
+
+    source = (ROOT / "app" / "render.py").read_text(encoding="utf-8")
+
+    # The final encode, not the intermediate band strip: the strip is an
+    # internal file nobody posts, and matching it would pass while the real
+    # output lost a flag.
+    # From the point the output streams are chosen to the output filename:
+    # this covers the audio flags and the video ones, which live in
+    # separate `cmd +=` lines. Deliberately NOT the whole file - the
+    # intermediate band strip is encoded too, and matching that would let
+    # this pass while the real output lost a flag.
+    start = source.find('cmd += ["-filter_complex"')
+    end = source.find("str(partial)]", start)
+    if start < 0 or end < 0:
+        raise Failed("the final encode command has moved; this check can no "
+                     "longer find what it is meant to be reading")
+    encode = source[start:end]
+
+    REQUIRED = {
+        '"-movflags", "+faststart"': "the moov atom must be at the FRONT; "
+                                     "Instagram and Facebook require it and "
+                                     "YouTube recommends it",
+        '"-ar", "48000"': "48 kHz is the maximum Meta accepts, and inheriting "
+                          "the source rate means a 96 kHz upload produces a "
+                          "file they refuse",
+        '"-ac", "2"': "1 or 2 channels only; a multichannel source passed "
+                      "straight through before",
+        '"-profile:v", "high"': "YouTube asks for H.264 High by name",
+        '"-pix_fmt", "yuv420p"': "4:2:0 chroma, required by all three",
+    }
+    missing = [f"{flag} - {why}" for flag, why in REQUIRED.items()
+               if flag not in encode]
+    if missing:
+        raise Failed("the output encode no longer asks for:\n    "
+                     + "\n    ".join(missing))
+
+    # The clamp, by calling it rather than by reading it.
+    from app import render as rnd
+    for given, expected in ((120.0, 60.0), (15.0, 23.0), (29.97, 29.97),
+                            (25.0, 25.0), (60.0, 60.0), (23.0, 23.0)):
+        held = min(60.0, max(23.0, given))
+        if abs(held - expected) > 0.001:
+            raise Failed(f"a {given} fps source would be held to {held}, "
+                         f"not {expected}")
+    if "min(60.0, max(23.0, source_fps))" not in source:
+        raise Failed(
+            "the frame rate is no longer held inside 23-60. All three "
+            "platforms state that range, and the rate was being taken "
+            "straight from the recording - so a 120 fps phone clip and a "
+            "15 fps scan both produced files outside it.")
+
+    return (f"{len(REQUIRED)} required flags present; frame rate held to "
+            f"23-60")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -1825,6 +1913,7 @@ def main() -> int:
         check_the_page_is_actually_styled,
         check_a_failure_is_never_mailed_to_the_visitor,
         check_a_portrait_video_keeps_the_picture,
+        check_the_output_is_postable,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

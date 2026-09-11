@@ -748,6 +748,19 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
 
     on_progress("probe", video.name)
     info = probe(video)
+    # Held inside 23-60, which is what Instagram, Facebook and Threads all
+    # state. The rate was taken straight from the recording, so a phone
+    # slow-motion clip at 120 and an old scan at 15 both produced files
+    # outside that range - and again, whether an output was postable
+    # depended on what somebody happened to upload rather than on anything
+    # we chose. Duplicating or dropping frames to reach the nearest allowed
+    # rate is what every platform does to it anyway; doing it here means the
+    # file we hand over is the file they accept.
+    source_fps = info["fps"]
+    info["fps"] = min(60.0, max(23.0, source_fps))
+    if abs(info["fps"] - source_fps) > 0.01:
+        logger.info("frame rate %.3f held to %.0f for platform limits",
+                    source_fps, info["fps"])
     native_w, native_h = pkg.band_size
     layout = compute_layout(style, native_w / native_h, info["aspect"])
 
@@ -799,7 +812,16 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
 
         cmd += ["-filter_complex", ";".join(chain), "-map", "[out]"]
         if info["has_audio"]:
-            cmd += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]
+            # 48 kHz stereo, PINNED rather than inherited. Instagram,
+            # Facebook and Threads all state "AAC, 48khz sample rate
+            # maximum, 1 or 2 channels"; YouTube asks for 48 kHz. Without
+            # `-ar`/`-ac` the encoder keeps whatever arrived, so a 96 kHz
+            # recording - ordinary for a carefully recorded piano - or a
+            # multichannel one produced a file those platforms refuse, and
+            # which of our outputs were refusable depended on what visitors
+            # happened to upload.
+            cmd += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k",
+                    "-ar", "48000", "-ac", "2"]
         # ffmpeg writes beside the real name and Python renames on success,
         # so a run that dies part-way leaves `.part.mp4` rather than a file
         # that looks exactly like a finished video. That matters once a task
@@ -809,6 +831,21 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         partial.unlink(missing_ok=True)
         cmd += ["-c:v", "libx264", "-crf", str(style.crf), "-preset", "medium",
                 "-pix_fmt", "yuv420p", "-t", f"{info['duration']:.3f}",
+                # High profile explicitly: YouTube asks for it by name, and
+                # letting x264 pick means the profile depends on the build.
+                "-profile:v", "high",
+                # THE MOOV ATOM AT THE FRONT. Instagram and Facebook both
+                # require "no edit lists, moov atom at the front of the
+                # file"; YouTube lists it under recommended settings as
+                # "Fast Start". Without it ffmpeg leaves the index at the
+                # END, after the video data - measured on a real output,
+                # ftyp/free/mdat/moov - so a player cannot start until the
+                # whole file has arrived. It also makes our own delivery
+                # page play before the download finishes.
+                #
+                # It costs a second pass over the finished file to move the
+                # atom, which is seconds against a render of minutes.
+                "-movflags", "+faststart",
                 str(partial)]
 
         on_progress("encode", f"{width}x{height} · band {layout.band.w}x"
