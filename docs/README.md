@@ -1,6 +1,6 @@
 # docs/
 
-Seven documents. They serve different purposes, and two of them are
+Eight documents. They serve different purposes, and two of them are
 deliberately records of things that went wrong.
 
 | | What it is | Read it when |
@@ -8,6 +8,7 @@ deliberately records of things that went wrong.
 | `history.md` | **Why the system is shaped this way**, with the measurement or the argument that settled each question — including the decisions that reverse a design document. Ends with the mistakes worth keeping. | Before re-opening anything that looks arbitrary. Most of it looks arbitrary and is not. |
 | `status.md` | What is live, what is built and switched off, what is not built, what is waiting on a decision, and what the checks do not cover. | You are picking the work back up and need to know where it stands. |
 | `infrastructure.md` | The machines, what listens on what, which credential lives where and where each must never reach, mail, backups, and what is deliberately absent. | Touching a server, or building the next one. |
+| `score-on-demand.md` | **The design for engraving scores when someone asks for one**, rather than all 235 up front: the demand mail, the staging root, the admin page, the proof render, and what a waiting visitor is told. Not built. | Before starting any of it, and before re-opening the gate question. |
 | `deployment-log.md` | **A record, appended to, never tidied.** Every change made to a machine, in order, with what it was for and what it proved. A step that turned out to be wrong is worth more here than a clean account that hides it. | Something about a server looks odd and you want the written cause rather than a story somebody half remembers. |
 | `broker-slice.md` | The design for splitting the worker out of the web process, with RabbitMQ between them. Says which parts are done and marks what is still open. | Before touching anything under `app/queue/`. |
 | `queue-design.md` | The larger design this was cut from: stage-per-queue, two hosts, scale-to-zero, storage tiers, observability. Written first, and **since overtaken in several places.** | Planning what comes after the current slice. |
