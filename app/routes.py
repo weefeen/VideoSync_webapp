@@ -814,7 +814,17 @@ def _style_from(body: dict) -> rnd.Style:
         background=background,
         background_path=path,
         band_position=style.get("band_position", rnd.BOTTOM),
-        panel=bool(style.get("panel", False)),
+        # THE STRING, not bool(the string). `bool("off")` is True, so every
+        # render came back with a left title panel whatever the visitor
+        # chose: "None" and "Centered" both arrived as True, and
+        # `Style.__post_init__` turns a truthy boolean into PANEL_LEFT. The
+        # interface was fixed to send 'off' | 'left' | 'centered' and carries
+        # a comment saying so; this half was never done, which undid it.
+        #
+        # `__post_init__` still accepts a real boolean on purpose, because
+        # job rows queued before those names existed hold one and still have
+        # to be renderable from their own row.
+        panel=style.get("panel", rnd.PANEL_OFF),
         panel_width=number("panel_width", 0.301),
         canvas_bg=style.get("canvas_bg", "#141019"),
         band_bg=style.get("band_bg", "#ffffff"),
@@ -824,6 +834,10 @@ def _style_from(body: dict) -> rnd.Style:
         # Which slice of the video's height survives the crop, when it is
         # taller than the space beside the band.
         video_offset=number("video_offset", 0.5),
+        # Portrait only: where the group sits in the tall frame. Read here or
+        # the control does nothing — the interface would move the preview and
+        # the render would ignore it, which is the preview lying.
+        portrait_offset=number("portrait_offset", 0.32),
     )
 
 

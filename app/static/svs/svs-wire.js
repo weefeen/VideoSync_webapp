@@ -364,7 +364,15 @@ async function uploadAndIdentify(name, blob){
   }
 
   JOB = data.job.id;
-  if(data.probe && data.probe.duration) S.src.dur = clock(data.probe.duration);
+  // The probe was arriving and being thrown away except for the duration,
+  // so the interface believed every recording was 16:9 - the mock's default.
+  // A phone video was previewed, and rendered, as though it were landscape.
+  if(data.probe){
+    if(data.probe.duration) S.src.dur = clock(data.probe.duration);
+    if(data.probe.fps) S.src.fps = `${Math.round(data.probe.fps)} fps`;
+    if(data.probe.width && data.probe.height)
+      setSourceShape(data.probe.width, data.probe.height);
+  }
 
   try{
     await fetch(API.identify(JOB), { method:'POST' });
@@ -464,6 +472,7 @@ $('#submit').onclick = async function(){
         style: {
           aspect: S.aspect,
           band_position: S.bandPos,
+          portrait_offset: S.portraitOffset,
           // the mode itself: 'off', 'left' or 'centered'. This sent a
           // boolean while the renderer only knew a left column, so
           // choosing Centered quietly produced a left one.
@@ -577,13 +586,64 @@ function centredLayout(cw, ch, videoAspect, bandAspect){
   };
 }
 
+/* 9:16, mirroring `_portrait_layout` in app/render.py.
+ *
+ * The landscape rule - the video spans the content width and the overflow
+ * is cropped - is right when the canvas and the picture are close in shape
+ * and ruinous when they are not. A 16:9 recording in a 9:16 frame kept 35%
+ * of its width and threw the rest away, which for a piano filmed in
+ * landscape loses both ends of the keyboard. So portrait fits instead.
+ *
+ * PORTRAIT_OFFSET must match Style.portrait_offset. It slides the group
+ * from the top edge to the bottom, because Instagram, TikTok and Shorts all
+ * draw their interface over the video and none of them publishes where.
+ */
+const PORTRAIT_OFFSET = 0.32;
+
+function portraitLayout(cw, ch, videoAspect, bandAspect){
+  const even = n => Math.max(2, Math.round(n) - (Math.round(n) % 2));
+  const evenAt = n => { const v = Math.round(Math.max(0, n)); return v - (v % 2); };
+
+  let videoW = even(cw), videoH = even(cw / videoAspect);
+  let bandW  = even(cw), bandH  = even(cw / bandAspect);
+  const gap = even(ch * 0.012);
+
+  // Shrunk until it FITS, not shrunk once: `even` rounds to nearest, so
+  // scaling by exactly ch/total can round back up and leave the group
+  // taller than the frame. Same loop as the renderer, for the same reason.
+  let total = videoH + gap + bandH;
+  for (let i = 0; i < 8 && total > ch; i++) {
+    const shrink = ch / total;
+    videoW = even(videoW * shrink); videoH = even(videoH * shrink);
+    bandW  = even(bandW  * shrink); bandH  = even(bandH  * shrink);
+    total = videoH + gap + bandH;
+  }
+  if (total > ch) return null;
+
+  const top = evenAt((ch - total) * Math.min(1, Math.max(0, S.portraitOffset)));
+  const bandTop = S.bandPos === 'top';
+  const bandY  = bandTop ? top : top + videoH + gap;
+  const videoY = bandTop ? top + bandH + gap : top;
+
+  return {
+    cw, ch, surplus: 0, surplusX: 0,
+    band:  { x: evenAt((cw - bandW) / 2), y: bandY, w: bandW, h: bandH },
+    video: { x: evenAt((cw - videoW) / 2), y: videoY, w: videoW, h: videoH },
+  };
+}
+
+
 function renderLayout(){
   const w = realBand();
   if(!w) return null;
   const [cw, ch] = CANVAS[S.aspect] || CANVAS['16/9'];
-  const [va, vb] = (S.src.aspect || '16/9').split('/').map(Number);
-  const videoAspect = va / vb, bandAspect = w.band_w / w.band_h;
+  // The REAL shape, not the nearest name: a 4:3 recording is 1.333 and
+  // previewing it as 16:9 puts the picture in the wrong place by a visible
+  // margin. The name is for captions.
+  const videoAspect = S.src.ratio || 16/9;
+  const bandAspect = w.band_w / w.band_h;
 
+  if (S.aspect === '9/16') return portraitLayout(cw, ch, videoAspect, bandAspect);
   if (S.panel === 'centered') return centredLayout(cw, ch, videoAspect, bandAspect);
 
   const panelW = S.panel === 'left' ? Math.round(cw * PANEL_W) : 0;

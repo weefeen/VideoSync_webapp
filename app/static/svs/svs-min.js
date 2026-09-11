@@ -36,15 +36,58 @@ const SOURCES = {
 };
 const S = {
   screen:'pick', file:null, piece:null, recog:'heard', manual:false,
-  src:{ aspect:'16/9', px:'1920 × 1080', label:'16:9', fps:'30 fps', dur:'7:04', codec:'H.264 · AAC', size:'412 mb' },
+  // `ratio` is the source's REAL shape as a number, filled in from the
+  // probe when a file is uploaded. `aspect` is the nearest named one,
+  // for the labels only: a phone video is 0.5624, and no caption
+  // should say so.
+  src:{ aspect:'16/9', ratio:16/9, px:'1920 × 1080', label:'16:9', fps:'30 fps', dur:'7:04', codec:'H.264 · AAC', size:'412 mb' },
   bandPos:'bottom', bd:'colour', bdImage:null, bdPx:null, bdBad:null,
   logo:'weefeen', logoImage:null, logoSrc:null, logoBad:null,
   posters:[], poster:0,
   bandColor:'#f6f1e8', noteColor:'#1c1622', alpha:100, bdColor:'#241a33',
   panel:'off', text:Object.fromEntries(FIELDS.map(([k,,d])=>[k,d])),
+  // Where the group sits in a portrait frame. See Style.portrait_offset:
+  // the apps draw their interface over the video and do not publish
+  // where, so this is the viewer's to set.
+  portraitOffset:0.32,
   open:false, email:'',
 };
+// THE OUTPUT FRAME IS THE RECORDING'S OWN SHAPE - always, by decision.
+// There is no chooser: a 16:9 recording makes a 16:9 video and a phone
+// recording makes a portrait one, and what changes between them is the
+// TEMPLATE, not the dimensions.
+//
+// This getter was here from the start and was always right. What was wrong
+// is that `S.src.aspect` never left its mock default: the probe that comes
+// back from the upload was read for its duration and nothing else, so every
+// recording was treated as 16:9 - and a portrait one was rendered into a
+// landscape frame with most of it cropped away. `setSourceShape` fills it in.
 Object.defineProperty(S,'aspect',{get(){return S.src.aspect}});
+function nearestFrame(ratio){
+  // Nearest of the three we can render, by ratio. A 4:3 recording is closer
+  // to square than to widescreen and should not default to 16:9 just
+  // because that is the common case.
+  const opts = [['16/9', 16/9], ['1/1', 1], ['9/16', 9/16]];
+  let best = '16/9', gap = Infinity;
+  for (const [name, r] of opts) {
+    const d = Math.abs(Math.log(ratio / r));
+    if (d < gap) { gap = d; best = name; }
+  }
+  return best;
+}
+
+function setSourceShape(width, height){
+  if (!width || !height) return;
+  S.src.ratio = width / height;
+  S.src.px = `${width} × ${height}`;
+  S.src.aspect = nearestFrame(S.src.ratio);
+  S.src.label = S.src.aspect.replace('/', ':');
+  // The renderer REFUSES a title panel in portrait - a column in a frame
+  // 1080 across leaves too little picture to watch. Turned off here rather
+  // than left to fail at submit, which would be a render request rejected
+  // after the person had finished designing.
+  if(S.src.aspect === '9/16') S.panel = 'off';
+}
 let CANDS = [   /* replaced by the recogniser's answer */['sch3',96],['bal1',62],['bar',41]];
 const W = id => WORKS.find(w=>w.id===id);
 const P = () => W(S.piece);

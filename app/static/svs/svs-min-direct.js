@@ -87,15 +87,23 @@ function inspBody(id){
       </ul></div>
     <p class="inote">${S.logo==='weefeen' ? 'The Weefeen mark — the default on the free plan.' : 'The Weefeen mark in the score band stays on the free plan.'}</p>`;
   if(id==='pnl') return head + `
+    ${S.aspect === '9/16' ? `
+    <div class="irow"><span class="lab">Height</span>
+      <div class="slider"><input type="range" min="0" max="100" value="${Math.round(S.portraitOffset*100)}" id="pofs"/>
+        <span class="sv num" id="pofsv">${Math.round(S.portraitOffset*100)}%</span></div>
+      <span class="why-inline" id="pofswhy">Instagram and TikTok draw their own buttons over the video. Move it clear of them.</span></div>` : ''}
     <div class="irow"><span class="lab">Layout</span>
       <div class="opts" data-g="panel">
-        <button class="o${S.panel==='left'?' on':''}" data-v="left">Panel</button>
-        <button class="o${S.panel==='centered'?' on':''}" data-v="centered">Centered</button>
+        <button class="o${S.panel==='left'?' on':''}" data-v="left"${S.aspect==='9/16'?' disabled':''}>Panel</button>
+        <button class="o${S.panel==='centered'?' on':''}" data-v="centered"${S.aspect==='9/16'?' disabled':''}>Centered</button>
         <button class="o${S.panel==='off'?' on':''}" data-v="off">None</button>
-      </div></div>
+      </div>
+      ${S.aspect==='9/16' ? '<span class="why-inline">A title column does not fit 1080 across \u2014 it would leave too little picture.</span>' : ''}</div>
     ${S.panel==='left' ? `<div class="irow"><span class="lab">Panel ground</span>${chipRow('bdColor',['#241a33','#0f0d13','#381C53','#f6f1e8'])}
       <span class="why-inline">The panel text ink follows it automatically.</span></div>` : ''}
-    <p class="inote">${S.panel==='off'
+    <p class="inote">${S.aspect==='9/16'
+      ? 'Portrait is the shape Reels and Shorts want. Your recording keeps all of itself \u2014 the space around it is backdrop.'
+      : S.panel==='off'
       ? 'With no panel the frame is all video, and the credit sits in the score band.'
       : 'Click any line of panel text in the frame to retype it.'}</p>`;
   return head + `
@@ -224,6 +232,16 @@ function bindShape(){
   });
   insp.addEventListener('input', e=>{
     if(e.target.id==='alpha'){ S.alpha = +e.target.value; alphaCopy(); paint(); place(sel); }
+    // Portrait only: where the video and score sit in the tall frame.
+    // Instagram, TikTok and Shorts draw their own buttons over the video and
+    // none of them publishes where, so this is the one the person posting has
+    // to be able to set for themselves.
+    if(e.target.id==='pofs'){
+      S.portraitOffset = (+e.target.value) / 100;
+      const out = document.getElementById('pofsv');
+      if(out) out.textContent = e.target.value + '%';
+      paint(); place(sel);
+    }
   });
 
   /* dismiss */

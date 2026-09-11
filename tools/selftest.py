@@ -1760,6 +1760,83 @@ def check_the_output_is_postable() -> str:
             f"23-60")
 
 
+def check_the_choices_survive_the_request() -> str:
+    """What the visitor picked is what the renderer is given.
+
+    `_style_from` is the only place the interface's words become a `Style`,
+    and a field that is dropped or coerced there fails SILENTLY: the render
+    succeeds, the video is delivered, and it is simply not the one that was
+    asked for. That is not hypothetical.
+
+    THE PANEL WAS `bool(style.get("panel"))`. `bool("off")` is True, and
+    `Style.__post_init__` turns a truthy boolean into PANEL_LEFT - so
+    choosing "None" and choosing "Centered" both produced a left title
+    column, for every render this site has made. The interface had already
+    been fixed to send 'off' | 'left' | 'centered' and carries a comment
+    saying so; the server half was never done, which undid it completely.
+
+    The boolean form is still accepted, and that is tested too: job rows
+    queued before those names existed hold `true`/`false` and have to stay
+    renderable from their own row.
+
+    `portrait_offset` is checked for the same reason. The interface moves
+    the preview with it; if the renderer never receives it, the preview is
+    lying about where the score will sit.
+    """
+    from app import routes, render as rnd
+
+    for sent, expected in (("off", rnd.PANEL_OFF),
+                           ("left", rnd.PANEL_LEFT),
+                           ("centered", rnd.PANEL_CENTERED)):
+        got = routes._style_from({"style": {"panel": sent}}).panel
+        if got != expected:
+            raise Failed(
+                f"the interface sends panel={sent!r} and the renderer is "
+                f"given {got!r}. Every video would carry a layout nobody "
+                f"chose, and nothing anywhere would say so.")
+
+    # Old rows, which hold a boolean.
+    for legacy, expected in ((True, rnd.PANEL_LEFT), (False, rnd.PANEL_OFF)):
+        got = routes._style_from({"style": {"panel": legacy}}).panel
+        if got != expected:
+            raise Failed(
+                f"a job row holding panel={legacy!r} now renders as {got!r}. "
+                f"Rows queued before the names existed still have to render "
+                f"from their own row.")
+
+    if routes._style_from({"style": {"portrait_offset": 0.9}}).portrait_offset != 0.9:
+        raise Failed(
+            "portrait_offset does not reach the renderer. The interface "
+            "moves the preview with it, so the preview would promise a "
+            "position the video does not have.")
+    if routes._style_from({"style": {}}).portrait_offset != 0.32:
+        raise Failed("the portrait offset default changed without the "
+                     "interface's PORTRAIT_OFFSET changing with it")
+
+    # Every field the interface actually sends must be read. Caught by name
+    # rather than by hand, so a field added to the request and forgotten here
+    # fails a check instead of being quietly dropped.
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8", errors="ignore")
+    start = wire.find("style: {")
+    sent_keys = set()
+    if start >= 0:
+        import re
+        block = wire[start:wire.find("},", start)]
+        sent_keys = {m.group(1) for m in re.finditer(r"^\s*(\w+):", block, re.M)}
+    source = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    body = source[source.find("def _style_from"):source.find("@bp.post", source.find("def _style_from"))]
+    dropped = sorted(k for k in sent_keys if f'"{k}"' not in body)
+    if dropped:
+        raise Failed(
+            "the interface sends these and `_style_from` never reads them, "
+            "so choosing them changes nothing and says nothing: "
+            + ", ".join(dropped))
+
+    return (f"panel survives as a name and as a legacy boolean; "
+            f"portrait_offset arrives; {len(sent_keys)} sent fields all read")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -1914,6 +1991,7 @@ def main() -> int:
         check_a_failure_is_never_mailed_to_the_visitor,
         check_a_portrait_video_keeps_the_picture,
         check_the_output_is_postable,
+        check_the_choices_survive_the_request,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
