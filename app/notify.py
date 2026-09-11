@@ -122,7 +122,10 @@ def _compose(subject: str, address: str, body: str) -> EmailMessage:
     # Absent, and the relay's scanner fires MISSING_XM_UA: every real mail
     # client identifies itself, so a message from none looks machine-made in
     # the way that matters.
-    message["X-Mailer"] = "VideoSync"
+    # With a version: without one the scanner fires XM_UA_NO_VERSION, since
+    # a mailer that will not say which build it is looks like software
+    # pretending to be a mail client.
+    message["X-Mailer"] = "VideoSync 1.0"
     message.set_content(_plain(body), cte="7bit")
     return message
 
