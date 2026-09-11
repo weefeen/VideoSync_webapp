@@ -53,6 +53,7 @@ def _noop(stage: str, detail: str = "") -> None:
 
 
 ASPECTS = {"16/9": (1920, 1080), "1/1": (1080, 1080), "9/16": (1080, 1920)}
+PORTRAIT = "9/16"
 
 NONE, STATIC, DYNAMIC = "none", "static", "dynamic"
 BACKGROUNDS = (NONE, STATIC, DYNAMIC)
@@ -120,6 +121,23 @@ class Style:
     # than the space beside the band. 0 keeps the top of the frame,
     # 1 the bottom, 0.5 the middle.
     video_offset: float = 0.5
+    # PORTRAIT ONLY: where the video-and-band group sits in the frame.
+    # 0 puts it against the top edge, 1 against the bottom, 0.5 centres it.
+    #
+    # It exists because Instagram, TikTok and YouTube Shorts all draw their
+    # own interface over the video - a username and follow button across the
+    # top, a caption and a column of buttons across the bottom right - and
+    # NONE OF THEM PUBLISHES WHERE. Meta ships a "Safe Zone Guardrail" tool
+    # in Ads Manager instead of a specification, which is an admission that
+    # the numbers move. The figures everyone quotes for a 1080x1920 frame -
+    # about 270px at the top and 672px at the bottom - are observed, not
+    # documented, and they will be wrong the next time an app is redesigned.
+    #
+    # So this is not a fine adjustment on top of a correct default. There is
+    # no correct default. 0.32 lands the group inside the strip those
+    # observed figures leave clear, and the person posting the video is the
+    # one who can see what actually covers it.
+    portrait_offset: float = 0.32
     crf: int = 20
 
     def __post_init__(self) -> None:
@@ -146,6 +164,16 @@ class Style:
         if self.band_position not in (TOP, BOTTOM):
             raise RenderError(f"band_position must be {TOP!r} or {BOTTOM!r}, "
                               f"got {self.band_position!r}.")
+        if not 0.0 <= self.portrait_offset <= 1.0:
+            raise RenderError("portrait_offset must be between 0 and 1.")
+        # Refused rather than ignored. A panel asked for and silently dropped
+        # is a person wondering where their title went; a panel in a 1080
+        # wide frame leaves the picture too narrow to be worth watching.
+        if self.aspect == PORTRAIT and self.panel != PANEL_OFF:
+            raise RenderError(
+                "A title panel does not fit a portrait video. The frame is "
+                "1080 wide and a column would leave too little for the "
+                "picture. Turn the panel off for 9/16.")
         if self.background in (STATIC, DYNAMIC):
             if not self.background_path:
                 raise RenderError(
@@ -235,6 +263,8 @@ def compute_layout(style: Style, band_aspect: float,
     height is whatever its aspect demands, and the surplus is cropped.
     `style.video_offset` chooses which slice of it survives.
     """
+    if style.aspect == PORTRAIT:
+        return _portrait_layout(style, band_aspect, video_aspect)
     if style.panel == PANEL_CENTERED:
         return _centered_layout(style, band_aspect, video_aspect)
 
@@ -302,6 +332,93 @@ def compute_layout(style: Style, band_aspect: float,
                   video_source=(source_w, source_h),
                   video_crop_x=video_crop_x,
                   video_crop_y=video_crop_y)
+
+
+def _portrait_layout(style: Style, band_aspect: float,
+                     video_aspect: float) -> Layout:
+    """9:16, for Reels and Shorts. Fitted, never cropped, and movable.
+
+    THE LANDSCAPE RULE DESTROYS A PORTRAIT FRAME. Everywhere else the video
+    spans the content width and whatever overflows is cropped, which is
+    right when the canvas and the picture are close in shape: at 16/9
+    nothing is lost at all. At 9/16 they are as far apart as they get. A
+    16:9 recording was being scaled to 3054x1718 and cut to 1080 wide -
+    KEEPING 35% OF THE PICTURE AND THROWING AWAY THE REST, which for a piano
+    filmed in landscape means losing both ends of the keyboard and usually
+    the hands. The file was valid and nobody was told.
+
+    So here the video keeps its own shape. A 16:9 recording lands 1080x608
+    in a 1920-tall frame, the band takes about 202 more, and well over half
+    the frame is backdrop. That space is the composition rather than a
+    problem to fill: the pair floats in it, the way the centred layout
+    floats beside its column.
+
+    No panel - `Style.__post_init__` refuses one, because a column in a 1080
+    wide frame leaves the picture too narrow to watch.
+
+    `style.portrait_offset` slides the group from the top edge to the bottom
+    one. That is the whole point of this layout being separate: the apps
+    draw their own interface over the video and do not say where, so the
+    position has to be somebody's choice rather than a constant compiled in
+    here. See the field for why there is no correct default.
+    """
+    width, height = style.canvas
+
+    margin = style.margin
+    content_x, content_w = margin, width - 2 * margin
+    if content_w < 16:
+        raise RenderError("The canvas is too small for this margin.")
+
+    # Both fitted to the full width, each keeping its own aspect. This is
+    # the line that stops the cropping.
+    video_w, video_h = _even(content_w), _even(content_w / video_aspect)
+    band_w, band_h = _even(content_w), _even(content_w / band_aspect)
+
+    # Floating rather than butted against an edge, so a hairline of air
+    # between them reads as deliberate where zero reads as a mistake - the
+    # same reasoning as the centred layout. An explicit gap still wins.
+    gap = max(style.gap, _even(height * 0.012))
+
+    total = video_h + gap + band_h
+    # Shrunk until it FITS, not shrunk once. `_even` rounds to the nearest
+    # even number, so scaling by exactly height/total can round back up and
+    # leave the group taller than the frame it was shrunk to fit: a phone
+    # recording, 9:16 in a 9:16 frame, came out 1922px in a 1920px canvas
+    # and pushed the score band off the bottom edge. Two pixels, and the
+    # score was gone. Each pass gets closer and this settles in one or two.
+    for _ in range(8):
+        if total <= height:
+            break
+        shrink = height / total
+        video_w, video_h = _even(video_w * shrink), _even(video_h * shrink)
+        band_w, band_h = _even(band_w * shrink), _even(band_h * shrink)
+        total = video_h + gap + band_h
+    if total > height or video_h < 16 or band_h < 16:
+        raise RenderError(
+            "There is no room for both the picture and the score in a "
+            "portrait frame.")
+
+    # The offset spans the WHOLE frame, not a safe strip: a strip would be
+    # this file asserting where an app's buttons are, which is the thing it
+    # cannot know. Clamped so the group never leaves the frame.
+    top = _even_at((height - total) * _clamp01(style.portrait_offset))
+
+    if style.band_position == TOP:
+        band_y, video_y = top, top + band_h + gap
+    else:
+        video_y, band_y = top, top + video_h + gap
+
+    video_x = content_x + _even_at((content_w - video_w) / 2)
+    band_x = content_x + _even_at((content_w - band_w) / 2)
+
+    # Fitted, so the source is exactly what lands: `crops` stays False and
+    # the filter graph skips the crop entirely.
+    return Layout(canvas=(width, height),
+                  band=Rect(band_x, band_y, band_w, band_h),
+                  video=Rect(video_x, video_y, video_w, video_h),
+                  panel=None,
+                  video_source=(video_w, video_h),
+                  video_crop_x=0, video_crop_y=0)
 
 
 def _centered_layout(style: Style, band_aspect: float,

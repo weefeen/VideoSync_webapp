@@ -1576,6 +1576,102 @@ def check_a_failure_is_never_mailed_to_the_visitor() -> str:
             "no visitor address in either operator mail")
 
 
+def check_a_portrait_video_keeps_the_picture() -> str:
+    """9:16 fits the picture instead of cropping it, and stays in the frame.
+
+    Everywhere else the video spans the content width and the overflow is
+    cropped. That is right when the canvas and the picture are close in
+    shape - at 16/9 nothing is lost at all - and it is ruinous when they are
+    not. A 16:9 recording in a 9:16 frame was scaled to 3054x1718 and cut to
+    1080 wide: 35% OF THE PICTURE KEPT, the rest discarded, which for a piano
+    filmed in landscape loses both ends of the keyboard and usually the
+    hands. The file was valid, uploaded fine, and nobody was told.
+
+    Three properties:
+
+      * PORTRAIT NEVER CROPS. Whatever shape the recording is, all of it
+        survives. This is the bug that made 9:16 unusable.
+      * nothing leaves the canvas, at either band position and anywhere the
+        offset is put. The shrink that makes an oversized group fit rounds
+        to even numbers, and rounding UP after scaling down put a 1922px
+        group in a 1920px frame - two pixels, and the score band was off
+        the bottom edge.
+      * landscape still crops, unchanged. The fix is for the aspect that
+        needed it and must not quietly restyle the one people already use.
+
+    The offset is not checked against any safe zone on purpose. Instagram,
+    TikTok and Shorts all draw their interface over the video and none of
+    them publishes where; asserting a strip here would be this suite
+    claiming to know a number that its own documentation says is observed
+    rather than specified. What is checked is that the control works.
+    """
+    from app import render as rnd
+
+    BAND = 1306 / 244.0                       # the Op.39 band, measured
+    SHAPES = {"16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1.0,
+              "9:16": 9 / 16, "21:9": 21 / 9, "1:2": 0.5}
+
+    for name, video_aspect in SHAPES.items():
+        for offset in (0.0, 0.32, 0.5, 1.0):
+            for position in ("top", "bottom"):
+                style = rnd.Style(aspect="9/16", portrait_offset=offset,
+                                  band_position=position)
+                layout = rnd.compute_layout(style, BAND, video_aspect)
+
+                if layout.crops:
+                    raise Failed(
+                        f"a {name} recording is cropped in portrait. Nothing "
+                        f"is cropped in a 9:16 frame: the canvas and the "
+                        f"picture are too far apart in shape, and cropping "
+                        f"to fit threw away two thirds of the width.")
+
+                top = min(layout.video.y, layout.band.y)
+                bottom = max(layout.video.y + layout.video.h,
+                             layout.band.y + layout.band.h)
+                right = max(layout.video.x + layout.video.w,
+                            layout.band.x + layout.band.w)
+                if top < 0 or bottom > layout.canvas[1] or right > layout.canvas[0]:
+                    raise Failed(
+                        f"{name} at offset {offset} with the band {position} "
+                        f"puts the group at {top}..{bottom} in a "
+                        f"{layout.canvas[0]}x{layout.canvas[1]} frame. "
+                        f"Anything past the edge is simply not in the video.")
+
+    # The offset has to actually move it, or the control is decoration.
+    style_top = rnd.Style(aspect="9/16", portrait_offset=0.0)
+    style_bottom = rnd.Style(aspect="9/16", portrait_offset=1.0)
+    high = rnd.compute_layout(style_top, BAND, 16 / 9).video.y
+    low = rnd.compute_layout(style_bottom, BAND, 16 / 9).video.y
+    if low <= high:
+        raise Failed(
+            f"the portrait offset does not move the group: 0.0 puts it at "
+            f"{high} and 1.0 at {low}. It exists because no app publishes "
+            f"where its buttons are, so the person posting has to be able "
+            f"to move the score out from under them.")
+
+    # A panel is refused rather than ignored.
+    for panel in ("left", "centered"):
+        try:
+            rnd.Style(aspect="9/16", panel=panel).validate()
+        except rnd.RenderError:
+            pass
+        else:
+            raise Failed(
+                f"a {panel!r} panel was accepted in portrait. A column in a "
+                f"1080-wide frame leaves the picture too narrow to watch, "
+                f"and a panel silently dropped is somebody wondering where "
+                f"their title went.")
+
+    # And landscape is untouched: it still fills and crops.
+    wide = rnd.compute_layout(rnd.Style(aspect="16/9"), BAND, 16 / 9)
+    if not wide.crops:
+        raise Failed("16/9 stopped cropping. The portrait fix changed the "
+                     "aspect everybody already uses.")
+
+    return (f"{len(SHAPES)} source shapes x 4 offsets x 2 positions: none "
+            f"cropped, none outside the frame; panel refused; 16/9 unchanged")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -1728,6 +1824,7 @@ def main() -> int:
         check_the_recogniser_is_marked_right_or_wrong,
         check_the_page_is_actually_styled,
         check_a_failure_is_never_mailed_to_the_visitor,
+        check_a_portrait_video_keeps_the_picture,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
