@@ -1184,7 +1184,61 @@ function correctDoneCopy(){
     'It takes a few minutes. Nothing else is needed from you.';
 }
 
+
+/* ── one address that outlives the tab ────────────────────────────────
+ *
+ * A render can take the better part of an hour, so nobody should have to sit
+ * on this page to get their video. The job id goes into the URL the moment
+ * rendering starts, which makes the address in the bar bookmarkable, and the
+ * same address is what the emails carry.
+ *
+ * `replaceState`, not `pushState`: this is the same page in a later state,
+ * not a new one, and a back button that steps through render progress would
+ * be a bug rather than a feature.
+ */
+function rememberJob(job){
+  if(!job) return;
+  try{
+    history.replaceState(null, '', `#job=${job}`);
+  }catch(err){
+    // Some embedded browsers refuse replaceState on a file:// or sandboxed
+    // origin. The page still works; it just cannot be bookmarked.
+  }
+}
+
+/* Come back to a job from a link — the bookmark, or either email.
+ *
+ * Deliberately quiet on every failure. A hash that names a job this server
+ * has never heard of, or one swept long ago, must leave the normal page
+ * exactly as it was: somebody following a stale link from an old mail should
+ * land on a site that works, not an error.
+ */
+async function resumeFromLink(){
+  const m = (location.hash || '').match(/[#&]job=([0-9a-fA-F]{6,32})/);
+  if(!m) return;
+  const job = m[1];
+
+  let s;
+  try{
+    const r = await fetch(`/api/jobs/${job}/status`);
+    if(!r.ok) return;
+    s = (await r.json()).job;
+  }catch(err){
+    return;
+  }
+  if(!s || !s.id) return;
+
+  JOB = job;
+  correctDoneCopy();
+  S.screen = 'done';
+  draw();
+  // Picks up wherever it is: still queued, mid-render, finished, or failed.
+  watchRender(job);
+}
+document.addEventListener('DOMContentLoaded', resumeFromLink);
+
 async function watchRender(job){
+  rememberJob(job);
   const box = deliveryBox();
   if(!box) return;
   const stat = box.querySelector('.stat');

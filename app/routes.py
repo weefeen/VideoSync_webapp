@@ -783,6 +783,25 @@ def api_render(job_id: str):
 
     body = request.get_json(silent=True) or {}
     address = str(body.get("email", "")).strip().lower()
+
+    # REQUIRED, when we can actually send. A render is minutes to the better
+    # part of an hour, and nobody should have to hold a page open for that —
+    # so the address is how the finished video reaches them. The interface
+    # has always demanded one; this is the same rule for anything that talks
+    # to the API directly, which is the path that matters, because it is what
+    # a script uses and a script is what runs up a compute bill.
+    #
+    # Conditional on `can_email` on purpose: with no relay configured the
+    # promise cannot be kept, and demanding an address we cannot write to
+    # would be collecting a personal detail for nothing. The page falls back
+    # to "stay here", and the job link in the address bar still works.
+    if not address and settings.can_email:
+        return jsonify({
+            "error": "An email address is needed.",
+            "detail": "Making the video takes several minutes, and up to an "
+                      "hour for a long recording. We send you a link when it "
+                      "is done so you do not have to wait on this page.",
+        }), 400
     # Checked here as well as before sending, so somebody who mistypes is
     # told now rather than waiting out a render for a mail that never comes
     # — and so a string carrying several recipients never reaches the queue.

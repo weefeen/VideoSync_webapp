@@ -33,8 +33,20 @@ class MailError(RuntimeError):
 
 
 def _link(job_id: str) -> str:
+    """The one address a visitor is ever given for their job.
+
+    The page, not the file. `/api/jobs/<id>/download` answers 404 until the
+    render finishes and a raw JSON 410 after the retention window, so a link
+    straight to it is broken at both ends of the job's life — exactly when
+    somebody is most likely to click one out of an old mail. The page is
+    meaningful at every point: queued, rendering with its stage, ready with a
+    button, or expired with an explanation.
+
+    It is also the same address the browser puts in the bar while rendering,
+    so the mail and the bookmark agree.
+    """
     base = (settings.public_base_url or "").rstrip("/")
-    return f"{base}/api/jobs/{job_id}/download"
+    return f"{base}/app/#job={job_id}"
 
 
 # Deliberately strict rather than clever. Anything unusual but valid gets

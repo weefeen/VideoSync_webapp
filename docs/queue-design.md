@@ -25,11 +25,45 @@ deployment-related lives in this repository** — VideoScoreSync's
 compose, prometheus, grafana and supervisord files stay untouched and
 unreferenced; only its audio services are consumed (§15).
 
+**Decided since this was written — 2026-09-11, by the owner:**
+
+| # | Decision | Outcome |
+|---|---|---|
+| D | Where recognition runs | **The always-on web box. Recognition NEVER creates a compute node.** This reverses the recommendation above. |
+| — | What triggers a compute node | **A render request, which now requires an email address.** Nothing else. |
+
+**Why D reversed.** Its own criterion was latency — the web box wins "if it
+measures under ~90 s". Measured on the test node it is **126–156 s**, which by
+the letter of D argues for the singleton. Two things D did not weigh outweigh
+that:
+
+1. **Recognition is unauthenticated and always will be; that is the product.**
+   If "what piece is this?" creates a Linode, a stranger with a shell loop
+   runs up the bill from a laptop. This is denial-of-wallet, not waste, and it
+   does not depend on any judgement about intent.
+2. **A node makes recognition slower, not faster.** Create plus boot plus
+   torch load is ~2 min. On a node the visitor waits ~4½ minutes for the
+   answer instead of ~2½ — and that is the *first* interaction, the one that
+   decides whether they stay.
+
+It also gets easier rather than harder: once the render moves off the web box
+it frees exactly the memory recognition wants — the `align` spike measured
+2433 MB of 3915.
+
+**Why the render request is the trigger.** It is the point where somebody asks
+for the expensive thing: 557 s of saturated CPU, measured. The email is
+required because the render can take the better part of an hour and nobody
+should hold a page open for that — **not** as proof of commitment. An address
+is not a commitment signal; anyone can type `a@b.com`. The defences against
+abuse are `render_ip`, `render_email`, and the bot check still to come.
+
+Consequently the scaler watches **`vsw.render` only**. There is no identify
+queue for it to watch, which also matches the topology that actually exists.
+
 **Still open — the owner's call:**
 
 | # | Decision | Section |
 |---|---|---|
-| D | Whether recognition runs on the compute singleton (recommended default) or on the always-on web box (better for every visitor **if** it measures under ~90 s on the small plan) | §12 |
 | E | Whether recognition may become non-blocking ("we will confirm the piece by email") — a product change, laid out, not made | §12 |
 
 Reading order if short of time: §2 (topology and diagram), §6 (state
