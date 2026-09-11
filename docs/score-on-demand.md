@@ -1,4 +1,19 @@
-# Scores engraved on demand
+# Scores engraved on demand — mostly not pursued
+
+**Decided 2026-09-11, the day this was written.** The owner's answer was that
+he will engrave the scores quickly himself. That removes the premise: this
+design exists to ration an hour of engraving per score, and there is no
+scarcity to manage.
+
+**Dead — do not build:** the staging root (§3), the admin page (§4), the proof
+render, and anything that parks a visitor's job or promises them a mail (§6).
+
+**Alive:** the demand mail (§7), because knowing *what* to engrave is useful
+however fast the engraving is. Revised per the owner: **every request mails
+immediately**, with the count in the subject — not batched. See the note in §7.
+
+**Also alive, independent of all of it:** §1 is a set of verified findings
+about the code, three of them live defects. Those are in `status.md`.
 
 Written 2026-09-11 against `e4d2142` on `main`. Nothing here is built.
 
@@ -50,7 +65,7 @@ rsyncs `/srv/vsw/scores` into the image; `compute/cloudinit.py` has no sync
 step. A package published after `vsw-compute-2026-09` was captured does not
 exist on a node built from it. Harmless while `COMPUTE_ENABLED=false` and the
 worker shares the web box's disk; a direct contradiction of "automatic forever
-after" the day it is switched on. That is §9 increment 5.
+after" the day it is switched on. That is §8 increment 5.
 
 Smaller findings that shape details:
 
@@ -69,8 +84,8 @@ Smaller findings that shape details:
   is the only durable copy of a verdict, so anything that waits must key off
   the table.
 - `Registry.start` requires a `Style`. A visitor refused at recognition never
-  reached the design screen and chose none — which is why §7 invites them back
-  rather than rendering for them.
+  reached the design screen and chose none — which is one
+  reason nothing renders on a visitor's behalf.
 - `limits.RULES["mail_email"]` is 4/week per address. Proof mails to the owner
   must not use it, or the fifth piece validated in a week gets no mail and
   nothing says so — the same starvation `history.md` records for the queued
@@ -269,78 +284,38 @@ on its own, and it belongs in increment 2 at the latest.
 
 ---
 
-## 6. The waiting visitor
+## 6. The visitor is told the truth and promised nothing
 
-Today the page says the score is not in the library yet and suggests something
-else. That is honest, and it forgets them.
+Today the page says the score is not in the library yet and suggests
+something else. That stays exactly as it is. No address is taken, no job is
+parked, and nobody is emailed when the piece later appears.
 
-Instead: **take an address, park the upload, promise a mail if and when.** The
-upload is kept regardless (§1), so parking costs a state and a column. The copy
-has to say plainly that the wait is indeterminate — "That score is added by
-hand when someone asks. Leave your address and we will email you when it can be
-made. This can take days."
+**Rejected: parking the job and mailing them when it is published.** This was
+the draft's recommendation and the owner turned it down. The reasons are worth
+keeping, because it is an attractive idea that will be proposed again:
 
-`POST /api/jobs/<id>/wait {email}` — validated through `notify.one_address`, a
-new `wait_ip` bucket at 3/week so the endpoint cannot become an
-address-harvesting oracle, and one waiting job per address-and-piece, a second
-request replacing the first. It sets `jobs.email`, `jobs.wanted = piece_id` (a
-new column, in the recogniser's vocabulary so two editions of one Ballade land
-on one demand row) and `jobs.state = 'waiting'`.
+- A promise with no date, from a one-person operation, rots. "We will email
+  you when it can be made" is unbounded by construction — the engraving might
+  happen tomorrow or never — and a broken promise is worse than no promise.
+- It holds a personal detail for an indeterminate period against a maybe. Every
+  other address in this system has a defined purpose and a defined life; this
+  one would not.
+- The machinery is real: a new job state, a `wanted` column, two rate-limit
+  buckets, a sweep pass, and two branches in the page — for a benefit that is
+  speculative.
 
-The address goes exactly where `api_render` already puts it — the job row — so
-deletion semantics do not change. `Privacy.html` gains a sentence saying an
-address left this way is kept on that upload's record.
+What is genuinely lost: the person whose upload triggered an hour of engraving
+never learns it happened. That is the whole cost, and it is accepted. Their
+upload is kept regardless, the piece gets engraved anyway, and the next visitor
+who plays it is served.
 
-What must not happen: `render_ip` and `render_email` are **not** touched at
-wait time. The allowance is spent when the render actually runs, which is when
-the person comes back. And `store.compute_tick` counts only `QUEUED` and
-`RUNNING`, so a waiting row must never make the scaler want a machine — worth
-a check, because a hundred parked jobs quietly holding a Linode open is exactly
-the failure this project spent a week guarding against.
-
-`store.LIVE`, `waiting()`, `unfinished()` and `webside._recover` all select by
-explicit state and will ignore `waiting` correctly. `watchRender` needs a
-branch for `waiting` and `invited`, or it polls for forty minutes and then says
-the render is taking longer than expected. The `#job=<id>` link keeps working
-throughout: "Waiting for the score of X. We will email you."
-
-If a piece is never engraved, the row waits and the admin page shows its age.
-No expiry and no second mail in this version — the copy said "if and when".
+One consequence to keep in view: `recognitions` remains the only record that
+anyone wanted a piece, and it is written before any of this. Nothing in §8
+depends on parking.
 
 ---
 
-## 7. Resuming: invite, do not auto-render
-
-Every janitor sweep (`webside.sweep`, 30 s) runs `demand.invite_waiting()`: for
-each `waiting` job, resolve its latest recognition row's edition names through
-`library.editions_for`; if one is renderable, mail "The score of X is here" with
-the `/app/#job=<id>` link and set `state='invited'`. The page drops an
-`invited` visitor into the ordinary design flow with their upload already
-present and the piece pre-selected, and they submit through `api_render`
-unchanged.
-
-This answers the burst question by construction. Fourteen people who wanted one
-piece get fourteen mails, and the renders arrive as each of them comes back —
-serialised by the single worker, capped per address as always. It also avoids
-having to invent a visual style for someone who never reached the design
-screen. Running it in the sweep rather than on the Publish click means the
-tar-over-ssh fallback and a restart both still trigger it.
-
-Own mail bucket, `mail_invite_email`, one per address-and-piece per 30 days,
-under `mail_total`.
-
-**Auto-resume with a drip** is the fallback if people do not come back:
-promote at most one waiting job per sweep, only when nothing is queued or
-running, so new visitors always go first and the backlog fills idle time. Not
-first, because it needs a default style, a decision about rendering against a
-week-old allowance, and a decision about whether the courtesy "queued" mail
-should fire a week after the upload.
-
-Priority is deliberately not used for either. The broker never sees it (§1).
-
----
-
-## 8. The demand mail
+## 7. The demand mail
 
 Sent to `ALERT_EMAIL` from a new `app/demand.py`, called from
 `routes._record_recognition` when the outcome is `unavailable`, on its own
@@ -366,20 +341,28 @@ the `jobs` row. A check builds the body from a fixture whose name, email and
 client are poison strings and asserts none of them appear — the same shape as
 `check_the_courtesy_mail_cannot_starve_the_promise`.
 
-Batching follows `store.compute_alarm`, which is the prior art for this: the
-first ask for a piece mails at once; further asks mail again only when 24 hours
-have passed **and** the count has grown, so a piece that goes viral yields one
-mail a day reading "asked 37 times since Tuesday". Bookkeeping in
-`demand_mail(piece_id PRIMARY KEY, mailed_at, asked_at_mail)`; the counts
-themselves always come from `recognitions` and are never duplicated. Nothing is
-sent for a piece already staged or public. Own bucket `mail_demand` at 20/day,
-so a bad afternoon cannot spend the visitors' allowance.
+**Not batched — decided by the owner.** The draft grouped repeat requests for
+a piece already reported: the first mailed at once, and further asks only after
+24 hours and only if the count had grown, so a piece that went viral produced
+one mail a day rather than forty. The owner's answer was that an email as soon
+as a request arrives is better, and it is his inbox.
+
+So: **every `unavailable` recognition mails immediately**, with the count in
+the subject — `Score wanted: Op. 25 · Etude No. 11 (3rd request)` — so a repeat
+is obvious without opening it. The counts still come from `recognitions` and
+are never duplicated elsewhere.
+
+The one backstop kept is the `mail_demand` bucket at 20/day. Not to spare the
+owner, who has asked for the volume, but because every mail bucket in this
+system also protects the others: `history.md` records the queued notice
+silently eating the ready mail when they shared one allowance, and a piece
+going viral must not be able to do the same to the visitors' mail.
 
 `unrecognised` outcomes are not demand. There is no piece to name.
 
 ---
 
-## 9. Increments
+## 8. Increments
 
 Each is useful on its own and carries its own check in `tools/selftest.py`.
 
@@ -434,7 +417,7 @@ is already on disk and already linked to the piece through
 
 ---
 
-## 10. Waiting on the owner
+## 9. Waiting on the owner
 
 - **The proof uses a stranger's recording** — the one that triggered the
   demand. The privacy note covers it ("kept for training and masterclass use"),
