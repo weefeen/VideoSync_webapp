@@ -10,6 +10,24 @@ for 48 hours.
 
 ---
 
+## Where the rest is written down
+
+This file says what the code is and how to run it on a laptop. Three others
+carry what a laptop cannot show:
+
+| | |
+|---|---|
+| [`docs/infrastructure.md`](docs/infrastructure.md) | the machines, what listens where, which credential lives where and where each must never reach |
+| [`docs/status.md`](docs/status.md) | what is live, what is built and switched off, what is not built, and what is waiting on a decision |
+| [`docs/history.md`](docs/history.md) | why it is shaped this way — including the decisions that reverse the design, with the measurements that forced them |
+
+Read `history.md` before re-opening a settled question. Several answers here
+look arbitrary and are not: the render cap, the teardown timing, and the
+refusal to let recognition create a machine each cost a measurement to
+establish.
+
+---
+
 ## The repositories, and how they are joined
 
 Three, joined by **file contracts and subprocesses, never by imports**. Two of
@@ -52,6 +70,11 @@ app/
     worker.py             does the work, reports; never opens the database
     ledger.py             the ONLY writer of a worker's report into the table
     webside.py            applier and janitor threads; owns the table
+
+  compute/              machines that exist only while there is work
+    driver.py             create and destroy a Linode — the only code that spends money
+    cloudinit.py          what a fresh machine is told to become
+    scaler.py             reconcile against the provider, decide, act
 
   identify.py           recognition: calls the runner, reads its verdict
   sync.py               alignment: calls the runner, reads measures.data
@@ -174,3 +197,35 @@ empty result rather than an error. One shipped: `pathlib.Path` treats a
 backslash as an ordinary character on Linux, so every piece the recogniser
 identified on the server resolved to no score, at full confidence, with no
 error anywhere. See `docs/deployment-log.md` §9.
+
+---
+
+## Running it for real
+
+Two machines, and the second one usually does not exist.
+
+**The web box** serves the site, recognises the piece, holds the database and
+runs RabbitMQ. It is small on purpose; it is also the thing a visitor waits
+on, so nothing slow is allowed to live there permanently.
+
+**A compute node** is created when a render is asked for, does the render,
+and is destroyed. It reaches the broker over a private VLAN, never over the
+internet. `app/compute/scaler.py` reconciles what exists against what should
+exist every thirty seconds and is the only thing that creates or destroys
+one. `driver.destroy` re-reads a machine's label from the provider and
+refuses anything not named `vsw-compute...`, because a token that can create
+can also delete.
+
+The queue is the seam. `vsw.render` is durable, `prefetch_count=1` so one
+node renders one video at a time, priority 0-10, and a task is only
+acknowledged once the result is confirmed readable in object storage —
+"the render succeeded" and "the result is safe" are separate events and
+only the second is announced.
+
+`COMPUTE_ENABLED=false` today. The scaler runs, decides, and records what it
+would have done. `docs/status.md` says what has to happen before it is turned
+on.
+
+Nothing a visitor typed appears in outgoing mail, and no credential is
+committed. `.env` is gitignored; `.env.prod` sets every variable and holds no
+secrets, and a check enforces that the two files declare the same names.
