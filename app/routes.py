@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import logging
 import os
 import pathlib
@@ -618,10 +619,47 @@ def _record_recognition(job: jobs.Job, outcome: str,
                          "label": c.get("label"),
                          "package": c.get("package"),
                          "confidence": c.get("confidence"),
-                         "renderable": c.get("renderable")}
+                         "renderable": c.get("renderable"),
+                         # The edition folder names this recording backs,
+                         # installed or not. Kept because they are the only
+                         # durable record of what to NAME a package that does
+                         # not exist yet: resolution is an exact dictionary
+                         # lookup, so a folder off by one character is
+                         # reported missing rather than guessed at, and the
+                         # piece would stay unavailable with nothing saying
+                         # why. Also what tells a held request apart from an
+                         # invented one.
+                         "editions": [e.get("name") for e in
+                                      (c.get("editions") or []) if e.get("name")]}
                         for c in candidates[:5]])
     except Exception:                              # noqa: BLE001
         logger.exception("job %s: the recognition could not be recorded", job.id)
+
+
+def _editions_offered(job_id: str) -> set[str]:
+    """Edition folder names the recogniser actually put in front of this
+    visitor, whether or not a score is installed for them.
+
+    Read from the stored recognition, not from `_identifications`, which is
+    in memory and does not survive a restart — and a held request may be
+    released days later.
+
+    This is what separates "a piece we have not engraved yet" from "a string
+    somebody invented". Without it, anything at all could be posted as a
+    score name and would sit in the held list for ever, waiting for a
+    package that can never exist.
+    """
+    row = store.recognition_for(job_id)
+    if row is None or not row["candidates"]:
+        return set()
+    try:
+        candidates = json.loads(row["candidates"])
+    except (TypeError, ValueError):
+        return set()
+    names: set[str] = set()
+    for candidate in candidates:
+        names.update(n for n in (candidate.get("editions") or []) if n)
+    return names
 
 
 @bp.post("/api/jobs/<job_id>/identify")
@@ -829,6 +867,30 @@ def api_render(job_id: str):
         except notify.MailError:
             return jsonify({"error": "That email address does not look right. "
                                      "Please check it and try again."}), 400
+    score = str(body.get("score", "")).strip()
+    if not score:
+        return jsonify({"error": "Pick a score first."}), 400
+
+    package = pipeline.find_package(score)
+    # Not installed, and never offered for this recording either: that is a
+    # name somebody invented, and it is refused as it always was. Not
+    # installed but genuinely one of this recording's editions is a piece
+    # nobody has engraved yet, and it is held instead — see `Registry.hold`.
+    if package is None and score not in _editions_offered(job.id):
+        return jsonify({"error": f"No score package named {score!r}."}), 400
+
+    try:
+        style = _style_from(body)
+        style.validate()
+    except (rnd.RenderError, pipeline.PipelineError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    # Counted HERE, below everything that can refuse. `limits.guard` spends
+    # the allowance rather than testing it, and it used to run before the
+    # score was resolved — so asking for a piece this install does not have
+    # cost one of the three renders that address gets for a week, and
+    # returned an error for it. A held request does spend one, because it is
+    # going to be rendered; a refusal now spends nothing.
     try:
         limits.guard("render_ip", limits.client_key(request))
         if address:
@@ -836,18 +898,13 @@ def api_render(job_id: str):
     except limits.Refused as exc:
         return jsonify({"error": str(exc)}), 429, {"Retry-After": str(exc.retry_after)}
 
-    score = str(body.get("score", "")).strip()
-    if not score:
-        return jsonify({"error": "Pick a score first."}), 400
-
-    package = pipeline.find_package(score)
     if package is None:
-        return jsonify({"error": f"No score package named {score!r}."}), 400
+        job.email = address
+        jobs.registry.hold(job, score, style, body.get("meta") or {})
+        return jsonify({"job": job.public(), "held": True}), 202
 
     mode = body.get("mode") or None
     try:
-        style = _style_from(body)
-        style.validate()
         mode = pipeline.choose_mode(package, mode)
     except (rnd.RenderError, pipeline.PipelineError) as exc:
         return jsonify({"error": str(exc)}), 400

@@ -258,6 +258,23 @@ MIN_DAYS_OF_EVIDENCE = 7
 # States a job can be in. `queued` is the new one and the point of this
 # module: work that has been accepted but has not started.
 QUEUED, RUNNING, DONE, ERROR = "queued", "running", "done", "error"
+# Asked for, and not renderable yet because no score is installed for the
+# piece. NOT a failure and NOT in the queue: every other query selects by
+# explicit state, so no worker reaches a held job and `compute_tick` never
+# counts one as work wanting a machine.
+#
+# It exists because the alternative is that the request dies at the door.
+# There are about 235 Chopin scores in principle and the library holds a
+# handful, so "we do not have that one" is the common answer today — and
+# refusing meant the upload, the address and the recognition were all thrown
+# away, leaving nothing to continue when the score was engraved an hour
+# later.
+#
+# Released by hand with `tools/retrigger.py`, never automatically: the
+# operator is the one who knows whether the package he just built is right,
+# and a render that starts on its own can only be judged after it has spent
+# the machine time.
+HELD = "held"
 LIVE = (QUEUED, RUNNING)
 
 _lock = threading.RLock()
@@ -284,8 +301,15 @@ def connect() -> sqlite3.Connection:
             # recorded. Without it a status poll can block on the writer.
             _conn.execute("PRAGMA journal_mode=WAL")
             _conn.execute("PRAGMA synchronous=NORMAL")
-            _conn.executescript(SCHEMA)
+            # BEFORE the schema, not after. SCHEMA ends with
+            # `CREATE INDEX ... ON recognitions(country, at)`, and an index
+            # on a column that does not exist yet is an error, not a no-op —
+            # so a database written before that column was added could not be
+            # opened at all, and the migration that would have fixed it ran
+            # one line too late to be reached. `_migrate` already skips a
+            # table that does not exist, so a new database is unaffected.
             _migrate(_conn)
+            _conn.executescript(SCHEMA)
             _conn.commit()
         return _conn
 
@@ -299,6 +323,12 @@ _ADDED = (
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
     ("jobs", "published_at", "REAL"),
     ("jobs", "object_key", "TEXT"),
+    # The recognitions table once kept `client` — the visitor's address —
+    # and now keeps the place it resolved to instead, so that deleting a
+    # recording deletes the address with it. An older database still has the
+    # old column, holding addresses this design says it must not hold.
+    ("recognitions", "country", "TEXT NOT NULL DEFAULT ''"),
+    ("recognitions", "city", "TEXT NOT NULL DEFAULT ''"),
     ("compute", "machine_id", "INTEGER"),
     ("compute", "machine_label", "TEXT"),
     ("compute", "alarm", "TEXT"),
@@ -418,6 +448,20 @@ def waiting() -> list[sqlite3.Row]:
     """
     return query("SELECT * FROM jobs WHERE state = ?"
                  " ORDER BY priority DESC, queued_at, id", (QUEUED,))
+
+
+def held() -> list[sqlite3.Row]:
+    """Requests waiting for a score nobody has engraved yet.
+
+    Oldest first. The person who has waited longest is the one to release
+    first, and it is the order the operator will want to read them in.
+
+    Deliberately not folded into `waiting()`: that function is the line, and
+    the line is what the worker serves and what the queue position is
+    counted against. A held job is not in the line. It is not anywhere until
+    somebody installs a score and releases it.
+    """
+    return query("SELECT * FROM jobs WHERE state = ? ORDER BY created", (HELD,))
 
 
 def running() -> sqlite3.Row | None:
@@ -649,6 +693,17 @@ def put_recognition(job_id: str, *, country: str = "", city: str = "",
              confidence, consensus, windows, duration,
              json.dumps(candidates or [])))
         return int(cur.lastrowid)
+
+
+def recognition_for(job_id: str) -> sqlite3.Row | None:
+    """The latest thing the recogniser said about this upload.
+
+    The in-memory copy in `routes._identifications` does not survive a
+    restart, so anything that has to be true about a job days after it was
+    uploaded reads this instead.
+    """
+    return one("SELECT * FROM recognitions WHERE job_id = ?"
+               " ORDER BY at DESC LIMIT 1", (job_id,))
 
 
 def recognitions(limit: int = 500) -> list[sqlite3.Row]:

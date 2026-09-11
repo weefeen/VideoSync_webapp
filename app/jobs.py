@@ -63,7 +63,8 @@ class Job:
     upload_path: pathlib.Path
     score: str | None = None
     mode: str | None = None
-    state: str = "uploaded"      # uploaded | queued | running | done | error
+    state: str = "uploaded"      # uploaded | held | queued | running
+                                 # | done | error
     error: str | None = None
     result: pathlib.Path | None = None
     # Where the finished video lives in the bucket, once it does.
@@ -291,6 +292,41 @@ class Registry:
                              "the sweep will offer it again", job.id)
         _say_it_is_queued(job)
 
+    def hold(self, job: Job, score: str, style: rnd.Style, meta: dict) -> None:
+        """Keep a request whose score is not installed, instead of refusing it.
+
+        The visitor's side of this is identical to submitting normally: they
+        gave an address and they will be sent a link when the video exists.
+        They are not told the score is missing and they are not asked to come
+        back, because from where they stand nothing unusual happened - it
+        simply took longer.
+
+        What this buys is that the three things needed to finish the job all
+        survive: the recording on disk, the address on the row, and the score
+        name they asked for. Refusing threw the address away, which is why an
+        engraving done an hour later could not be delivered to the person who
+        prompted it.
+
+        No queued notice is sent. That mail tells somebody where they are in
+        the line, and a held job is not in the line - there is no honest
+        position to quote and no honest estimate to give.
+
+        `mode` is left unset on purpose. It is chosen against the real
+        package by `pipeline.choose_mode`, and the package does not exist
+        yet; storing a guess now would be a guess nobody rechecked.
+        """
+        job.score = score
+        job.mode = None
+        job.state = store.HELD
+        job.stage, job.detail, job.error = None, "", None
+        job.result, job.finished, job.started = None, None, None
+        job.queued_at = None
+        job.save(style, meta)
+        with self._lock:
+            self._live.pop(job.id, None)
+        logger.info("job %s held: no score installed for %r", job.id, score)
+        _say_a_score_is_wanted(job)
+
     # -- the workers -----------------------------------------------------
 
 # `ensure_workers`, `_serve`, `_run` and `resume` were here. The worker loop
@@ -317,6 +353,59 @@ def new_job(original_name: str, upload_path: pathlib.Path,
 def job_paths(job: Job) -> jobpaths.JobPaths:
     """This job's folder, in the layout the engine uses."""
     return jobpaths.for_job(job.id, pathlib.Path(job.upload_path).suffix)
+
+
+def _say_a_score_is_wanted(job: Job) -> None:
+    """Tell the operator a request is held, and what to name the package.
+
+    This is the entire demand loop. There is no backlog page and no table
+    tracking what has been reported: a held job IS the record, and
+    `tools/retrigger.py` reads it.
+
+    Goes to ALERT_EMAIL, never to the visitor. It is capped only by the
+    global daily allowance - no bucket of its own, because reaching 200 mails
+    a day through held requests would need more distinct people playing
+    uninstalled pieces in one day than this site has served in its life. If
+    that ever changes the refusals will be in the log and a bucket can be
+    added from evidence.
+
+    On a thread and never allowed to fail the submission, for the same reason
+    as the queued notice: the visitor is waiting on the response to their
+    render request, and an SMTP round-trip must not sit in front of it. The
+    job is held either way. If the mail is lost the request is still in
+    `tools/retrigger.py`, which is why losing it is survivable.
+    """
+    if not settings.can_email:
+        return
+    if not limits.allowed("mail_total", "all"):
+        logger.warning("daily mail cap reached; not reporting that %r is "
+                       "wanted for job %s", job.score, job.id)
+        return
+
+    score = job.score or ""
+    minutes = (job.duration / 60.0) if job.duration else None
+
+    # The coarse place, which is not personal data and is already resolved.
+    # The address it came from is deliberately not read here.
+    country = ""
+    title = ""
+    try:
+        row = store.recognition_for(job.id)
+        if row is not None:
+            country = row["country"] or ""
+            title = row["title"] or ""
+    except Exception:                                # noqa: BLE001
+        logger.debug("no recognition row for job %s", job.id)
+
+    def work() -> None:
+        try:
+            notify.send_wanted(job_id=job.id, score=score, title=title,
+                               minutes=minutes, country=country)
+        except Exception:                            # noqa: BLE001
+            logger.warning("could not report that %r is wanted for job %s",
+                           score, job.id, exc_info=True)
+
+    threading.Thread(target=work, name=f"wanted-{job.id}", daemon=True).start()
 
 
 def _say_it_is_queued(job: Job) -> None:

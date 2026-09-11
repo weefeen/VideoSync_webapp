@@ -387,3 +387,71 @@ def send_ready(job_id: str, address: str, piece: str = "",
 
     _send(message, address)
     logger.info("told %s that job %s is ready", address, job_id)
+
+
+def send_wanted(*, job_id: str, score: str, title: str = "",
+                minutes: float | None = None, country: str = "") -> None:
+    """Tell the operator somebody wants a video of a piece we cannot engrave.
+
+    Goes to ALERT_EMAIL. This is the whole of the demand loop: there is no
+    backlog page to review, no table tracking what has been reported and
+    nothing to switch off later. The volume falls as the library fills and
+    reaches zero when it is complete, because a piece stops being reported
+    the moment its package is on disk.
+
+    SENT WHEN A REQUEST IS HELD, not when a piece is merely recognised. The
+    difference is somebody committing: they chose a look, gave an address and
+    pressed the button. A visitor who listened out of curiosity and wandered
+    off is not a reason to spend an hour engraving, and would be most of the
+    volume if recognition were the trigger.
+
+    Every held request sends one. No grouping and no per-piece bucket: an
+    earlier design grouped repeats for a piece already reported, which solved
+    a problem that does not arise - the operator engraves on the first
+    message, so the second person finds the score published and is never
+    held at all.
+
+    NOTHING THE VISITOR TYPED APPEARS HERE. Not their filename, not their
+    address, not the address they came from. The folder name is our own
+    catalogue's, the duration was measured from the recording, and the
+    country was resolved from a local file at upload time.
+    """
+    to = (settings.alert_email or "").strip()
+    if not to or not settings.can_email:
+        return
+    to = one_address(to)
+
+    named = title or score
+    lines = [f"Somebody wants a video of {named}, and there is no score",
+             "installed for it. Their recording and their address are kept;",
+             "the request is on hold until the package exists.",
+             ""]
+
+    # The most useful line in the message. Resolution is an exact dictionary
+    # lookup, never a fuzzy match, so a folder whose name differs by one
+    # character is reported missing rather than guessed at - and the piece
+    # would stay unavailable with nothing saying why.
+    lines += ["Name the package folder exactly:", "", f"    {score}", ""]
+
+    if minutes is not None:
+        over = "   OVER THE 8-MINUTE CAP" if minutes > 8.0 else ""
+        lines += [f"Their recording runs {minutes:.1f} minutes.{over}", ""]
+
+    if country:
+        lines += [f"Played from: {country}", ""]
+
+    lines += ["When the package is on the server:",
+              "",
+              "    python tools/retrigger.py --held",
+              "",
+              f"That releases this request (job {job_id}) and any other",
+              "waiting on a score that now exists. They are rendered and the",
+              "ordinary 'your video is ready' mail goes out. Nothing releases",
+              "them on its own - you are the one who knows the engraving is",
+              "finished.",
+              "",
+              "- VideoSync"]
+
+    message = _compose(f"Score wanted: {named}", to, "\n".join(lines) + "\n")
+    _send(message, to)
+    logger.info("told the operator that %s was wanted (job %s)", score, job_id)
