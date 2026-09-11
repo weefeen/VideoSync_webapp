@@ -163,3 +163,57 @@ Containment today: **none** beyond per-call timeouts. A memory-safety bug in any
 - [ ] RabbitMQ: separate **`vsw` vhost**, scoped users (`vsw_web`, per-instance `vsw_c_<id>`), `max-length`/connection/queue limits on `^vsw\.` so a runaway queue cannot trip the broker's global memory alarm and block the Symfony site's publishers.
 - [ ] Broker listener for us on the VLAN address + TLS only; nothing of ours on `0.0.0.0` or Linode's shared private IP (design §9.2).
 - [ ] Cloud Firewall: inbound 22 (admin IP), 80/443 only.
+
+---
+
+## Update — 2026-09-11 review pass (fixes applied, proven, committed)
+
+A second review of the same surface, this time firing each finding at a
+local instance (no credentials wired to it) to prove the primitive, fixing
+it, and re-running the same probe. Nothing was fired at production.
+
+**Fixed and proven this pass:**
+
+- **Rate-limit key forgeable (was the root of F8's severity).** `client_key`
+  read `X-Forwarded-For[0]` — the leftmost entry, which the client writes —
+  so rotating the header reset every limit. Proven: 10 uploads with 10 forged
+  first-entries all passed an 8/hour cap. Now keys on the LAST entry (the peer
+  our own Apache appends), and `deploy/install-web.sh` also has Apache
+  overwrite the header (`RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}s"`).
+  Re-tested with the production header shape: blocks at request 9.
+- **Arbitrary local-file read via `background_path`** (new; not in the first
+  review). A render could name any file `vsw` could read — every other
+  visitor's upload and video — and ffmpeg composited it into a downloadable
+  output. `_style_from` now resolves the path only from our config; the
+  request cannot set it.
+- **Fail-open duration cap.** Code default and BOTH env templates set 25 on a
+  box that OOMs past ~11 minutes. Now 8 everywhere.
+- **Disk-fill DoS.** Uploads are kept forever and nothing reclaims them.
+  `MIN_FREE_DISK_GB` now refuses an upload with 507 before writing if it would
+  breach the floor — fails closed, deletes nothing.
+- **F7 CSRF** — `_cross_site` refuses a cross-origin caller on upload,
+  identify and render.
+- **F9 job ids** — full 128-bit `uuid4().hex`; downloads send
+  `Cache-Control: private, no-store`.
+- **F8 `limits.json` growth** — `_prune` now sweeps stale timestamps across
+  ALL keys and drops the empty ones (the old pass reclaimed nothing).
+
+Each of the above has a regression check in `tools/selftest.py` (37 total).
+
+**Still open, and why:**
+
+- **F1 bot check** — still the top item, and now clearly the lever behind the
+  remaining resource-exhaustion findings. Needs Turnstile keys from the owner.
+- **The live `.env`** must set `MAX_DURATION_MINUTES=8` and add
+  `MIN_FREE_DISK_GB=5` by hand — the committed templates are fixed, the
+  server's copy is edited on the box.
+- **The Apache directive** takes effect only when `install-web.sh` is re-run
+  or the line is added to the live vhost and Apache reloaded. The code fix
+  already closes the hole; this is defence in depth.
+- **F10 CSP / metadata escaping**, **F11 generic failure message** — not yet
+  done; low today (operator-installed data), worth a pass.
+- **Object-storage credential scoping** before `COMPUTE_ENABLED=true` — the
+  key handed to a compute node is still full-bucket read/delete.
+- **F5 decode containment** — untrusted media still runs through
+  ffmpeg/torch/librosa on the always-on box until rendering moves to the
+  disposable compute node.
