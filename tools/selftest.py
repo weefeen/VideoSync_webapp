@@ -1984,6 +1984,75 @@ def check_the_duration_cap_fails_safe() -> str:
             + ", ".join(checked) + "; all inside the box")
 
 
+def check_the_interface_and_renderer_agree() -> str:
+    """What the design screen offers renders as what it showed.
+
+    The interface and the renderer keep two vocabularies, and nothing
+    translated between them, so two things the visitor chose were silently
+    thrown away between the preview and the video:
+
+      * THE TITLE PANEL. The screen sends `round`, `first`, `last`, `work`;
+        the renderer reads `round_name`, `first_name`, `last_name`,
+        `composition`. Every panel render dropped the round title, the
+        performer's name and the work, keeping only subtitle, country, age
+        and composer. The preview showed the full panel; the video did not.
+
+      * THE BACKDROP. "Still artwork" is sent as `image` and "Looping video"
+        as `video`; the renderer calls them `static` and `dynamic`. Both
+        failed `Style.validate` with "Unknown background" — a 400 after the
+        visitor had finished designing.
+
+    This asserts the boundary translates both. It uses the interface's OWN
+    field names, read from svs-min.js, so the check breaks if the screen
+    starts sending something the server does not map — the failure the last
+    two bugs were.
+    """
+    import re
+
+    from app import panel, routes, render as rnd
+
+    # The panel keys the interface actually sends, lifted from its FIELDS.
+    js = (ROOT / "app" / "static" / "svs" / "svs-min.js").read_text(
+        encoding="utf-8", errors="ignore")
+    start = js.find("const FIELDS = [")
+    block = js[start:js.find("];", start)]
+    # Each row is `['key', 'Label', ...]`; the key is the first quoted token.
+    sent_keys = [m.group(1) for m in re.finditer(r"\[\s*'(\w+)'", block)]
+    if "first" not in sent_keys or "work" not in sent_keys:
+        raise Failed("could not read the interface's panel FIELDS; this check "
+                     "can no longer tell what the screen sends")
+
+    # Give every sent key a value, translate, and render the panel.
+    meta_in = {k: f"val_{k}" for k in sent_keys}
+    text = panel.values(routes._panel_meta(meta_in))
+    # The four that used to vanish must now carry through.
+    if not text["name"] or "val_first" not in text["name"]:
+        raise Failed("the performer's name does not reach the panel: the "
+                     "interface sends first/last, the renderer reads "
+                     "first_name/last_name, and nothing mapped them")
+    for field, why in (("round_name", "round title"),
+                       ("composition", "work")):
+        if not text[field]:
+            raise Failed(f"the {why} does not reach the panel; the "
+                         f"interface/renderer name mismatch is back")
+
+    # The backdrop kinds the interface offers must each resolve to a kind the
+    # renderer knows, not raise "Unknown background".
+    for sent, expect in (("none", rnd.NONE), ("colour", rnd.NONE),
+                         ("image", rnd.STATIC), ("video", rnd.DYNAMIC),
+                         ("upload", rnd.NONE)):
+        got = routes._style_from({"style": {"background": sent}}).background
+        if got != expect:
+            raise Failed(
+                f"the backdrop option {sent!r} resolves to {got!r}, not "
+                f"{expect!r}. The screen offers it, so an untranslated value "
+                f"is a 400 after the visitor finished, or a silently wrong "
+                f"backdrop.")
+
+    return (f"{len(sent_keys)} panel fields translate; name, round and work "
+            f"reach the panel; 5 backdrop options all resolve")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2139,6 +2208,7 @@ def main() -> int:
         check_a_portrait_video_keeps_the_picture,
         check_the_output_is_postable,
         check_the_choices_survive_the_request,
+        check_the_interface_and_renderer_agree,
         check_the_rate_limit_key_cannot_be_forged,
         check_the_request_cannot_choose_a_file,
         check_the_duration_cap_fails_safe,

@@ -16,7 +16,6 @@ from urllib.parse import quote
 from flask import (Blueprint, Flask, current_app, jsonify, redirect,
                    request, send_file, send_from_directory,
                    Response)
-from werkzeug.utils import secure_filename
 
 from . import jobs, package as pkg, pipeline
 from .queue import webside
@@ -758,7 +757,15 @@ def api_upload():
     if not upload.filename:
         return jsonify({"error": "No file was selected."}), 400
 
-    suffix = pathlib.Path(secure_filename(upload.filename)).suffix.lower()
+    # The suffix comes from the RAW name, not from secure_filename. This site
+    # is for pianists everywhere, and `secure_filename` strips a name to
+    # ASCII, so "ショパン.mp4" and "Шопен.mov" became suffix-less and were
+    # rejected as an unsupported type — an .mp4 refused for being named in
+    # Japanese. Taking the suffix from the raw name is safe: it is whitelisted
+    # against VIDEO_SUFFIXES immediately below, and the stored file is named
+    # by job id (see new_job), never by anything the visitor typed, so the
+    # raw name never reaches the filesystem.
+    suffix = pathlib.Path(upload.filename).suffix.lower()
     if suffix not in VIDEO_SUFFIXES:
         return jsonify({
             "error": f"{suffix or 'That file type'} isn't supported.",
@@ -840,19 +847,73 @@ def api_upload():
 # --------------------------------------------------------------------------
 # rendering
 # --------------------------------------------------------------------------
+# The interface names the title-panel fields one way and the renderer reads
+# them another, and nobody translated between the two — so every panel render
+# SILENTLY DROPPED the round title, the performer's first and last name, and
+# the work, keeping only subtitle, country, age and composer. The preview
+# showed the full panel; the video did not. The two vocabularies are both
+# load-bearing (the renderer's names are shared with the offline tools), so
+# the translation belongs here, at the HTTP boundary where a contract is
+# converted, and is the one place that has to change.
+_PANEL_FIELD = {
+    "round": "round_name",
+    "subtitle": "subtitle",
+    "first": "first_name",
+    "last": "last_name",
+    "country": "country",
+    "age": "age",
+    "composer": "composer",
+    "work": "composition",
+    # `date` has no line in the panel layout — no OFFSET, no FIELDS entry — so
+    # it has nowhere to render and is deliberately not carried. If a date line
+    # is ever wanted it needs a slot in app/panel.py first.
+}
+
+
+def _panel_meta(raw: object) -> dict:
+    """Translate the interface's panel fields into the renderer's vocabulary.
+
+    Unknown keys are dropped rather than passed through: the panel only draws
+    the fields it knows, and forwarding a stray key would be the interface
+    quietly deciding the renderer's contract.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for sent, value in raw.items():
+        target = _PANEL_FIELD.get(sent)
+        if target and isinstance(value, str) and value.strip():
+            out[target] = value
+    return out
+
+
 def _style_from(body: dict) -> rnd.Style:
     """Build a Style from the request, resolving backdrop art from config."""
     style = body.get("style") or {}
-    background = style.get("background", rnd.NONE)
-    # The path is resolved from OUR configuration, never from the request.
-    # It used to be `style.get("background_path") or settings.background_for(...)`,
+
+    # The interface names the backdrop kinds one way and the renderer another.
+    # "Still artwork" is sent as `image` and the renderer calls it `static`;
+    # "Looping video" is `video` → `dynamic`; "Plain colour" is already sent
+    # as `none`. Untranslated, `image` and `video` both failed `Style.validate`
+    # with "Unknown background" — a 400 after the visitor had finished, and
+    # the reason those two options never worked even where the art was
+    # configured. `upload` ("Your image", a visitor's own file) is NOT built:
+    # the file is only ever read in the browser and no server path exists to
+    # feed it to ffmpeg — nor should the request name one (see the path note
+    # below). It falls back to plain rather than dead-ending on a 400.
+    _BG = {"image": rnd.STATIC, "video": rnd.DYNAMIC,
+           "colour": rnd.NONE, "upload": rnd.NONE}
+    background = _BG.get(style.get("background"), style.get("background",
+                                                           rnd.NONE))
+
+    # The path is resolved from OUR configuration, never from the request. It
+    # used to be `style.get("background_path") or settings.background_for(...)`,
     # so a caller could name any file the `vsw` user could read — another
     # visitor's upload, another visitor's finished video — and `Style.validate`
     # only checked that it existed. ffmpeg then composited that file into the
     # attacker's output, which they downloaded: an arbitrary-local-file read
-    # of everyone else's recordings. The interface never sends this field; it
-    # only ever picks 'none' | 'static' | 'dynamic', and `background_for`
-    # turns that into a path we control. So the request cannot choose a file.
+    # of everyone else's recordings. `background_for` turns one of our own
+    # kinds into a path we control, so the request cannot choose a file.
     path = settings.background_for(background)
 
     def number(key: str, default: float) -> float:
@@ -977,7 +1038,8 @@ def api_render(job_id: str):
         return jsonify({"error": str(exc)}), 400
 
     job.email = address
-    jobs.registry.start(job, package.name, mode, style, body.get("meta") or {})
+    jobs.registry.start(job, package.name, mode, style,
+                        _panel_meta(body.get("meta")))
     return jsonify({"job": job.public()})
 
 
