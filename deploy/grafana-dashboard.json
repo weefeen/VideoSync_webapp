@@ -511,6 +511,573 @@
       }
     },
     {
+      "type": "row",
+      "title": "The compute node, in shadow",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Would a machine be up",
+      "description": "NOTHING HERE CREATES A MACHINE. Every scrape records what a scaler would have decided, so the trigger can be judged against real traffic before it is given the power to spend money. 1 means a node would exist; 0 means none would. Compare it against the queue below: a band of 1 with no work under it is the grace period doing its job, and a band that never returns to 0 means the grace period is longer than the gaps between jobs - at which point scale-to-zero is buying nothing and a permanent machine would be cheaper.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vsw_compute_wanted",
+          "legendFormat": "A machine would exist",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vsw_queue_ready",
+          "legendFormat": "Waiting",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vsw_queue_unacked",
+          "legendFormat": "Being rendered",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "A machine would exist"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 22
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Waiting"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Being rendered"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "The queue, and the idle clock",
+      "description": "How long there has been no work at all, against the grace period it is judged by. THIS IS THE PANEL THAT SETS COMPUTE_GRACE_SECONDS. Every time the idle line crosses the dashed one, a machine is torn down; if work then arrives shortly after, that teardown cost the next visitor a ~2 minute wait for a new boot and cost you the creation. Watch how often the gaps between jobs are shorter than the line: if they usually are, raise the grace period; if the line is almost never reached, lower it and stop paying for idle.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vsw_compute_idle_seconds",
+          "legendFormat": "Idle for",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "vsw_compute_grace_seconds",
+          "legendFormat": "Grace period",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Idle for"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 14
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Grace period"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    6
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Why it would start and stop",
+      "description": "The reason, which Prometheus cannot hold - a distinct message per decision would be a new series each time, so the counts live in Prometheus and the why comes straight from the app. Each row is one decision the scaler would have taken, with the queue depth and idle time it saw at that moment. Read it next to the graphs above when a band starts or ends and the reason is not obvious.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/compute",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "When",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "action",
+              "text": "Decision",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "Why",
+              "type": "string"
+            },
+            {
+              "selector": "ready",
+              "text": "Waiting",
+              "type": "number"
+            },
+            {
+              "selector": "unacked",
+              "text": "Rendering",
+              "type": "number"
+            },
+            {
+              "selector": "idle_seconds",
+              "text": "Idle (s)",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true,
+            "inspect": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "When"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Decision"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "would-create": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "would-destroy": {
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Waiting"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rendering"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 95
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Idle (s)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "stat",
+      "title": "What it would have cost",
+      "description": "Machine-hours a scaler would have run over the selected window, and what that is in money at the configured plan rate. THIS IS THE NUMBER THE WHOLE SCALE-TO-ZERO DESIGN EXISTS TO MAKE SMALL - and the one to compare against a permanently-running instance before committing to the complexity. If it approaches the cost of leaving a machine up, the simpler thing is also the cheaper thing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 23
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(vsw_compute_would_run_seconds_total[$__range]) / 3600",
+          "legendFormat": "Machine-hours",
+          "range": false,
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(vsw_compute_would_run_seconds_total[$__range]) / 3600 * vsw_compute_hourly_cost",
+          "legendFormat": "Cost",
+          "range": false,
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(vsw_compute_would_create_total[$__range])",
+          "legendFormat": "Times created",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Times created"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "vertical",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
       "type": "timeseries",
       "title": "What is the limiting factor",
       "description": "Every resource as a percentage of itself, so the highest line IS the bottleneck - that is the whole point of this panel, and why the units are normalised rather than native. Measured during a real render of the Op. 39 Scherzo: CPU 98%, memory 34%, disk 0.1%, iowait 0.01% - so at encode the answer is CPU, and only CPU. At `align` it is memory instead: 2457 MB of 3915 on a 7.1-minute recording. The bottleneck MOVES between stages, which is why this panel is a time series and not a gauge. Read it during a render: if CPU is at 95% and everything else is low, a faster processor is the upgrade; if disk-busy is on top, a faster CPU buys nothing. TWO OF THESE CANNOT BE MEASURED FROM INSIDE A VIRTUAL MACHINE. Memory BANDWIDTH needs CPU performance counters, which a Linode guest is not given - if memory speed is ever the suspect it has to be settled by a benchmark on the box, not by this dashboard. CPU CLOCK SPEED is fixed and invisible for the same reason; what you can see instead is `steal` on the panel below, which is the hypervisor handing our slice to somebody else - the honest measure of not getting the CPU we paid for. Network is drawn in absolute terms further down: the link ceiling is not reported by the machine, so a percentage would be invented.",
@@ -522,7 +1089,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 32
       },
       "targets": [
         {
@@ -694,7 +1261,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 23
+        "y": 40
       },
       "targets": [
         {
@@ -875,7 +1442,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 23
+        "y": 40
       },
       "targets": [
         {
@@ -1041,7 +1608,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 23
+        "y": 40
       },
       "targets": [
         {
@@ -1186,7 +1753,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 48
       }
     },
     {
@@ -1201,7 +1768,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 48
       },
       "targets": [
         {
@@ -1312,7 +1879,7 @@
         "h": 7,
         "w": 14,
         "x": 0,
-        "y": 32
+        "y": 49
       },
       "targets": [
         {
@@ -1355,7 +1922,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 32
+        "y": 49
       },
       "targets": [
         {
@@ -1394,7 +1961,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 56
       }
     },
     {
@@ -1405,7 +1972,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 57
       },
       "targets": [
         {
@@ -1464,7 +2031,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 57
       },
       "targets": [
         {
@@ -1523,7 +2090,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 64
       }
     },
     {
@@ -1534,7 +2101,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 65
       },
       "targets": [
         {
@@ -1574,7 +2141,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 65
       },
       "targets": [
         {
@@ -1619,7 +2186,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 71
       }
     },
     {
@@ -1634,7 +2201,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 72
       },
       "targets": [
         {
@@ -1833,7 +2400,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 81
       },
       "collapsed": false,
       "panels": []
@@ -1850,7 +2417,7 @@
         "h": 9,
         "w": 10,
         "x": 0,
-        "y": 65
+        "y": 82
       },
       "targets": [
         {
@@ -1983,7 +2550,7 @@
         "h": 9,
         "w": 14,
         "x": 10,
-        "y": 65
+        "y": 82
       },
       "targets": [
         {
@@ -2158,7 +2725,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 91
       },
       "targets": [
         {
@@ -2413,7 +2980,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 101
       },
       "targets": [
         {

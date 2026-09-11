@@ -185,6 +185,17 @@ def api_failures():
     return jsonify(metrics.failures())
 
 
+@bp.get("/api/compute")
+def api_compute():
+    """Why a machine would have been created or destroyed. Not for the public.
+
+    Same rule as /metrics and /api/failures: loopback only. Nothing here
+    creates a machine yet — this is the shadow record, so the trigger can be
+    judged against real traffic before it is given the power to spend money.
+    """
+    return jsonify(metrics.compute_decisions())
+
+
 @bp.get("/api/visitors")
 def api_visitors():
     """Who has used this, from where, and what they played. Not for the public.

@@ -186,6 +186,52 @@ CREATE TABLE IF NOT EXISTS recognitions (
 );
 CREATE INDEX IF NOT EXISTS recognitions_piece ON recognitions(piece_id, at);
 CREATE INDEX IF NOT EXISTS recognitions_where ON recognitions(country, at);
+
+-- The compute node's life: at most one row, ever.
+--
+-- `CHECK (singleton = 1)` on the primary key is what enforces that. SQLite
+-- serialises writers across processes, so a second scaler started by mistake
+-- gets a constraint error and stands down rather than creating a second
+-- machine — the local half of the guard, with the provider's label
+-- uniqueness as the final referee.
+--
+-- Today nothing creates a machine. The row is kept in SHADOW: every scrape
+-- records what a scaler WOULD have decided, so the trigger can be watched
+-- against real traffic before it is given the power to spend money, and
+-- COMPUTE_GRACE_SECONDS can be settled from evidence rather than guessed.
+-- The same row and the same arithmetic become the real thing; only the part
+-- that calls the provider is missing.
+CREATE TABLE IF NOT EXISTS compute (
+    singleton   INTEGER PRIMARY KEY CHECK (singleton = 1),
+    -- none | wanted | creating | running | draining. In shadow only the
+    -- first two are ever written.
+    state       TEXT NOT NULL DEFAULT 'none',
+    since       REAL,
+    -- When work last ran out. NULL while there is work. The grace period is
+    -- measured from here, and it is the single largest cost lever there is.
+    idle_since  REAL,
+    -- Accumulated seconds a node would have existed. Against the plan's
+    -- hourly rate this is the monthly bill, and it is the number the whole
+    -- scale-to-zero design exists to make small.
+    would_run   REAL NOT NULL DEFAULT 0,
+    creates     INTEGER NOT NULL DEFAULT 0,
+    destroys    INTEGER NOT NULL DEFAULT 0,
+    updated     REAL
+);
+
+-- One row per decision, with the reason. Prometheus cannot hold a reason —
+-- a distinct message per decision is a new series each time — so the counts
+-- live there and the WHY lives here, keyed by time so the two read together.
+CREATE TABLE IF NOT EXISTS compute_events (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      REAL NOT NULL,
+    action  TEXT NOT NULL,          -- would-create | would-destroy
+    reason  TEXT NOT NULL,
+    ready   INTEGER NOT NULL DEFAULT 0,
+    unacked INTEGER NOT NULL DEFAULT 0,
+    idle    REAL
+);
+CREATE INDEX IF NOT EXISTS compute_events_at ON compute_events(at);
 """
 
 # States a job can be in. `queued` is the new one and the point of this
@@ -671,3 +717,95 @@ def visitors() -> list[sqlite3.Row]:
                COALESCE(SUM(size_bytes), 0) AS bytes
           FROM jobs WHERE client != ''
          GROUP BY client ORDER BY last_seen DESC""")
+
+# ---------------------------------------------------------------------------
+# compute — what a scaler would do, before it is allowed to do it
+# ---------------------------------------------------------------------------
+
+def compute_row() -> sqlite3.Row:
+    """The one compute row, created empty on first read."""
+    row = one("SELECT * FROM compute WHERE singleton = 1")
+    if row is None:
+        with write() as conn:
+            conn.execute("INSERT OR IGNORE INTO compute (singleton, state)"
+                         " VALUES (1, 'none')")
+        row = one("SELECT * FROM compute WHERE singleton = 1")
+    return row
+
+
+def compute_tick(grace_seconds: float) -> dict[str, Any]:
+    """Decide what a scaler would do now, and remember it. Returns the state.
+
+    THE SCRAPE IS THE TICK. Prometheus polls every 30 s, which is a fine
+    resolution for a decision whose grace period is ten minutes, and it means
+    no extra thread exists to be forgotten about. When the real scaler
+    arrives it calls this on its own schedule and acts on the answer; the
+    arithmetic does not change.
+
+    `ready` and `unacked` come from the job table rather than the broker's
+    management API, which is not enabled on this host and belongs to a shared
+    broker. The mapping is exact for this purpose — a queued job is a message
+    waiting, a running job is a message a worker holds — and it fails in the
+    SAFE direction: a worker that dies leaves its row `running` until the
+    lease expires, so the answer is "still busy" and a real scaler would
+    decline to destroy rather than destroy something live.
+    """
+    now = time.time()
+    counts = {r["state"]: r["n"] for r in query(
+        "SELECT state, COUNT(*) AS n FROM jobs GROUP BY state")}
+    ready = int(counts.get(QUEUED, 0))
+    unacked = int(counts.get(RUNNING, 0))
+    busy = ready + unacked
+
+    row = compute_row()
+    state = row["state"]
+    idle_since = row["idle_since"]
+    would_run = float(row["would_run"] or 0.0)
+    creates = int(row["creates"] or 0)
+    destroys = int(row["destroys"] or 0)
+    updated = row["updated"]
+
+    # A node that would exist has been existing since the last tick. Counted
+    # before any transition, so the seconds are attributed to the state the
+    # node was actually in.
+    if state == "wanted" and updated:
+        would_run += max(0.0, min(now - updated, 3600.0))
+
+    event = None
+    if busy > 0:
+        idle_since = None
+        if state != "wanted":
+            state, creates = "wanted", creates + 1
+            event = ("would-create",
+                     f"{ready} waiting and {unacked} running, and no machine")
+    else:
+        if idle_since is None:
+            idle_since = now
+        if state == "wanted" and (now - idle_since) >= grace_seconds:
+            state, destroys = "none", destroys + 1
+            event = ("would-destroy",
+                     f"nothing ready and nothing running for "
+                     f"{int(now - idle_since)}s")
+
+    with write() as conn:
+        conn.execute(
+            "UPDATE compute SET state=?, since=?, idle_since=?, would_run=?,"
+            " creates=?, destroys=?, updated=? WHERE singleton = 1",
+            (state, row["since"] if state == row["state"] else now,
+             idle_since, round(would_run, 3), creates, destroys, now))
+        if event:
+            conn.execute(
+                "INSERT INTO compute_events (at, action, reason, ready,"
+                " unacked, idle) VALUES (?,?,?,?,?,?)",
+                (now, event[0], event[1], ready, unacked,
+                 None if idle_since is None else round(now - idle_since, 1)))
+
+    return {"state": state, "ready": ready, "unacked": unacked,
+            "idle_seconds": 0.0 if idle_since is None else now - idle_since,
+            "would_run": would_run, "creates": creates, "destroys": destroys}
+
+
+def compute_events(limit: int = 100) -> list[sqlite3.Row]:
+    """The decisions, newest first."""
+    return query("SELECT * FROM compute_events ORDER BY at DESC LIMIT ?",
+                 (limit,))

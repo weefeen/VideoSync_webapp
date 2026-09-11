@@ -23,6 +23,7 @@ fronts the site must not expose /metrics.
 from __future__ import annotations
 
 from . import store
+from .settings import settings
 
 # The stage a job is in tells you where the queue is stuck, so every stage
 # is listed even at zero — a series that only appears under load is a
@@ -133,6 +134,63 @@ def render() -> str:
            "Videos finished. Counted at delivery, never at submission.")
     out.append(_line("vsw_videos_delivered_total", whole["n"]))
 
+
+    # ── the compute node, in shadow ─────────────────────────────────────
+    # Nothing creates a machine yet. Every scrape records what a scaler
+    # WOULD have decided, so the trigger can be watched against real traffic
+    # before it is given the power to spend money — and so the grace period
+    # is chosen from evidence rather than guessed. THE SCRAPE IS THE TICK.
+    shadow = store.compute_tick(settings.compute_grace_seconds)
+
+    family("vsw_queue_ready", "gauge",
+           "Jobs accepted and not yet started — what a scaler reads as "
+           "messages_ready. Above zero means a machine is wanted.")
+    out.append(_line("vsw_queue_ready", shadow["ready"]))
+    family("vsw_queue_unacked", "gauge",
+           "Jobs a worker is holding — messages_unacknowledged. Zero means "
+           "every finished result is safely stored, which is the condition "
+           "that makes destroying a host safe.")
+    out.append(_line("vsw_queue_unacked", shadow["unacked"]))
+
+    family("vsw_compute_wanted", "gauge",
+           "1 when a compute node would exist right now, 0 when it would "
+           "not. Nothing acts on this yet.")
+    out.append(_line("vsw_compute_wanted",
+                     1 if shadow["state"] == "wanted" else 0))
+
+    family("vsw_compute_idle_seconds", "gauge",
+           "How long there has been no work at all. A node is torn down "
+           "once this passes the grace period, so watching it against real "
+           "traffic is what says whether the grace period is right.")
+    out.append(_line("vsw_compute_idle_seconds",
+                     round(shadow["idle_seconds"], 1)))
+
+    family("vsw_compute_grace_seconds", "gauge",
+           "The configured grace period, so the graph carries the line it "
+           "is being judged against.")
+    out.append(_line("vsw_compute_grace_seconds",
+                     settings.compute_grace_seconds))
+
+    family("vsw_compute_would_create_total", "counter",
+           "Times a machine would have been created.")
+    out.append(_line("vsw_compute_would_create_total", shadow["creates"]))
+    family("vsw_compute_would_destroy_total", "counter",
+           "Times a machine would have been destroyed.")
+    out.append(_line("vsw_compute_would_destroy_total", shadow["destroys"]))
+
+    family("vsw_compute_would_run_seconds_total", "counter",
+           "Seconds a machine would have existed. Against the plan's hourly "
+           "rate this is the bill, and it is the number the whole "
+           "scale-to-zero design exists to keep small.")
+    out.append(_line("vsw_compute_would_run_seconds_total",
+                     round(shadow["would_run"], 1)))
+
+    family("vsw_compute_hourly_cost", "gauge",
+           "What an hour of the chosen plan costs, so the dashboard can turn "
+           "the seconds above into money without the figure being hidden in "
+           "a query.")
+    out.append(_line("vsw_compute_hourly_cost", settings.compute_hourly_cost))
+
     return "\n".join(out) + "\n"
 
 
@@ -183,3 +241,21 @@ def failures(limit: int = 50) -> list[dict]:
             "stderr": "\n".join(tail[-6:]),
         })
     return out
+
+
+def compute_decisions(limit: int = 100) -> list[dict]:
+    """Why a machine would have been created or destroyed.
+
+    Deliberately NOT metrics, for the same reason as `failures`: a reason is
+    text, and text as a Prometheus label is one new series per distinct
+    message. The counts belong there; the why belongs here, keyed by time so
+    the two are read together.
+    """
+    return [{
+        "time": int((r["at"] or 0) * 1000),
+        "action": r["action"],
+        "reason": r["reason"],
+        "ready": r["ready"],
+        "unacked": r["unacked"],
+        "idle_seconds": r["idle"],
+    } for r in store.compute_events(limit)]

@@ -984,6 +984,88 @@ def check_the_courtesy_mail_cannot_starve_the_promise() -> str:
     return f"{burnt} queued notices burnt, {ready} ready-mails still available"
 
 
+def check_a_machine_is_only_wanted_while_there_is_work() -> str:
+    """The shadow scaler's arithmetic, including the two ways to burn money.
+
+    Nothing creates a machine yet, which is exactly why this is worth
+    pinning: the same arithmetic becomes the real thing, and by then a
+    mistake costs money rather than a wrong number on a graph.
+
+    The two failures it guards:
+
+      * tearing down before the grace period. Creating costs ~2 minutes of a
+        visitor's wait, so a node that dies the instant a job ends makes the
+        next one pay that again — which at a steady trickle of work is more
+        expensive than never tearing down at all.
+      * counting time while no machine would exist. `would_run` against the
+        plan's hourly rate IS the bill, so an accumulator that keeps running
+        in the `none` state reports a cost that would never be charged, and
+        the decision it informs is made on a lie.
+    """
+    from app import store
+
+    grace = 2.0
+    store.write_returning("DELETE FROM jobs RETURNING id")
+    store.write_returning("DELETE FROM compute_events RETURNING id")
+    with store.write() as conn:
+        conn.execute("UPDATE compute SET state='none', idle_since=NULL,"
+                     " would_run=0, creates=0, destroys=0, updated=NULL"
+                     " WHERE singleton = 1")
+
+    first = store.compute_tick(grace)
+    if first["state"] != "none":
+        raise Failed(f"a machine is wanted with no work at all: {first}")
+
+    store.put_job({"id": "shadow-1", "created": time.time(), "name": "a.mp4",
+                   "upload": "a.mp4", "state": store.QUEUED,
+                   "queued_at": time.time()})
+    wanted = store.compute_tick(grace)
+    if wanted["state"] != "wanted" or wanted["creates"] != 1:
+        raise Failed(f"a queued job did not ask for a machine: {wanted}")
+
+    # Running, not queued: still work, and the idle clock must not start.
+    store.update_job("shadow-1", state=store.RUNNING, started=time.time())
+    busy = store.compute_tick(grace)
+    if busy["state"] != "wanted":
+        raise Failed("a running job stopped wanting a machine")
+    if busy["idle_seconds"] > 0:
+        raise Failed(f"the idle clock is running while a job is: {busy}")
+
+    store.update_job("shadow-1", state=store.DONE, finished=time.time())
+    store.compute_tick(grace)                       # idle starts here
+    early = store.compute_tick(grace)
+    if early["state"] != "wanted":
+        raise Failed(
+            f"torn down after {early['idle_seconds']:.1f}s against a "
+            f"{grace}s grace — creating costs ~2 minutes of somebody's wait, "
+            f"so an early teardown makes the next job pay it again")
+
+    time.sleep(grace + 0.3)
+    gone = store.compute_tick(grace)
+    if gone["state"] != "none" or gone["destroys"] != 1:
+        raise Failed(f"never torn down despite passing the grace: {gone}")
+
+    # The bill must stop when the machine would. One more tick in `none`
+    # must not add to it.
+    held = gone["would_run"]
+    time.sleep(0.3)
+    after = store.compute_tick(grace)
+    if after["would_run"] > held + 0.01:
+        raise Failed(
+            f"would_run grew from {held:.2f} to {after['would_run']:.2f} "
+            f"while no machine would exist — that figure is the bill")
+
+    actions = [r["action"] for r in store.compute_events()]
+    if actions != ["would-destroy", "would-create"]:
+        raise Failed(f"decisions not recorded in order: {actions}")
+    if not all((r["reason"] or "").strip() for r in store.compute_events()):
+        raise Failed("a decision was recorded with no reason")
+
+    store.write_returning("DELETE FROM jobs RETURNING id")
+    return (f"wanted while busy, held {grace}s past idle, then released; "
+            f"{held:.1f}s billed and the clock stopped")
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -1018,6 +1100,7 @@ def main() -> int:
         check_the_visitor_list_counts_honestly,
         check_a_result_is_safe_before_it_is_announced,
         check_the_courtesy_mail_cannot_starve_the_promise,
+        check_a_machine_is_only_wanted_while_there_is_work,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
