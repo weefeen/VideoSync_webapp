@@ -1383,6 +1383,68 @@ def check_the_scaler_cannot_run_away() -> str:
             f"a crowded account is refused; alarms deduped but not muted")
 
 
+def check_the_recogniser_is_marked_right_or_wrong() -> str:
+    """Whether the visitor accepted what we recognised — the one
+    human-verified label this site produces.
+
+    It is computed by matching the winning candidate's PACKAGE against the
+    package actually rendered, and the candidates are stored as JSON. The
+    first version of that JSON omitted `package`, so every job recorded "no
+    package was offered for the recognised piece" — which reads like a gap
+    in the score library and was in fact a missing field. Silent, plausible,
+    and it would have poisoned every label in the corpus.
+
+    So this checks the stored SHAPE, not just the arithmetic: a candidate
+    without a package cannot produce an `accepted`, and the recorder must
+    put one there.
+    """
+    import json
+
+    from app import store
+
+    store.write_returning("DELETE FROM recognitions RETURNING id")
+    store.put_recognition(
+        "verdict-1", country="Belgium", city="Evere", outcome="matched",
+        piece_id="op39", title="Scherzo No. 3", confidence=98.0,
+        candidates=[{"piece_id": "op39", "label": "Scherzo No. 3",
+                     "package": "Op.39_Scherzo", "confidence": 98}])
+
+    row = store.recognitions(1)[0]
+    stored = json.loads(row["candidates"] or "[]")
+    if not stored or "package" not in stored[0]:
+        raise Failed(
+            "a stored candidate carries no `package`. The agreement between "
+            "us and the visitor is computed against it, so without it every "
+            "job records 'no package was offered' — a missing field that "
+            "reads like a library gap")
+
+    def agreement(recognised, chosen, candidates):
+        suggested = next((c.get("package") for c in candidates
+                          if c.get("piece_id") == recognised and c.get("package")),
+                         None)
+        if not recognised:
+            return "nothing recognised"
+        if not chosen:
+            return "unknown"
+        if suggested and suggested == chosen:
+            return "accepted"
+        if suggested:
+            return "overridden"
+        return "no package was offered for the recognised piece"
+
+    cases = {
+        agreement("op39", "Op.39_Scherzo", stored): "accepted",
+        agreement("op39", "Op.23_Ballade", stored): "overridden",
+        agreement("", "Op.39_Scherzo", stored): "nothing recognised",
+    }
+    for got, want in cases.items():
+        if got != want:
+            raise Failed(f"agreement said {got!r}, expected {want!r}")
+
+    store.write_returning("DELETE FROM recognitions RETURNING id")
+    return "accepted, overridden and unrecognised all distinguished"
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -1422,6 +1484,7 @@ def main() -> int:
         check_the_driver_will_not_delete_what_is_not_ours,
         check_a_stored_project_explains_itself,
         check_the_scaler_cannot_run_away,
+        check_the_recogniser_is_marked_right_or_wrong,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

@@ -608,8 +608,15 @@ def _record_recognition(job: jobs.Job, outcome: str,
             consensus=getattr(result, "consensus", None),
             windows=getattr(result, "n_windows", None),
             duration=job.duration,
+            # `package` matters more than it looks: it is what the
+            # agreement between us and the visitor is computed against.
+            # Without it, every job records "no package was offered for the
+            # recognised piece" — which reads like a library gap and is
+            # actually a missing field, and it would quietly poison the one
+            # human-verified label this site produces.
             candidates=[{"piece_id": c.get("piece_id"),
                          "label": c.get("label"),
+                         "package": c.get("package"),
                          "confidence": c.get("confidence"),
                          "renderable": c.get("renderable")}
                         for c in candidates[:5]])
