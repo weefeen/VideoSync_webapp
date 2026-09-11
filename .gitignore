@@ -17,3 +17,8 @@ design/mockup/assets/
 .vscode/
 .idea/
 *.log
+
+# Contact sheets from tools/preview_matrix.py. Rendered output, not source:
+# they are rebuilt in a minute and would otherwise put megabytes of PNG in
+# every commit that touched a layout.
+preview/
