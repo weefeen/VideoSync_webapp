@@ -308,7 +308,14 @@ def new_job(original_name: str, upload_path: pathlib.Path,
     because `add` writes the row immediately: an address assigned after this
     returns would not reach the table until the next save, and a visitor who
     uploads and never renders never causes one."""
-    return registry.add(Job(id=uuid.uuid4().hex[:12],
+    # The FULL uuid4, not the first 12 hex. The job id is a capability: it is
+    # the only thing guarding a visitor's video and status, since there is no
+    # login, so anyone who has the id can fetch the recording's result. 48
+    # bits (hex[:12]) is a lot to guess but not a lot to grind at scale
+    # against an unauthenticated endpoint; 128 bits is free and puts it out of
+    # reach. Old 12-char ids stay valid — every lookup is by string — so this
+    # only lengthens new ones.
+    return registry.add(Job(id=uuid.uuid4().hex,
                             original_name=original_name,
                             upload_path=upload_path,
                             client=client))

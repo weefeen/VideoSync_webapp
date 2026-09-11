@@ -2053,6 +2053,78 @@ def check_the_interface_and_renderer_agree() -> str:
             f"reach the panel; 5 backdrop options all resolve")
 
 
+def check_a_cross_site_request_is_refused() -> str:
+    """A page on another domain cannot act as a visitor here.
+
+    Upload and identify are multipart/simple requests, so a browser sends
+    them cross-origin with no preflight to refuse: any site a visitor happens
+    to open could spend that visitor's upload and identify quota and make
+    this box decode a file on their behalf. `_cross_site` refuses a request
+    that carries the browser's cross-origin signals, while letting a
+    same-site page and a non-browser client (no Origin) through.
+    """
+    from app import routes
+
+    class R:
+        def __init__(self, headers):
+            self.headers = headers
+            self.host = "chopin.weefeen.com"
+
+    if not routes._cross_site(R({"Sec-Fetch-Site": "cross-site"})):
+        raise Failed("a Sec-Fetch-Site: cross-site request was not refused")
+    if not routes._cross_site(R({"Origin": "https://evil.example"})):
+        raise Failed("a request with a foreign Origin was not refused")
+    if routes._cross_site(R({"Origin": "https://chopin.weefeen.com"})):
+        raise Failed("a same-origin request was wrongly refused — this would "
+                     "break the site's own interface")
+    if routes._cross_site(R({})):
+        raise Failed("a request with no Origin (a direct API call) was "
+                     "refused; the rate limits and bot check defend there, "
+                     "and blocking it breaks non-browser use")
+
+    # The three state-changing endpoints must all call the guard.
+    src = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    for fn in ("def api_upload(", "def api_identify(", "def api_render("):
+        start = src.find(fn)
+        body = src[start:start + 600]
+        if "_cross_site(request)" not in body:
+            raise Failed(f"{fn.strip('(')} does not refuse a cross-site "
+                         f"request; a state-changing endpoint left open lets "
+                         f"another site drive it on a visitor")
+
+    return "cross-site refused on upload/identify/render; same-site and "\
+           "direct calls allowed"
+
+
+def check_a_job_id_is_not_guessable() -> str:
+    """The job id — the only guard on a visitor's video — is 128 bits.
+
+    There is no login, so whoever holds a job id can fetch that recording's
+    result and status. `uuid4().hex[:12]` was 48 bits: a lot to guess once,
+    not a lot to grind at scale against an unauthenticated endpoint. The full
+    uuid is free and puts it out of reach. Old 12-char ids stay valid, so
+    this only lengthens new ones — the download also sends
+    `Cache-Control: private, no-store` so a leaked link leaves no cached
+    copies behind.
+    """
+    import re
+
+    src = (ROOT / "app" / "jobs.py").read_text(encoding="utf-8")
+    if re.search(r"uuid\.uuid4\(\)\.hex\[:\d+\]", src):
+        raise Failed("new_job still truncates uuid4().hex; the job id is a "
+                     "capability with no login behind it and must be the full "
+                     "128 bits")
+    if "uuid.uuid4().hex" not in src:
+        raise Failed("could not find the job-id generator in jobs.py")
+
+    routes_src = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    if 'Cache-Control"] = "private, no-store"' not in routes_src:
+        raise Failed("the video download does not set Cache-Control: private, "
+                     "no-store, so a leaked link can leave cached copies")
+
+    return "job id is the full uuid4; download is private, no-store"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2212,6 +2284,8 @@ def main() -> int:
         check_the_rate_limit_key_cannot_be_forged,
         check_the_request_cannot_choose_a_file,
         check_the_duration_cap_fails_safe,
+        check_a_cross_site_request_is_refused,
+        check_a_job_id_is_not_guessable,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

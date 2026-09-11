@@ -11,7 +11,7 @@ import pathlib
 import re
 import shutil
 import threading
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from flask import (Blueprint, Flask, current_app, jsonify, redirect,
                    request, send_file, send_from_directory,
@@ -687,9 +687,32 @@ def _editions_offered(job_id: str) -> set[str]:
     return names
 
 
+def _cross_site(request) -> bool:
+    """True if this looks like a request a DIFFERENT site made on a visitor.
+
+    Upload and identify are multipart/simple requests, so a browser sends
+    them cross-origin with no preflight to refuse — meaning a page on any
+    other domain a visitor happens to open can spend that visitor's upload
+    and identify quota and make this box run ffprobe on their behalf. This
+    catches that with the two signals a browser attaches and a same-site page
+    or a non-browser client does not: a `Sec-Fetch-Site` of `cross-site`, or
+    an `Origin` whose host is not ours. Absent both (a direct API call, an
+    old browser), it does not block — the rate limits and the bot check are
+    the defence there; this only removes the free cross-origin lever.
+    """
+    if request.headers.get("Sec-Fetch-Site") == "cross-site":
+        return True
+    origin = request.headers.get("Origin")
+    if origin:
+        return urlsplit(origin).netloc.lower() != (request.host or "").lower()
+    return False
+
+
 @bp.post("/api/jobs/<job_id>/identify")
 def api_identify(job_id: str):
     """Start listening to an upload. Returns at once; ask again for the answer."""
+    if _cross_site(request):
+        return jsonify({"error": "This request did not come from the site."}), 403
     job = jobs.registry.get(job_id)
     if job is None:
         return jsonify({"error": "No such job."}), 404
@@ -752,6 +775,11 @@ def api_identification(job_id: str):
 # --------------------------------------------------------------------------
 @bp.post("/api/upload")
 def api_upload():
+    # Refused before the quota is even counted: a cross-origin page must not
+    # be able to spend a visitor's upload allowance or make this box decode a
+    # file on their behalf.
+    if _cross_site(request):
+        return jsonify({"error": "This request did not come from the site."}), 403
     try:
         limits.guard("upload_ip", limits.client_key(request))
     except limits.Refused as exc:
@@ -970,6 +998,12 @@ def _style_from(body: dict) -> rnd.Style:
 
 @bp.post("/api/jobs/<job_id>/render")
 def api_render(job_id: str):
+    # Render already requires application/json (a preflighted request a
+    # cross-origin page cannot forge silently), but the check is applied here
+    # too so all three state-changing endpoints refuse a cross-site caller by
+    # the same rule rather than each relying on a different accident.
+    if _cross_site(request):
+        return jsonify({"error": "This request did not come from the site."}), 403
     job = jobs.registry.get(job_id)
     if job is None:
         return jsonify({"error": "Unknown job."}), 404
@@ -1101,7 +1135,14 @@ def api_download(job_id: str):
                                      "cannot reach it right now. Please try "
                                      "again in a minute."}), 503
 
-    return send_file(job.result, as_attachment=True, download_name=name)
+    resp = send_file(job.result, as_attachment=True, download_name=name)
+    # A visitor's video is personal and reachable only by an unguessable id.
+    # `private` keeps a shared proxy from caching it, `no-store` keeps it out
+    # of the browser's on-disk cache — so a link that leaks does not also
+    # leave copies on machines the visitor never chose. (The bucket path
+    # above signs a 15-minute URL for the same reason.)
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
 
 
 def _safe_stem(name: str | None) -> str:
