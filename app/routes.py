@@ -9,6 +9,7 @@ import logging
 import os
 import pathlib
 import re
+import shutil
 import threading
 from urllib.parse import quote
 
@@ -46,12 +47,37 @@ bp = Blueprint("main", __name__)
 MAX_UPLOAD_GB = float(os.getenv("MAX_UPLOAD_GB", "4") or 4)
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_GB * 1024 * 1024 * 1024)
 
+# Uploads are KEPT — the privacy note promises it and the corpus wants it —
+# so nothing reclaims them, and a stranger repeatedly uploading 4 GB files
+# fills the disk in an hour or two. When the disk is full, renders stop, the
+# SQLite DB cannot write, and the nightly backup fails: one cheap attack
+# takes the whole service down.
+#
+# This is the floor that keeps free. Before an upload is written, the box
+# must still have MIN_FREE_DISK_GB left AFTER it lands — enough for the DB,
+# a render's ~2.7 GB peak and the day's output. Below that, the upload is
+# refused with a 413 rather than accepted into a disk that then fills. It
+# fails CLOSED and it DELETES NOTHING: reclaiming kept recordings is a
+# policy decision for the owner (never-rendered uploads are the candidate),
+# not something an availability guard should do on its own.
+MIN_FREE_DISK_GB = float(os.getenv("MIN_FREE_DISK_GB", "5") or 5)
+MIN_FREE_DISK_BYTES = int(MIN_FREE_DISK_GB * 1024 * 1024 * 1024)
+
 # Length is what costs: the encode grows with it, and the aligner's memory
-# grows with its square. Nothing in the reference corpus of 249 recordings
-# runs past 31 minutes, and the longest identified piece is a 23-minute
-# concerto movement, so 25 admits everything real at a quarter of the
-# memory 40 would need.
-MAX_DURATION_MINUTES = float(os.getenv("MAX_DURATION_MINUTES", "25") or 25)
+# grows with the SQUARE of it — a full N×M DTW matrix in float64. Measured
+# on the 3.9 GB production box: 7.1 min → 2.43 GB, 14.1 min → 4.62 GB. So
+# somewhere past ~11 minutes a single upload OOM-kills the box, and the
+# kernel may take the web app rather than the render (grafana-alerts.yaml).
+#
+# THE DEFAULT IS 8, DELIBERATELY, AND FAILS SAFE. `settings._number` falls
+# back to this default when the env var is missing, empty or mistyped, so
+# the default is what a fresh or fat-fingered deploy actually runs with — it
+# must be a value the box survives, not an aspiration. It read 25 here while
+# `docs/status.md` documented the real cap as 8: a cleared line or a typo
+# silently reintroduced a one-request denial of service. 8 min ≈ 2.7 GB peak,
+# inside the box. Anything longer needs a bigger machine, not a bigger
+# number here — raise it only together with the RAM to back it.
+MAX_DURATION_MINUTES = float(os.getenv("MAX_DURATION_MINUTES", "8") or 8)
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
@@ -739,6 +765,23 @@ def api_upload():
             "detail": f"Use one of: {', '.join(sorted(VIDEO_SUFFIXES))}.",
         }), 415
 
+    # Refuse before writing if the box is near full. `content_length` is what
+    # the client claims it will send; MAX_CONTENT_LENGTH already caps the
+    # actual bytes at 4 GB, so a lie here only makes the estimate more
+    # conservative, never less. Uploads are never reclaimed, so without this
+    # the disk fills and takes renders, the database and the backup with it.
+    try:
+        free = shutil.disk_usage(settings.work_dir).free
+        incoming = request.content_length or 0
+        if free - incoming < MIN_FREE_DISK_BYTES:
+            logger.warning("upload refused: %.1f GB free, need %.1f GB clear",
+                           free / 1e9, MIN_FREE_DISK_GB)
+            return jsonify({
+                "error": "We are at capacity just now. Please try again later.",
+            }), 507        # Insufficient Storage: the honest status for this
+    except OSError:
+        pass               # never let a stat failure block a legitimate upload
+
     # The address is passed in, not assigned afterwards: `new_job` writes
     # the row as it creates it. The rate limiter has already counted this
     # address; keeping it on the job is what lets that counting be explained
@@ -801,7 +844,16 @@ def _style_from(body: dict) -> rnd.Style:
     """Build a Style from the request, resolving backdrop art from config."""
     style = body.get("style") or {}
     background = style.get("background", rnd.NONE)
-    path = style.get("background_path") or settings.background_for(background)
+    # The path is resolved from OUR configuration, never from the request.
+    # It used to be `style.get("background_path") or settings.background_for(...)`,
+    # so a caller could name any file the `vsw` user could read — another
+    # visitor's upload, another visitor's finished video — and `Style.validate`
+    # only checked that it existed. ffmpeg then composited that file into the
+    # attacker's output, which they downloaded: an arbitrary-local-file read
+    # of everyone else's recordings. The interface never sends this field; it
+    # only ever picks 'none' | 'static' | 'dynamic', and `background_for`
+    # turns that into a path we control. So the request cannot choose a file.
+    path = settings.background_for(background)
 
     def number(key: str, default: float) -> float:
         try:

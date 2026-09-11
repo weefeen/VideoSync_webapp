@@ -120,6 +120,17 @@ cat > /etc/apache2/sites-available/vsw-https.conf <<APACHE
     RemoteIPHeader X-Forwarded-For
     RemoteIPInternalProxy 127.0.0.1
 
+    # Defence in depth for the rate-limit key. mod_remoteip resolves the true
+    # client into REMOTE_ADDR above; this OVERWRITES the forwarded header the
+    # backend sees with that resolved address, so a client cannot seed the
+    # list at all. The app keys on the LAST entry (see app/limits.client_key)
+    # and would resist a forged leftmost value anyway — this makes the whole
+    # header trustworthy rather than just the last element. Without it, a
+    # client sending `X-Forwarded-For: 1.2.3.4` could pick which rate-limit
+    # bucket it counted against; with it, it cannot. `mod_headers` is enabled
+    # at the top of this script.
+    RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}s"
+
     Header always set Strict-Transport-Security "max-age=31536000"
     Header always set X-Content-Type-Options "nosniff"
     Header always set Referrer-Policy "strict-origin-when-cross-origin"

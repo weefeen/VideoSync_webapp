@@ -1837,6 +1837,153 @@ def check_the_choices_survive_the_request() -> str:
             f"portrait_offset arrives; {len(sent_keys)} sent fields all read")
 
 
+def check_the_rate_limit_key_cannot_be_forged() -> str:
+    """A client cannot choose which bucket its requests count against.
+
+    Every limit in the app - 8 uploads/hour, 3 renders/week, the per-address
+    mail caps - keys on `limits.client_key`. If a request can set that key,
+    the caps are per-request-resettable and mean nothing.
+
+    `X-Forwarded-For` is a list a client seeds with whatever it likes. Our
+    Apache is the single edge proxy and appends the real peer it saw as the
+    LAST element, so the true client is `forwarded[-1]`; everything earlier
+    is the client's own claim. Reading `forwarded[0]` - the first - was
+    reading exactly the part the attacker controls, so rotating the header
+    reset every counter. Proven against the running server before the fix:
+    ten uploads with ten forged first-entries all passed an 8/hour cap.
+
+    This asserts the key is the LAST entry, using the header shape gunicorn
+    actually receives in production: the spoof, then the peer Apache adds.
+    """
+    from app import limits
+
+    class FakeRequest:
+        def __init__(self, xff, peer="127.0.0.1"):
+            self.headers = {"X-Forwarded-For": xff} if xff else {}
+            self.remote_addr = peer
+
+        class _H(dict):
+            def get(self, k, d=None):
+                return dict.get(self, k, d)
+
+    def key(xff):
+        r = FakeRequest.__new__(FakeRequest)
+        r.headers = FakeRequest._H()
+        if xff is not None:
+            r.headers["X-Forwarded-For"] = xff
+        r.remote_addr = "127.0.0.1"
+        return limits.client_key(r)
+
+    old = os.environ.get("TRUST_PROXY")
+    os.environ["TRUST_PROXY"] = "true"
+    try:
+        # Production shape: '<attacker spoof>, <real peer Apache appended>'.
+        # Two different spoofs, the SAME real peer, must land on ONE key.
+        k1 = key("10.0.0.1, 203.0.113.7")
+        k2 = key("10.0.0.99, 203.0.113.7")
+        if k1 != "203.0.113.7" or k2 != "203.0.113.7":
+            raise Failed(
+                f"the rate-limit key is forgeable: two requests with different "
+                f"X-Forwarded-For first entries keyed as {k1!r} and {k2!r}. It "
+                f"must key on the LAST entry (the peer Apache appended), which "
+                f"a client cannot change, or rotating the header resets every "
+                f"limit in the app.")
+        # A bare header with no proxy append still keys on its last element,
+        # never the first-if-it-differs.
+        if key("1.1.1.1, 2.2.2.2") != "2.2.2.2":
+            raise Failed("client_key did not take the last X-Forwarded-For entry")
+    finally:
+        if old is None:
+            os.environ.pop("TRUST_PROXY", None)
+        else:
+            os.environ["TRUST_PROXY"] = old
+
+    return "two forged first-entries with one real peer collapse to one key"
+
+
+def check_the_request_cannot_choose_a_file() -> str:
+    """A render request cannot name a file for ffmpeg to read.
+
+    `_style_from` built the backdrop path as
+    `style.get("background_path") or settings.background_for(background)`, so
+    a caller could set `background_path` to any file the `vsw` user could
+    read - another visitor's upload, another visitor's finished video - and
+    `Style.validate` only checked it existed. ffmpeg then composited that
+    file into the attacker's output, which they downloaded: an arbitrary
+    local-file read of everyone else's recordings. Proven by building a
+    Style from a crafted request and watching the path arrive intact.
+
+    The interface never sends this field. The fix is that the request cannot
+    set it at all - the path comes only from our own configuration.
+    """
+    from app import routes
+
+    poison = "/etc/passwd" if os.name != "nt" else r"C:\Windows\win.ini"
+    style = routes._style_from({"style": {"background": "static",
+                                          "background_path": poison}})
+    if style.background_path == poison:
+        raise Failed(
+            f"a render request set background_path to {poison!r} and it was "
+            f"honoured. Any file readable by the service reaches ffmpeg and "
+            f"is composited into a downloadable video. The path must come "
+            f"only from settings.background_for, never from the request.")
+    return "a request-supplied background_path is ignored"
+
+
+def check_the_duration_cap_fails_safe() -> str:
+    """The default upload-length cap is one the production box survives.
+
+    The aligner allocates a full N-by-M DTW matrix in float64, so memory
+    grows with the SQUARE of duration: 7.1 min -> 2.43 GB, 14.1 min ->
+    4.62 GB on the 3.9 GB box. `settings._number` falls back to this code
+    default when MAX_DURATION_MINUTES is missing, empty or mistyped, so the
+    default is what a fresh or fat-fingered deploy runs with - it must be a
+    value the box survives, not an aspiration. It read 25 while the box OOMs
+    somewhere past 11, which is a one-request denial of service reintroduced
+    by any cleared line.
+    """
+    import re
+
+    # The CODE default: the literal in routes.py that a missing/empty/mistyped
+    # env var falls back to. Read from source, not from the loaded constant,
+    # so a developer's private .env cannot make this pass or fail — production
+    # runs on the committed templates, and those are checked next.
+    src = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    m = re.search(r'MAX_DURATION_MINUTES\s*=\s*float\(os\.getenv\('
+                  r'"MAX_DURATION_MINUTES",\s*"(\d+(?:\.\d+)?)"', src)
+    if not m:
+        raise Failed("could not find the MAX_DURATION_MINUTES default in "
+                     "routes.py; this check can no longer read what it guards")
+    if float(m.group(1)) > 10:
+        raise Failed(
+            f"the CODE default cap is {m.group(1)} minutes; the 3.9 GB box "
+            f"OOMs past ~11. The default is what a missing or mistyped env "
+            f"var falls back to, so it must be survivable on its own.")
+
+    # And the committed templates that DEPLOY. .env.prod becomes the server's
+    # .env; a value over the box's limit there is the live OOM, whatever the
+    # code default says.
+    checked = []
+    for name in (".env.prod", ".env.example"):
+        f = ROOT / name
+        if not f.is_file():
+            continue
+        for line in f.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("MAX_DURATION_MINUTES="):
+                value = line.split("=", 1)[1].strip()
+                if value and float(value) > 10:
+                    raise Failed(
+                        f"{name} sets MAX_DURATION_MINUTES={value}, over the "
+                        f"~11-minute OOM threshold of the production box. This "
+                        f"file is copied to the server's .env, so this is the "
+                        f"live cap, not a default.")
+                checked.append(f"{name}={value or 'default'}")
+
+    return (f"code default {m.group(1)} min; "
+            + ", ".join(checked) + "; all inside the box")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -1992,6 +2139,9 @@ def main() -> int:
         check_a_portrait_video_keeps_the_picture,
         check_the_output_is_postable,
         check_the_choices_survive_the_request,
+        check_the_rate_limit_key_cannot_be_forged,
+        check_the_request_cannot_choose_a_file,
+        check_the_duration_cap_fails_safe,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

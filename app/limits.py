@@ -193,9 +193,27 @@ def client_key(request) -> str:
     `remote_addr` is used unless TRUST_PROXY says a reverse proxy sits in
     front, because a forwarded header is written by the client and trusting
     it by default would let anyone spend everyone else's quota.
+
+    THE LAST ENTRY, NOT THE FIRST. `X-Forwarded-For` is a list a client can
+    seed with anything: send `X-Forwarded-For: 1.2.3.4` and the leftmost
+    entry is 1.2.3.4, a value the attacker chose. Reading `forwarded[0]` made
+    every limit in this app per-request-resettable — rotate the header and
+    the 8/hour and 3/week caps never trip. Our Apache is the single edge
+    proxy and forwards with `ProxyAddHeaders` on, so it APPENDS the real peer
+    it saw as the last element; whatever the client put earlier in the list,
+    the true client is `forwarded[-1]`. An attacker cannot get past our own
+    proxy's append, so they cannot forge the last entry.
+
+    This holds for exactly one trusted hop, which is the deployment. If a CDN
+    is ever put in front of Apache, this becomes "the Nth from the end" and
+    must be revisited — hence TRUST_PROXY being an explicit switch rather
+    than a guess. `deploy/install-web.sh` also has Apache overwrite the
+    header from the resolved peer as a second line of defence.
     """
     if os.getenv("TRUST_PROXY", "").strip().lower() in ("1", "true", "yes"):
-        forwarded = (request.headers.get("X-Forwarded-For") or "").split(",")
-        if forwarded and forwarded[0].strip():
-            return forwarded[0].strip()
+        forwarded = [p.strip() for p in
+                     (request.headers.get("X-Forwarded-For") or "").split(",")
+                     if p.strip()]
+        if forwarded:
+            return forwarded[-1]
     return request.remote_addr or "unknown"
