@@ -148,11 +148,29 @@ class _Counters:
             hits = [t for t in self._hits.get(name, []) if now - t < window]
             hits.append(now)
             self._hits[name] = hits
-            # Forget everything that can no longer deny anything.
+            # Forget everything that can no longer deny anything. The old pass
+            # dropped keys whose list was empty — but a list only loses its
+            # stale timestamps for the ONE key just recorded, so every other
+            # key kept its hits for ever, no list was empty, and NOTHING was
+            # reclaimed: the file grew one key per address ever seen and was
+            # re-serialised under the lock on every request. This prunes stale
+            # timestamps across ALL keys, each against its own bucket's window,
+            # then drops the keys left empty.
             if len(self._hits) > 500:
-                self._hits = {k: v for k, v in self._hits.items() if v}
+                self._hits = self._prune(now)
             self._dirty = True
             self._save()
+
+    def _prune(self, now: float) -> dict[str, list[float]]:
+        """Every key, stale timestamps removed, empty keys dropped."""
+        kept: dict[str, list[float]] = {}
+        for name, hits in self._hits.items():
+            bucket = name.split(":", 1)[0]
+            window = RULES[bucket].window if bucket in RULES else WEEK
+            live = [t for t in hits if now - t < window]
+            if live:
+                kept[name] = live
+        return kept
 
 
 _counters = _Counters()

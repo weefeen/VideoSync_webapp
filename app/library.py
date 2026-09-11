@@ -27,6 +27,23 @@ from __future__ import annotations
 import dataclasses
 import threading
 import time
+import unicodedata
+
+
+def _key(name: str) -> str:
+    """A name in one canonical Unicode form, for matching.
+
+    Resolution is an exact dictionary lookup between the pair_list edition
+    name and the package's folder name — the same string, so it should
+    always hit. But the SAME characters can be stored in different Unicode
+    normalisation forms: a folder that passed through macOS comes back NFD
+    ("é" as e + combining accent) where the pair list has NFC ("é" as one
+    codepoint), and the lookup misses. That reports a piece as "recognised,
+    no score" at full confidence — the same silent, high-confidence miss the
+    backslash bug produced, and this library is full of accented French
+    titles. Normalising both sides to NFC removes it.
+    """
+    return unicodedata.normalize("NFC", name)
 
 from . import package as pkg
 from .settings import settings
@@ -134,7 +151,7 @@ class _Catalogue:
                 broken.setdefault(str(root.path), f"could not be read: {exc}")
                 continue
             for path, package, problem in found:
-                name = path.name
+                name = _key(path.name)
                 if package is None:
                     broken.setdefault(name, problem or "not a usable package")
                     continue
@@ -158,7 +175,7 @@ def packages() -> list[pkg.ScorePackage]:
 
 def find(name: str) -> "pkg.ScorePackage | None":
     """A package by its exact folder name."""
-    return _catalogue.snapshot().usable.get(name)
+    return _catalogue.snapshot().usable.get(_key(name))
 
 
 def editions_for(score_names: list[str]) -> list[Edition]:
@@ -168,11 +185,13 @@ def editions_for(score_names: list[str]) -> list[Edition]:
     able to say "we know this piece, we just don't have that score yet".
     """
     state = _catalogue.snapshot()          # one read: never mix two scans
+    # `name` stays as the recogniser gave it (what the interface shows); the
+    # lookup uses the canonical form so an NFC/NFD difference cannot miss.
     found = [
         Edition(name=name,
-                package=state.usable.get(name),
-                present=name in state.usable or name in state.broken,
-                problem=state.broken.get(name, ""))
+                package=state.usable.get(_key(name)),
+                present=_key(name) in state.usable or _key(name) in state.broken,
+                problem=state.broken.get(_key(name), ""))
         for name in score_names
     ]
     return sorted(found, key=_preference)

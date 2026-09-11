@@ -704,7 +704,12 @@ function applyRealLayout(){
       backgroundPosition: `50% ${(L.surplus > 1 ? S.vidOffset * 100 : 50).toFixed(1)}%`,
     });
   }
-  const band = frame.querySelector('.band');
+  // `.band` OR `.ctr-band`: the centred layout renders the band as
+  // `.ctr-band`, so selecting only `.band` moved the video to the real
+  // position and left the band where the mock drew it — the preview showed
+  // a layout the render never produces. The video zone carries `.vidzone`
+  // in both, so it was always repositioned; only the band was missed.
+  const band = frame.querySelector('.band, .ctr-band');
   if(band){
     Object.assign(band.style, {
       left: px(L.band,'x'), top: px(L.band,'y'),
