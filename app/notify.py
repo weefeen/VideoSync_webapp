@@ -140,6 +140,28 @@ def _compose(subject: str, address: str, body: str) -> EmailMessage:
     return message
 
 
+def _ascii(text: str) -> str:
+    """Readable 7-bit ASCII, with no wrapping.
+
+    Split out of `_plain` because a Subject needs the same treatment and must
+    NOT be wrapped: one accent puts the whole header through RFC 2047, which
+    a few clients still show raw, and this library's titles are full of
+    French ones.
+
+    Decomposed and stripped rather than replaced: "3eme Scherzo" is readable
+    where the obvious `errors="replace"` gives "3?me Scherzo", which looks
+    like the mail is broken. A middle dot vanishes entirely and leaves a
+    double space, so it is mapped to a hyphen first.
+    """
+    swaps = {"\u2014": "-", "\u2013": "-", "\u2019": "'", "\u2018": "'",
+             "\u201c": '"', "\u201d": '"', "\u2026": "...",
+             "\u00a0": " ", "\u00b7": "-"}
+    for bad, good in swaps.items():
+        text = text.replace(bad, good)
+    text = unicodedata.normalize("NFKD", text)
+    return text.encode("ascii", "ignore").decode("ascii")
+
+
 def _plain(body: str) -> str:
     """Plain ASCII, hard-wrapped, so nothing downstream needs to re-encode it.
 
@@ -158,33 +180,40 @@ def _plain(body: str) -> str:
     Typography lost: an em-dash becomes a hyphen. A dash is a small price for
     a message that arrives.
     """
-    swaps = {"—": "-", "–": "-", "’": "'", "‘": "'",
-             "“": '"', "”": '"', "…": "...", " ": " "}
-    for bad, good in swaps.items():
-        body = body.replace(bad, good)
+    body = _ascii(body)
     # Anything still outside ASCII — a piece title with an accent, and this
     # library is full of French ones — would put the message back on
     # quoted-printable. Decomposed and stripped of its accents rather than
     # replaced: "3ème Scherzo" becomes "3eme Scherzo", which is readable,
     # where the obvious `errors="replace"` gives "3?me Scherzo", which looks
     # like the mail is broken.
-    body = unicodedata.normalize("NFKD", body)
-    body = body.encode("ascii", "ignore").decode("ascii")
-
     out = []
     for para in body.split("\n"):
         if len(para) <= 72:
             out.append(para)
             continue
+        # Wrapped lines keep the indent of the line they came from. Without
+        # this, `para.split(" ")` turns a leading four spaces into empty
+        # words that are dropped, so an over-long indented line came out
+        # flush against the margin — and a message whose fields are read as
+        # an aligned block loses exactly the alignment that makes it
+        # readable, on precisely the lines that were interesting enough to
+        # be long.
+        indent = para[:len(para) - len(para.lstrip(" "))]
+        # Split the REST, not the whole line, and on a single space rather
+        # than on runs of whitespace. Splitting the whole line turns the
+        # indent into empty words that vanish; splitting on runs collapses
+        # the double space that lines these fields up into columns. Only the
+        # leading whitespace is special, and it is handled above.
         line = ""
-        for word in para.split(" "):
-            if line and len(line) + 1 + len(word) > 72:
-                out.append(line)
+        for word in para[len(indent):].split(" "):
+            if line and len(indent) + len(line) + 1 + len(word) > 72:
+                out.append(indent + line)
                 line = word
             else:
                 line = f"{line} {word}" if line else word
         if line:
-            out.append(line)
+            out.append(indent + line)
     return "\n".join(out)
 
 
@@ -477,3 +506,77 @@ def send_wanted(*, job_id: str, score: str, title: str = "",
     message = _compose(f"Score wanted: {named}", to, "\n".join(lines) + "\n")
     _send(message, to)
     logger.info("told the operator that %s was wanted (job %s)", score, job_id)
+
+
+def send_job_ended(*, job_id: str, ok: bool, piece: str = "",
+                   seconds: float | None = None, told: bool = False,
+                   stage: str = "", error: str = "",
+                   error_class: str = "") -> None:
+    """Tell the operator how a job ended, either way.
+
+    Goes to ALERT_EMAIL. Every other message about a render goes to the
+    visitor; this is the only one that says what happened, to the person who
+    has to do something about it.
+
+    Both outcomes, not just failures, because the question it answers is
+    "did the video reach the person who asked" - and a failure mail alone
+    cannot answer that. It matters most for a render started by hand on
+    somebody's behalf, where there is otherwise no signal at all between
+    running the command and hoping.
+
+    NO VISITOR ADDRESS. Whether anybody was told is a yes or a no here, not
+    a name. The operator already has the address when he started the render
+    himself, and `Privacy.html` promises the address reaches him only when
+    there is no score - widening that quietly would make the page a lie.
+
+    No bucket of its own: capped by the global daily allowance like
+    everything else. A systematically broken score mails once per person who
+    tried it, which is information rather than noise, and a failed render is
+    never retried automatically so there is no loop to run away.
+    """
+    to = (settings.alert_email or "").strip()
+    if not to or not settings.can_email:
+        return
+    to = one_address(to)
+
+    named = _ascii(piece or job_id)
+
+    if ok:
+        took = ""
+        if seconds:
+            took = (f" in {seconds / 60:.0f} min {seconds % 60:.0f} s"
+                    if seconds >= 60 else f" in {seconds:.0f} s")
+        lines = [f"Job {job_id} finished{took}.", "",
+                 f"    Piece  {piece or '(none recorded)'}",
+                 f"    Told   " + ("yes, the link has been mailed to them"
+                                   if told else
+                                   "NOBODY - there was no address, or the "
+                                   "mail was refused"),
+                 "", _link(job_id), ""]
+    else:
+        lines = [f"Job {job_id} did not finish.", "",
+                 f"    Piece  {piece or '(none recorded)'}",
+                 f"    Stage  {stage or '(unknown)'}"]
+        if error_class:
+            lines.append(f"    Class  {error_class}")
+        if error:
+            # One line that FITS. `_plain` hard-wraps at 72 and a wrapped
+            # continuation starts in column 0, which breaks the aligned
+            # block this is read as. The full text, the command and the tail
+            # of stderr are all on the stage_run row, where they are useful.
+            first = _ascii(error.strip().splitlines()[0])
+            if len(first) > 55:
+                first = first[:52].rstrip() + "..."
+            lines.append(f"    Error  {first}")
+        lines += ["",
+                  "The visitor was told nothing. A failure is never mailed to",
+                  "them - they see it only if they open their own link.",
+                  "",
+                  "To try it again once the cause is fixed:", "",
+                  f"    python tools/retrigger.py {job_id}", ""]
+
+    lines += ["- VideoSync"]
+    subject = f"{'Delivered' if ok else 'Failed'}: {named}"
+    _send(_compose(subject, to, "\n".join(lines) + "\n"), to)
+    logger.info("told the operator job %s %s", job_id,
+                "was delivered" if ok else "failed")

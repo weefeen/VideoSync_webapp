@@ -161,7 +161,9 @@ def _done(event: Event, row) -> bool:
     # Counted here rather than at submit, so the tally means delivered and
     # not attempted.
     stats.record_video()
-    _tell_them(store.get_job(event.job_id))
+    final = store.get_job(event.job_id)
+    told = _tell_them(final)
+    _tell_the_operator(final, ok=True, told=told)
     return True
 
 
@@ -179,6 +181,12 @@ def _failed(event: Event, row) -> bool:
                     stderr_tail=(event.stderr_tail or "")[-4000:] or None,
                     error_class=event.error_class or None,
                     error_message=event.error or None)
+    # `row` is the state BEFORE the update above, so it still carries the
+    # stage the render was in when it died. The updated row does not.
+    _tell_the_operator(row, ok=False, told=False,
+                       stage=row["stage"] or "",
+                       error=event.error or "",
+                       error_class=event.error_class or "")
     return True
 
 
@@ -230,7 +238,46 @@ def _close_open_run(event: Event, *, state: str = store.ERROR,
         store.stage_end(run["id"], state=state, **cost, **fields)
 
 
-def _tell_them(row) -> None:
+def _tell_the_operator(row, *, ok: bool, told: bool, stage: str = "",
+                       error: str = "", error_class: str = "") -> None:
+    """Say how a job ended, to the person who can do something about it.
+
+    Both outcomes. A failure mail alone cannot answer the question this
+    exists for - "did the video reach the person who asked" - and a render
+    started by hand on somebody's behalf otherwise gives no signal at all
+    between running the command and hoping.
+
+    Goes to ALERT_EMAIL and carries no visitor address: whether anybody was
+    told is a yes or a no here. `Privacy.html` promises an address reaches
+    the operator only when there is no score for the piece, and widening that
+    quietly would make the page untrue.
+
+    Never fatal, and never in front of anything. By the time this runs the
+    row is written, the video is stored and the visitor has been told; an
+    operational courtesy must not be able to undo any of that.
+    """
+    if row is None or not settings.can_email:
+        return
+
+    seconds = None
+    try:
+        if ok and row["finished"] and row["started"]:
+            seconds = float(row["finished"]) - float(row["started"])
+    except (TypeError, ValueError):
+        seconds = None
+
+    try:
+        notify.send_job_ended(job_id=row["id"], ok=ok,
+                              piece=row["score"] or "",
+                              seconds=seconds, told=told,
+                              stage=stage, error=error,
+                              error_class=error_class)
+    except Exception:                                  # noqa: BLE001
+        logger.warning("could not report how job %s ended", row["id"],
+                       exc_info=True)
+
+
+def _tell_them(row) -> bool:
     """Send the "it is ready" message, if we can and were asked to.
 
     Never fatal: the video exists, the page shows the link, and a mail
@@ -241,20 +288,22 @@ def _tell_them(row) -> None:
     compute instance that gets created and destroyed.
     """
     if row is None:
-        return
+        return False
     email = (row["email"] or "").strip()
     if not email or not settings.can_email:
-        return
+        return False
     address = email.lower()
     if not limits.allowed("mail_email", address):
         logger.info("not mailing %s: over its allowance", address)
-        return
+        return False
     if not limits.allowed("mail_total", "all"):
         logger.warning("daily mail cap reached; not mailing %s", address)
-        return
+        return False
     try:
         notify.send_ready(row["id"], email, piece=row["score"] or "",
                           finished=row["finished"])
+        return True
     except notify.MailError as exc:
         logger.warning("could not tell %s about job %s: %s",
                        email, row["id"], exc)
+        return False

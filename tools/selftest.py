@@ -51,6 +51,27 @@ sys.path.insert(0, str(ROOT))
 _SANDBOX = tempfile.TemporaryDirectory(prefix="svs_selftest_")
 os.environ["WORK_DIR"] = str(pathlib.Path(_SANDBOX.name) / "work")
 
+# Mail configured, so the paths that only run when mail is possible are
+# actually exercised rather than skipped. A check that quietly skips is worse
+# than no check: it is a green line that proves nothing, which this suite has
+# shipped once already.
+os.environ.setdefault("SMTP_HOST", "smtp.invalid")
+os.environ.setdefault("SMTP_FROM", "VideoSync <selftest@example.invalid>")
+os.environ.setdefault("ALERT_EMAIL", "operator@example.invalid")
+# A public base URL too: mail is refused without one, because a link
+# to 127.0.0.1 is useless to a recipient and costly to the domain.
+os.environ.setdefault("PUBLIC_BASE_URL", "https://selftest.example")
+
+# And then NOTHING may reach a relay. Every send in the suite is captured
+# here instead, once, at import: a check that accidentally sends would
+# otherwise sit for a 30-second connect timeout against a real server, or
+# worse, reach one.
+from app import notify as _notify                                # noqa: E402
+
+SENT: list[tuple[str, str]] = []
+_notify._send = lambda message, address: SENT.append(              # noqa: SLF001
+    (address.lower(), message.get_content()))
+
 
 class Failed(AssertionError):
     """A check did not hold. The message is meant to be read on a CI page."""
@@ -1460,6 +1481,101 @@ def check_the_recogniser_is_marked_right_or_wrong() -> str:
     return "accepted, overridden and unrecognised all distinguished"
 
 
+def check_a_failure_is_never_mailed_to_the_visitor() -> str:
+    """A render that fails tells the operator and says nothing to the visitor.
+
+    The rule is the owner's, stated plainly: if something failed, the
+    customer does not get a failure message. They were already told their
+    recording arrived, so silence is the whole of what they get - and the
+    page still shows the error to anyone who opens their own link, so the
+    honest answer reaches whoever looks for it.
+
+    The operator is the one who has to act, so he is told either way. Both
+    outcomes rather than failures alone, because the question the mail
+    exists to answer is "did the video reach the person who asked", and a
+    failure-only mail cannot answer it for the jobs that worked.
+
+    Three properties:
+
+      * a failed job sends EXACTLY ONE message, and it goes to ALERT_EMAIL.
+      * a finished job sends two: the link to the visitor, the outcome to
+        the operator.
+      * neither message to the operator carries the visitor's address.
+        `Privacy.html` promises an address reaches him only when there is no
+        score for the piece; sending it on every render would make the page
+        untrue, and a page that is untrue about this is worse than no page.
+    """
+    from app import notify, store
+    from app.queue import ledger
+    from app.queue.messages import Event
+    from app.settings import settings
+
+    VISITOR = "someone@example.invalid"
+    OPERATOR = (settings.alert_email or "").strip().lower()
+    if not OPERATOR or not settings.can_email:
+        raise Failed(
+            "this check needs ALERT_EMAIL and a relay configured. The suite "
+            "sets both at import precisely so this path is exercised; if it "
+            "is unset here, that setup has been removed and the check is "
+            "proving nothing.")
+
+    sent = SENT
+    sent.clear()
+    if True:
+        # --- a render that fails -------------------------------------
+        jid = "outcome_fail"
+        _queued(jid, email=VISITOR, score="Op.35_Sonate", stage="align")
+        ledger.apply(Event(job_id=jid, type="started", worker="w1"))
+        ledger.apply(Event(job_id=jid, type="failed", worker="w1",
+                           error="MemoryError: unable to allocate 4.62 GiB",
+                           error_class="MemoryError"))
+        if store.get_job(jid)["state"] != store.ERROR:
+            raise Failed("the failure did not reach the row")
+
+        to_visitor = [b for a, b in sent if a == VISITOR]
+        if to_visitor:
+            raise Failed(
+                "a failed render mailed the visitor. They are told nothing "
+                "when a render fails - only the page shows it, to whoever "
+                "opens their own link.")
+        to_operator = [b for a, b in sent if a == OPERATOR]
+        if len(to_operator) != 1:
+            raise Failed(
+                f"a failed render sent {len(to_operator)} messages to the "
+                f"operator, not 1. Nobody else is watching: silence here is "
+                f"a render that failed and was never noticed.")
+
+        # --- a render that works -------------------------------------
+        sent.clear()
+        jid = "outcome_done"
+        _queued(jid, email=VISITOR, score="Op.39_Scherzo")
+        ledger.apply(Event(job_id=jid, type="started", worker="w1"))
+        ledger.apply(Event(job_id=jid, type="done", result="/tmp/out.mp4",
+                           mode="reference", elapsed=12.5, worker="w1"))
+        if store.get_job(jid)["state"] != store.DONE:
+            raise Failed("the completion did not reach the row")
+
+        if not [b for a, b in sent if a == VISITOR]:
+            raise Failed("a finished render did not tell the visitor")
+        operator_mail = [b for a, b in sent if a == OPERATOR]
+        if len(operator_mail) != 1:
+            raise Failed(
+                f"a finished render sent {len(operator_mail)} messages to "
+                f"the operator, not 1")
+
+        # --- and the address stays out of the operator's mail ---------
+        local = VISITOR.split("@")[0]
+        for body in operator_mail + to_operator:
+            if VISITOR in body or local in body:
+                raise Failed(
+                    "the operator's mail carries the visitor's address. "
+                    "Privacy.html promises it reaches him only when there "
+                    "is no score for the piece; whether anybody was told is "
+                    "a yes or a no here, not a name.")
+    return ("failure: 1 to the operator, 0 to the visitor; success: both; "
+            "no visitor address in either operator mail")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -1611,6 +1727,7 @@ def main() -> int:
         check_the_scaler_cannot_run_away,
         check_the_recogniser_is_marked_right_or_wrong,
         check_the_page_is_actually_styled,
+        check_a_failure_is_never_mailed_to_the_visitor,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
