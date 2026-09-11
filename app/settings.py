@@ -134,6 +134,25 @@ class Settings:
     # dashboard. 8 GB / 4 dedicated cores is the size the measurements argue
     # for; adjust to whatever plan is actually chosen.
     compute_hourly_cost: float = 0.108
+    # How busy an hour of the day has to be, historically, before a machine
+    # is held through it rather than released. Keeping never saves money —
+    # the hour a job runs in is paid for either way — so this is bought
+    # latency, not thrift, and the default is deliberately high enough that
+    # a quiet site always releases.
+    compute_keep_if_arrivals: float = 1.0
+    # The provider, and what to make. The token is the only credential in
+    # this system that can spend money without limit: it lives in .env on
+    # the web box and never reaches a compute node or an image.
+    linode_token: str = ""
+    compute_region: str = "eu-central"
+    compute_image: str = ""
+    compute_plan: str = "g6-dedicated-4"
+    # A ceiling, because a loop that creates machines is not a bug that
+    # costs an afternoon. Refused beyond this many in an hour, whatever the
+    # queue says.
+    compute_max_creates_per_hour: int = 4
+    # Passed to each machine at create, so somebody can get in and look.
+    compute_ssh_key: str = ""
     geoip_db: pathlib.Path | None = None
     vss_root: pathlib.Path | None = None
     sync_python: str = ""
@@ -352,6 +371,14 @@ def load() -> Settings:
         alert_email=os.getenv("ALERT_EMAIL", "").strip(),
         compute_grace_seconds=_number("COMPUTE_GRACE_SECONDS", 600.0),
         compute_hourly_cost=_number("COMPUTE_HOURLY_COST", 0.108),
+        compute_keep_if_arrivals=_number("COMPUTE_KEEP_IF_ARRIVALS", 1.0),
+        linode_token=os.getenv("LINODE_TOKEN", "").strip(),
+        compute_region=os.getenv("COMPUTE_REGION", "eu-central").strip(),
+        compute_image=os.getenv("COMPUTE_IMAGE", "").strip(),
+        compute_plan=os.getenv("COMPUTE_PLAN", "g6-dedicated-4").strip(),
+        compute_max_creates_per_hour=int(
+            _number("COMPUTE_MAX_CREATES_PER_HOUR", 4)),
+        compute_ssh_key=os.getenv("COMPUTE_SSH_KEY", "").strip(),
         geoip_db=_one("GEOIP_DB"),
         vss_root=_one("VSS_ROOT"),
         sync_python=os.getenv("SYNC_PYTHON", "").strip().strip('"'),

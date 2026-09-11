@@ -241,6 +241,11 @@ CREATE INDEX IF NOT EXISTS compute_events_at ON compute_events(at);
 # long enough that the destroy completes before the next hour starts.
 RELEASE_WINDOW = 180.0
 
+# Below this much history, the arrival rate is arithmetic rather than
+# evidence and the machine is released regardless. A fortnight is enough to
+# have seen each hour of the day twice over on a weekday and a weekend.
+MIN_DAYS_OF_EVIDENCE = 7
+
 # States a job can be in. `queued` is the new one and the point of this
 # module: work that has been accepted but has not started.
 QUEUED, RUNNING, DONE, ERROR = "queued", "running", "done", "error"
@@ -729,6 +734,36 @@ def visitors() -> list[sqlite3.Row]:
 # compute — what a scaler would do, before it is allowed to do it
 # ---------------------------------------------------------------------------
 
+def arrival_rate(hour_of_day: int, days: int = 14) -> tuple[float, int]:
+    """Jobs per hour historically seen in THIS hour of the day.
+
+    Returns (rate, days_of_evidence). The second number matters as much as
+    the first: a rate computed from two days of a new site is not evidence
+    of anything, and the caller must be able to tell "quiet" from "we do not
+    know yet".
+
+    Hour of day rather than a flat average, because that is how this traffic
+    will actually behave. People upload a recital recording in the evening,
+    not at four in the morning, and a machine kept alive through the night
+    on last night's average is a machine paid for to do nothing.
+    """
+    now = time.time()
+    since = now - days * 86400
+    rows = query("SELECT created FROM jobs WHERE created >= ?", (since,))
+
+    # Only count days the install was actually alive, or a site that was
+    # switched off for a week looks quiet rather than absent.
+    oldest = one("SELECT MIN(created) AS c FROM jobs")
+    first = (oldest["c"] if oldest and oldest["c"] else now)
+    observed = max(1.0, min(days, (now - first) / 86400))
+
+    seen = 0
+    for row in rows:
+        if time.gmtime(row["created"]).tm_hour == hour_of_day:
+            seen += 1
+    return seen / observed, int(observed)
+
+
 def compute_row() -> sqlite3.Row:
     """The one compute row, created empty on first read."""
     row = one("SELECT * FROM compute WHERE singleton = 1")
@@ -740,7 +775,8 @@ def compute_row() -> sqlite3.Row:
     return row
 
 
-def compute_tick(grace_seconds: float) -> dict[str, Any]:
+def compute_tick(grace_seconds: float,
+                 keep_if_arrivals: float = 1.0) -> dict[str, Any]:
     """Decide what a scaler would do now, and remember it. Returns the state.
 
     THE SCRAPE IS THE TICK. Prometheus polls every 30 s, which is a fine
@@ -806,12 +842,35 @@ def compute_tick(grace_seconds: float) -> dict[str, Any]:
             began = row["since"] or now
             paid_until = began + math.ceil(max(now - began, 1) / 3600.0) * 3600
             near_the_boundary = (paid_until - now) <= RELEASE_WINDOW
-            long_enough_idle = (now - idle_since) >= grace_seconds
-            if near_the_boundary and long_enough_idle:
-                state, destroys = "none", destroys + 1
-                event = ("would-destroy",
-                         f"idle {int(now - idle_since)}s and the paid hour "
-                         f"ends in {int(paid_until - now)}s")
+            if near_the_boundary:
+                # THE QUESTION AT THE BOUNDARY is not "has it been idle long
+                # enough" but "is more work coming". Those are different, and
+                # a fixed idle threshold answers the wrong one: a job that
+                # finished five minutes ago says nothing about whether
+                # another is due.
+                #
+                # Keeping never saves money — the hour a job runs in is paid
+                # for either way — it only saves the next visitor a ~94s
+                # boot. So DESTROYING IS THE DEFAULT, and the machine is kept
+                # only where history says this hour of the day is genuinely
+                # busy enough that it would be working anyway.
+                hour = time.gmtime(now).tm_hour
+                rate, observed = arrival_rate(hour)
+                # Too new to have an opinion. Destroy: an unproven guess
+                # should cost a boot, not an hour.
+                enough_history = observed >= MIN_DAYS_OF_EVIDENCE
+                busy_hour = enough_history and rate >= keep_if_arrivals
+                if busy_hour:
+                    event = None
+                else:
+                    state, destroys = "none", destroys + 1
+                    reason = (f"{rate:.1f} jobs/h usually at {hour:02d}:00 "
+                              f"over {observed}d")
+                    if not enough_history:
+                        reason = (f"only {observed}d of history, not enough "
+                                  f"to justify holding an hour")
+                    event = ("would-destroy",
+                             f"paid hour ending, nothing to do, and {reason}")
 
     with write() as conn:
         conn.execute(

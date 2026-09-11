@@ -1137,6 +1137,81 @@ def check_mail_looks_like_mail() -> str:
     return f"Date, Message-ID, {cte} body, id aligned with the sender"
 
 
+def check_the_driver_will_not_delete_what_is_not_ours() -> str:
+    """The only code here that spends money, and the rules that bound it.
+
+    A restricted Linode user is the first guard: the scaler's token cannot
+    see the web box at all. This is the second, and it exists because grants
+    get widened later by people who have forgotten that this code assumed
+    otherwise — at which point the only thing standing between a bug and
+    somebody's production machine is a label check.
+
+    Three properties, each of which has a plausible way of being lost:
+
+      * a machine not named `vsw-compute…` is never CREATED, so `destroy`
+        can always tell its own work from somebody else's.
+      * a machine not named `vsw-compute…` is never DELETED, and the refusal
+        raises rather than returning quietly — a teardown that silently
+        does nothing is how an instance is left running for a month.
+      * the label is read from the PROVIDER at delete time, not taken from
+        the caller. Ids are reused; a stale row naming id 12345 would
+        otherwise delete whatever now holds that id.
+    """
+    from app.compute import driver
+
+    fake = driver.FakeDriver()
+
+    mine = fake.create("vsw-compute-test", "plan", "image", "region", "", [])
+    if not mine.is_ours:
+        raise Failed("a machine we created is not recognised as ours")
+
+    for bad in ("production-web", "vsw-web", "compute-1", ""):
+        try:
+            fake.create(bad, "plan", "image", "region", "", [])
+        except driver.ComputeError:
+            pass
+        else:
+            raise Failed(
+                f"created a machine named {bad!r}; every machine must carry "
+                f"the {driver.LABEL_PREFIX!r} prefix or the teardown cannot "
+                f"tell what is safe to delete")
+
+    # Somebody else's machine, sitting where ours was.
+    theirs = fake.plant("weefeen-production")
+    try:
+        fake.destroy(theirs.id)
+    except driver.ComputeError:
+        pass
+    else:
+        raise Failed(
+            "DELETED A MACHINE THAT WAS NOT OURS. The label check is the "
+            "last thing between a bug and somebody's live server")
+    if theirs.id not in fake.machines:
+        raise Failed("the foreign machine was removed despite the refusal")
+
+    if not fake.destroy(mine.id):
+        raise Failed("could not delete our own machine")
+    if fake.destroys != 1:
+        raise Failed(f"expected exactly 1 destroy, got {fake.destroys}")
+
+    # Already gone is success, not an error: the sweep runs repeatedly and
+    # must not stall on a machine somebody removed by hand.
+    if not fake.destroy(mine.id):
+        raise Failed("deleting an absent machine reported failure")
+
+    # And the real driver must refuse to exist without a token rather than
+    # failing later, mid-decision, with something obscure.
+    try:
+        driver.LinodeDriver("")
+    except driver.ComputeError:
+        pass
+    else:
+        raise Failed("a driver was built with no token")
+
+    return (f"{driver.LABEL_PREFIX!r} enforced on create and delete; "
+            f"a foreign machine survived both")
+
+
 def check_linux_configuration_has_no_windows_paths() -> str:
     """A drive letter or a backslash in .env.prod is a copied-over mistake."""
     bad = []
@@ -1173,6 +1248,7 @@ def main() -> int:
         check_the_courtesy_mail_cannot_starve_the_promise,
         check_a_machine_is_only_wanted_while_there_is_work,
         check_mail_looks_like_mail,
+        check_the_driver_will_not_delete_what_is_not_ours,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

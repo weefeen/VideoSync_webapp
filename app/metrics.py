@@ -167,7 +167,8 @@ def render() -> str:
     # WOULD have decided, so the trigger can be watched against real traffic
     # before it is given the power to spend money — and so the grace period
     # is chosen from evidence rather than guessed. THE SCRAPE IS THE TICK.
-    shadow = store.compute_tick(settings.compute_grace_seconds)
+    shadow = store.compute_tick(settings.compute_grace_seconds,
+                                settings.compute_keep_if_arrivals)
     if shadow.get("event"):
         _tell_the_operator(shadow)
 
