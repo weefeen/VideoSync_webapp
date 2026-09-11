@@ -364,11 +364,22 @@ timestamps, no count-has-grown comparison, and no count in the subject — a
 count that reads "(1st request)" on almost every mail is noise, and in the rare
 gap case two mails say the same thing a count would.
 
-The one backstop kept is the `mail_demand` bucket at 20/day. Not to spare the
-owner, who has asked for the volume, but because every mail bucket in this
-system also protects the others: `history.md` records the queued notice
-silently eating the ready mail when they shared one allowance, and a piece
-going viral in the gap must not be able to do the same to the visitors' mail.
+**No bucket of its own either.** An earlier revision kept a `mail_demand`
+bucket at 20/day, on the argument that every mail bucket here protects the
+others — `history.md` records the queued notice silently eating the ready
+mail when they shared one allowance.
+
+The mechanism is real but the bucket was not justified. `mail_total` is
+200/day and already exists to stop any one kind of mail starving another;
+that is its whole job. Reaching it through demand mail would take well over a
+hundred distinct people playing uninstalled pieces in a single day, on a site
+that has made twelve videos in total. The 20/day figure was chosen because
+`mail_compute` is 40, which is not a reason.
+
+So the demand mail counts against `mail_total` like everything else and has no
+rule of its own. If the day comes when demand mail genuinely crowds out the
+ready mail, the evidence will be in the refusal log and the bucket can be added
+then, with a number taken from what actually happened.
 
 `unrecognised` outcomes are not demand. There is no piece to name.
 
