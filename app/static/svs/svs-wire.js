@@ -1284,6 +1284,15 @@ deliverCSS.textContent = `
     background:var(--b1);color:#fff;border-radius:3px;text-decoration:none;
     font-family:Fraunces,Georgia,serif;font-size:16px;border-bottom:0}
   .delivery .get:hover{background:var(--b2);color:#fff}
+  .delivery .share{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;
+    align-items:center}
+  .delivery .shrhint{display:block;width:100%;font-size:12.5px;
+    color:var(--ink-3,#6f6480);margin-bottom:2px}
+  .delivery .shr{padding:8px 13px;border-radius:3px;font-size:13px;
+    border:1px solid var(--hair);background:var(--surface);color:inherit;
+    cursor:pointer;text-decoration:none;border-bottom:1px solid var(--hair)}
+  .delivery .shr:hover{border-color:var(--mag);color:var(--mag)}
+  .delivery .shr.done{border-color:var(--mag);color:var(--mag)}
 `;
 document.head.appendChild(deliverCSS);
 
@@ -1342,6 +1351,56 @@ function copyForState(state){
   }
   // So the one-shot guard in correctDoneCopy cannot overwrite this later.
   section.dataset.corrected = '1';
+}
+
+/* A caption someone can paste when they post the video. The searchable half:
+ * a burned-in mark proves the video is ours, a hashtag is what lets it be
+ * FOUND. The piece name when we know it, a generic line when we do not
+ * (arriving from an old email link, the recognised piece may not be loaded). */
+function shareCaption(){
+  let piece = 'Chopin, with the score playing along';
+  try{ const w = P(); if(w && w.t) piece = `Chopin — ${w.t}`; }catch(e){}
+  return `${piece}, played with the engraved score synced bar by bar. `
+    + `#Chopin #Piano #ScoreVideo #weefeen`;
+}
+
+/* The share row under the download button. Share buttons carry a LINK, not a
+ * file — you cannot upload a video through a share intent — so the honest,
+ * useful thing for a video file is the copy-ready caption beside Download:
+ * post the video natively, paste the caption. The link buttons share the
+ * job page (which unfurls the site's card) for people who just want to point
+ * at it. */
+function shareRow(job){
+  const pageUrl = location.origin + '/app/#job=' + encodeURIComponent(job);
+  const caption = shareCaption();
+  const e = encodeURIComponent;
+  return `<div class="share">
+    <span class="shrhint">Posting it yourself? Download the video, then paste this caption — the hashtag is how people find it.</span>
+    <button class="shr" data-caption="${esc(caption)}">Copy caption</button>
+    <a class="shr" target="_blank" rel="noopener" href="https://twitter.com/intent/tweet?text=${e(caption)}&url=${e(pageUrl)}">Post to X</a>
+    <a class="shr" target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u=${e(pageUrl)}">Facebook</a>
+    <a class="shr" target="_blank" rel="noopener" href="https://wa.me/?text=${e(caption + ' ' + pageUrl)}">WhatsApp</a>
+  </div>`;
+}
+
+/* One handler for every Copy-caption button, present or future. */
+document.addEventListener('click', e => {
+  const btn = e.target.closest && e.target.closest('.shr[data-caption]');
+  if(!btn) return;
+  const text = btn.getAttribute('data-caption') || '';
+  const done = () => { btn.textContent = 'Copied ✓'; btn.classList.add('done');
+    setTimeout(() => { btn.textContent = 'Copy caption'; btn.classList.remove('done'); }, 2000); };
+  try{
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+  }catch(err){ fallbackCopy(text, done); }
+});
+function fallbackCopy(text, done){
+  try{
+    const t = document.createElement('textarea');
+    t.value = text; t.style.position = 'fixed'; t.style.opacity = '0';
+    document.body.appendChild(t); t.select();
+    document.execCommand('copy'); t.remove(); done();
+  }catch(e){ /* nothing more to try; leave the button as it was */ }
 }
 
 /* Say what is true on the screen that claimed an email. */
@@ -1444,7 +1503,8 @@ async function watchRender(job){
       const size = s.output_bytes ? ` · ${(s.output_bytes / 1e6).toFixed(0)} MB` : '';
       what.innerHTML = `Your scored video is ready${size}.`;
       box.insertAdjacentHTML('beforeend',
-        `<a class="get" href="/api/jobs/${job}/download">Download the video</a>`);
+        `<a class="get" href="/api/jobs/${job}/download">Download the video</a>`
+        + shareRow(job));
       showCountAgain();
       return;
     }
