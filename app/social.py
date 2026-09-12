@@ -31,7 +31,7 @@ from .settings import settings
 
 logger = logging.getLogger(__name__)
 
-GRAPH = "https://graph.facebook.com/v21.0"
+GRAPH = "https://graph.facebook.com/v26.0"
 
 # Facebook downloads the file itself, so the link only has to outlive that
 # download. Half an hour is generous for a 150 MB file and still short.
