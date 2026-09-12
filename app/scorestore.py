@@ -30,6 +30,7 @@ correct rather than each repeating the same three corrections.
 """
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -241,35 +242,64 @@ def _put_preview(folder: pathlib.Path) -> int:
     return sent
 
 
-def preview(name: str, relative: str) -> pathlib.Path | None:
-    """One preview asset on local disk, fetched from the bucket if need be.
+# The preview cache, held IN MEMORY and capped. Not on disk: the library is
+# heading for 500 GB, and a disk cache is a library that fills up slowly
+# instead of all at once. Capped by bytes rather than by entries because the
+# entries are engravings and vary tenfold in size.
+#
+# 24 MB is roughly sixty plates. Past that the least recently asked-for is
+# dropped and refetched if anybody wants it again, which costs one second.
+PREVIEW_CACHE_BYTES = 24 * 1024 * 1024
 
-    A CACHE, not a library. The web box used to carry every package -- 134
-    MB for two scores and 26 GB for the 375 that are coming -- to serve two
-    small files per score that a visitor might look at. This keeps those
-    two, for the scores somebody actually previews, and nothing else: a few
-    hundred kilobytes each, deletable at any moment, refetched when needed.
+_preview_lock = threading.Lock()
+_preview_cache: "collections.OrderedDict[str, bytes]" = collections.OrderedDict()
 
-    Returns None when the bucket has no such asset, which is ordinary: most
+
+def preview_bytes(name: str, relative: str) -> bytes | None:
+    """One preview asset, from the bucket, never written to this disk.
+
+    The web box used to carry every package -- 134 MB for two scores, and
+    the library is heading for 500 GB -- in order to serve two small files
+    per score that a visitor might look at. It now holds neither the
+    packages nor a copy of these: they are fetched on demand and kept in a
+    capped cache that dies with the process.
+
+    None when the bucket has no such asset, which is ordinary: most
     packages have no engraved plates at all.
     """
     if not storage.available():
         return None
-    root = pathlib.Path(settings.work_dir) / "cache" / "preview" / name
-    local = root / relative
-    if local.is_file():
-        return local
 
     key_ = preview_key(name, relative)
+    with _preview_lock:
+        got = _preview_cache.get(key_)
+        if got is not None:
+            _preview_cache.move_to_end(key_)
+            return got
+
     if storage.head(key_) is None:
         return None
-    local.parent.mkdir(parents=True, exist_ok=True)
+    # Downloaded THROUGH a temporary file, not into the working directory:
+    # `storage.get` confirms the size on the way in, which is the check that
+    # makes a truncated download an error instead of a broken image. The
+    # file is gone before this returns.
     try:
-        storage.get(key_, local)
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = pathlib.Path(tmp) / "asset"
+            storage.get(key_, scratch)
+            raw = scratch.read_bytes()
     except Exception:                                  # noqa: BLE001
         logger.warning("could not fetch preview %s", key_, exc_info=True)
         return None
-    return local
+
+    with _preview_lock:
+        _preview_cache[key_] = raw
+        _preview_cache.move_to_end(key_)
+        held = sum(len(v) for v in _preview_cache.values())
+        while held > PREVIEW_CACHE_BYTES and len(_preview_cache) > 1:
+            _, dropped = _preview_cache.popitem(last=False)
+            held -= len(dropped)
+    return raw
 
 
 def _put_catalogue_entry(entry: dict) -> None:

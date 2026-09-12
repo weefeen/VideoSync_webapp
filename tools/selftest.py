@@ -2918,34 +2918,44 @@ def check_the_web_box_needs_no_scores() -> str:
             raise Failed("a score cannot be found by name, so the render "
                          "request that names it would be refused")
 
-        # The preview, fetched one small file at a time.
-        band = scorestore.preview(real.name, scorestore.PREVIEW_BAND)
-        if band is None or not band.is_file() or band.stat().st_size < 1000:
+        # The preview, fetched one small file at a time, into memory.
+        band = scorestore.preview_bytes(real.name, scorestore.PREVIEW_BAND)
+        if not band or len(band) < 1000:
             raise Failed("the opening band did not arrive, so the preview "
                          "would show an empty frame")
+        if not band.lstrip()[:5].lower().startswith(b"<?xml") and                 b"<svg" not in band[:2000]:
+            raise Failed("what arrived as the opening band is not an svg")
         plates = len(sorted(source.glob("pages/page_*.svg")))
         if entry.pages != plates:
             raise Failed(f"the catalogue counts {entry.pages} engraved "
                          f"plates and there are {plates}")
         if plates:
-            got = scorestore.preview(real.name, scorestore.plate_name(1))
-            if got is None or not got.is_file():
+            got = scorestore.preview_bytes(real.name, scorestore.plate_name(1))
+            if not got:
                 raise Failed("the engraved plate did not arrive")
 
-        # AND THE POINT OF ALL OF IT: what landed on this box is the
-        # preview, not the library.
-        cached = sum(f.stat().st_size for f in work.rglob("*") if f.is_file())
+        # AND THE POINT OF ALL OF IT: NOTHING landed on this box. Not the
+        # packages, and not a cached copy of the preview either -- the
+        # library is heading for 500 GB, and a disk cache is a library that
+        # fills up slowly rather than all at once.
+        landed = [f for f in work.rglob("*") if f.is_file()]
+        if landed:
+            raise Failed(f"{len(landed)} file(s) were written to the web "
+                         f"box's disk serving a preview: "
+                         f"{', '.join(str(f.name) for f in landed[:3])}")
         whole = sum(f.stat().st_size
                     for f in source.rglob("*") if f.is_file())
-        if cached > whole / 4:
-            raise Failed(f"{cached / 1e6:.0f} MB landed on the web box for a "
-                         f"{whole / 1e6:.0f} MB package; that is the library "
-                         f"again, not a preview")
+
+        # And the cache is capped, or a big enough library fills the memory
+        # instead of the disk and nothing has been solved.
+        if scorestore.PREVIEW_CACHE_BYTES > 64 * 1024 * 1024:
+            raise Failed("the preview cache is not meaningfully capped")
     finally:
         (storage.put, storage.head, storage.get, storage.available,
          storage.list_keys, library.settings, scorestore.settings) = saved
         library._catalogue = library._Catalogue()      # noqa: SLF001
         scorestore._cache.clear()                      # noqa: SLF001
+        scorestore._preview_cache.clear()              # noqa: SLF001
         shutil.rmtree(work, ignore_errors=True)
 
     # Recognition is on the web box and must stay independent of all this:
@@ -2958,7 +2968,7 @@ def check_the_web_box_needs_no_scores() -> str:
                      "box without the scores could not identify a recording")
 
     return (f"catalogue, band and plate all served with no score root at "
-            f"all; {cached / 1e3:.0f} KB cached against a "
+            f"all and nothing written to disk, against a "
             f"{whole / 1e6:.0f} MB package")
 
 def check_the_edition_is_credited() -> str:

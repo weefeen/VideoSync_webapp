@@ -258,7 +258,7 @@ def api_stats():
 _INK: dict[tuple[str, int], tuple[float, float]] = {}
 
 
-def _ink_band(path: pathlib.Path) -> tuple[float, float, float, float]:
+def _ink_band(raw: bytes, tag: str) -> tuple[float, float, float, float]:
     """(top, bottom, left, right) of the engraving, as fractions of the plate.
 
     All four, not just the vertical pair: plates tiled side by side show
@@ -266,7 +266,11 @@ def _ink_band(path: pathlib.Path) -> tuple[float, float, float, float]:
     the seam that makes a backdrop read as a stack of pages instead of as
     continuous music.
     """
-    key = (str(path), path.stat().st_mtime_ns)
+    # Keyed by the CONTENT, not by a path and an mtime: these plates arrive
+    # from the bucket now and never sit on this disk, so there is no file to
+    # ask when it changed. A digest of the markup is a better key anyway --
+    # re-publishing an identical plate does not invalidate the measurement.
+    key = tag
     if key in _INK:
         return _INK[key]
     band = (0.0, 1.0, 0.0, 1.0)
@@ -275,7 +279,7 @@ def _ink_band(path: pathlib.Path) -> tuple[float, float, float, float]:
         from PIL import Image
         renderer = svg._cairosvg()
         if renderer is not None:
-            png = renderer.svg2png(bytestring=path.read_bytes(), output_width=300)
+            png = renderer.svg2png(bytestring=raw, output_width=300)
             shot = Image.open(io.BytesIO(png)).convert("RGBA")
             # Transparent renders as black in greyscale, which would read as
             # ink everywhere; composite onto white first.
@@ -297,14 +301,14 @@ def _ink_band(path: pathlib.Path) -> tuple[float, float, float, float]:
     return band
 
 
-def _trimmed(path: pathlib.Path) -> str:
+def _trimmed(raw: bytes, tag: str) -> str:
     """The plate with its blank margins cropped away.
 
     A viewBox is added rather than the content moved: it is a viewport
     change, so nothing inside has to be understood or rewritten.
     """
-    text = path.read_text(encoding="utf-8")
-    top, bottom, left, right = _ink_band(path)
+    text = raw.decode("utf-8", errors="replace")
+    top, bottom, left, right = _ink_band(raw, tag)
     if bottom - top > 0.98 and right - left > 0.98:
         return text
 
@@ -406,19 +410,19 @@ def api_page(name: str):
     # From the bucket, into a small cache. The plates are published as loose
     # objects precisely so that drawing one costs one small file rather than
     # the whole package.
-    chosen = scorestore.preview(name, scorestore.plate_name(wanted))
-    if chosen is None:
+    raw = scorestore.preview_bytes(name, scorestore.plate_name(wanted))
+    if raw is None:
         return jsonify({"error": "That page is not published."}), 404
 
     ink = _hex_colour(request.args.get("ink", ""))
     # Trimmed by default: as page furniture the blank margins are
     # only a gap between one block of music and the next.
     trim = request.args.get("trim", "1") not in ("0", "false", "no")
-    body = _trimmed(chosen) if trim else chosen.read_text(encoding="utf-8")
+    tag = hashlib.sha1(raw).hexdigest()
+    body = _trimmed(raw, tag) if trim else raw.decode("utf-8", errors="replace")
     if ink:
         body = _tint_text(body, ink)
-    return _svg_response(
-        body, f"{chosen}|{chosen.stat().st_mtime_ns}|{ink}|trim={trim}")
+    return _svg_response(body, f"{tag}|{ink}|trim={trim}")
 
 
 def _svg_response(body: str, tag: str):
@@ -453,22 +457,6 @@ def api_pages(name: str):
     return jsonify({"pages": package.pages})
 
 
-class _PreviewBand:
-    """The one band the preview draws, as the handler below expects it.
-
-    The handler was written against a package's own Band -- a path and
-    whether it is vector -- and there is no reason for it to learn that the
-    file now arrives from the bucket instead of a score directory sitting
-    on this disk.
-    """
-
-    __slots__ = ("path", "is_vector", "first_measure")
-
-    def __init__(self, path, is_vector: bool) -> None:
-        self.path = path
-        self.is_vector = is_vector and str(path).lower().endswith(".svg")
-        self.first_measure = 1
-
 @bp.get("/api/library/<path:name>/band")
 def api_band(name: str):
     """One band image from a score, for the preview to show.
@@ -488,10 +476,10 @@ def api_band(name: str):
     # draw a thumbnail. `?measure=` is answered with the opening band
     # rather than refused: nothing on the site asks for another, and a
     # broken image would be a worse answer than the right piece of music.
-    path = scorestore.preview(name, scorestore.PREVIEW_BAND)
-    if path is None:
+    raw = scorestore.preview_bytes(name, scorestore.PREVIEW_BAND)
+    if raw is None:
         return jsonify({"error": "That score has no published band."}), 404
-    band = _PreviewBand(path, package.has_vector)
+    tag = hashlib.sha1(raw).hexdigest()
 
     # Tint the engraving, when asked and when it is vector. Verovio's own
     # stylesheet inside the file sets `stroke: currentColor` and leaves
@@ -503,12 +491,13 @@ def api_band(name: str):
     # size, which makes it an unreliable mask and paints a solid block over
     # the band's paper instead of ink on it.
     ink = _hex_colour(request.args.get("ink", ""))
-    if not (ink and band.is_vector):
-        response = send_file(band.path, conditional=True)
+    if not (ink and package.has_vector):
+        response = Response(raw, mimetype="image/svg+xml")
         response.headers["Cache-Control"] = "public, max-age=3600"
-        return response
+        response.set_etag(tag)
+        return response.make_conditional(request)
 
-    response = Response(_tint(band.path, ink), mimetype="image/svg+xml")
+    response = Response(_tint(raw, ink), mimetype="image/svg+xml")
     # The preview asks for this on every repaint, so it must be cacheable —
     # but a plain max-age pinned the browser to whatever tinting produced
     # the first time it saw a colour, which survived changes to how the
@@ -516,7 +505,7 @@ def api_band(name: str):
     # ink AND the rule keeps repaints cheap and never serves a stale idea
     # of what "in this colour" means.
     response.set_etag(hashlib.sha1(
-        f"{band.path}|{band.path.stat().st_mtime_ns}|{ink}|{_TINT_RULE}"
+        f"{tag}|{ink}|{_TINT_RULE}"
         .encode()).hexdigest())
     response.headers["Cache-Control"] = "no-cache"
     return response.make_conditional(request)
@@ -538,7 +527,7 @@ def _hex_colour(raw: str) -> str:
     return ""
 
 
-def _tint(path: pathlib.Path, ink: str) -> str:
+def _tint(raw: bytes, ink: str) -> str:
     """The engraving in one colour: every symbol, not merely the filled ones.
 
     Verovio's stylesheet inside the file draws strokes with `currentColor`
@@ -552,7 +541,7 @@ def _tint(path: pathlib.Path, ink: str) -> str:
     `fill="none"` is left alone: those paths are drawn by their stroke, and
     filling them would blot the score.
     """
-    return _tint_text(path.read_text(encoding="utf-8", errors="replace"), ink)
+    return _tint_text(raw.decode("utf-8", errors="replace"), ink)
 
 
 def _tint_text(markup: str, ink: str) -> str:
