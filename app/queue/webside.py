@@ -273,16 +273,71 @@ def reclaim_expired_outputs() -> int:
         "SELECT id, result FROM jobs WHERE state = ? AND result IS NOT NULL"
         " AND finished IS NOT NULL AND finished < ?", (store.DONE, cutoff))
     for row in rows:
-        path = pathlib.Path(row["result"])
+        path = _where_the_video_is(row["id"], row["result"])
+        if path is None:
+            continue
         try:
-            if path.is_file():
-                size = path.stat().st_size
-                path.unlink()
-                freed += size
-                logger.info("reclaimed %.0f MB from %s, past its %g-hour "
-                            "window", size / 1e6, row["id"], hours)
+            size = path.stat().st_size
+            path.unlink()
+            freed += size
+            logger.info("reclaimed %.0f MB from %s, past its %g-hour "
+                        "window", size / 1e6, row["id"], hours)
         except OSError as exc:
             logger.warning("could not reclaim %s: %s", path, exc)
+        # A render that died between writing its temp file and renaming it
+        # into place leaves the temp behind -- `render.py` gives it a unique
+        # `.part-<hex>` name precisely so a second attempt cannot collide
+        # with it, which also means nothing ever overwrites it. Swept only
+        # HERE, in a job whose window has closed, so a render still in
+        # flight can never have its working file pulled out from under it.
+        freed += _sweep_partials(path.parent, row["id"])
+    return freed
+
+
+def _where_the_video_is(job_id: str, recorded: str | None) -> "pathlib.Path | None":
+    """This job's rendered video, wherever it actually is now.
+
+    `result` holds an ABSOLUTE path, written when the render finished. That
+    is a promise the filesystem does not keep: WORK_DIR has already moved
+    once, from /srv/vsw/work to /srv/vsw/shared/var, and every job that
+    finished before the move recorded a path that no longer resolves. The
+    reclaim asked `is_file()`, got False, and moved on -- silently, for
+    ever. Five jobs and 657 MB sat on the always-on box with nothing in any
+    log to say why.
+
+    So the recorded path is tried first, and then the same file under
+    today's work directory. The job id IS the folder name, so that second
+    lookup needs nothing the row does not already carry.
+
+    Returns None when the file is genuinely gone, which is the ordinary
+    case: it was reclaimed on an earlier pass.
+    """
+    if not recorded:
+        return None
+    direct = pathlib.Path(recorded)
+    if direct.is_file():
+        return direct
+    moved = pathlib.Path(settings.work_dir) / job_id / direct.name
+    if moved.is_file():
+        logger.info("job %s recorded its video under %s, which no longer "
+                    "exists; found it under %s", job_id, direct.parent.parent,
+                    settings.work_dir)
+        return moved
+    return None
+
+
+def _sweep_partials(folder: pathlib.Path, job_id: str) -> int:
+    """Abandoned render temporaries in one finished job's folder."""
+    freed = 0
+    try:
+        for leftover in folder.glob("*.part-*"):
+            size = leftover.stat().st_size
+            leftover.unlink()
+            freed += size
+            logger.info("removed %.0f MB of abandoned render temporary from "
+                        "%s", size / 1e6, job_id)
+    except OSError as exc:
+        logger.warning("could not sweep partials in %s: %s", folder, exc)
     return freed
 
 

@@ -674,6 +674,8 @@ def check_expired_videos_are_reclaimed() -> str:
     holding it. Deleting the wrong one is the difference between
     housekeeping and losing a visitor's recording.
     """
+    import shutil
+
     from app import store
     from app.queue import webside
     from app.settings import settings
@@ -691,7 +693,55 @@ def check_expired_videos_are_reclaimed() -> str:
         _queued("fresh", state=store.DONE, result=str(new_video),
                 upload=str(upload), finished=time.time())
 
-        freed = webside.reclaim_expired_outputs()
+        # A JOB FINISHED BEFORE WORK_DIR MOVED. `result` is an absolute
+        # path, and WORK_DIR has already moved once in production
+        # (/srv/vsw/work -> /srv/vsw/shared/var). Every job from before the
+        # move recorded a path that no longer resolves, the reclaim asked
+        # is_file(), got False, and skipped it -- silently, for ever. Five
+        # jobs and 657 MB sat on the always-on box with nothing in any log
+        # to say why.
+        moved_id = "reclaim_moved_root"
+        moved_dir = pathlib.Path(settings.work_dir) / moved_id
+        moved_dir.mkdir(parents=True, exist_ok=True)
+        moved_video = moved_dir / "gone_away.mp4"
+        moved_video.write_bytes(b"x" * 4096)
+        _queued(moved_id, state=store.DONE,
+                result=str(pathlib.Path("/nowhere/that/exists") / moved_id
+                           / moved_video.name),
+                upload=str(upload), finished=time.time() - window - 60)
+
+        # An abandoned render temporary, in an expired job's folder and in a
+        # fresh one. `render.py` names it uniquely per attempt so a retry
+        # cannot collide with it -- which also means nothing ever overwrites
+        # it, and a render that died before its rename leaves it for ever.
+        stale_part = moved_dir / "gone_away.part-deadbeef.mp4"
+        stale_part.write_bytes(b"x" * 8192)
+        fresh_id = "reclaim_fresh_root"
+        fresh_dir = pathlib.Path(settings.work_dir) / fresh_id
+        fresh_dir.mkdir(parents=True, exist_ok=True)
+        live_part = fresh_dir / "still_going.part-abad1dea.mp4"
+        live_part.write_bytes(b"x" * 8192)
+        _queued(fresh_id, state=store.DONE,
+                result=str(fresh_dir / "still_going.mp4"),
+                upload=str(upload), finished=time.time())
+
+        try:
+            freed = webside.reclaim_expired_outputs()
+
+            if moved_video.exists():
+                raise Failed("a video whose job recorded it under an older "
+                             "WORK_DIR was not reclaimed; it would sit on "
+                             "the disk for ever with nothing to explain it")
+            if stale_part.exists():
+                raise Failed("an abandoned render temporary was left in an "
+                             "expired job's folder")
+            if not live_part.exists():
+                raise Failed("A RENDER IN FLIGHT HAD ITS WORKING FILE "
+                             "DELETED -- partials may only be swept from a "
+                             "job whose window has already closed")
+        finally:
+            shutil.rmtree(moved_dir, ignore_errors=True)
+            shutil.rmtree(fresh_dir, ignore_errors=True)
 
         if old_video.exists():
             raise Failed("an expired video was not reclaimed")
@@ -706,7 +756,9 @@ def check_expired_videos_are_reclaimed() -> str:
         # than the job becoming unknown.
         if store.get_job("expired") is None:
             raise Failed("reclaiming removed the job row as well")
-    return "expired gone, fresh kept, upload untouched"
+    return ("expired gone, fresh kept, upload untouched; a video under a "
+            "moved WORK_DIR still found; abandoned temporaries swept, "
+            "a live one left alone")
 
 
 def check_the_queue_topology_is_stable() -> str:
