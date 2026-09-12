@@ -1358,10 +1358,13 @@ function copyForState(state){
  * FOUND. The piece name when we know it, a generic line when we do not
  * (arriving from an old email link, the recognised piece may not be loaded). */
 function shareCaption(){
-  let piece = 'Chopin, with the score playing along';
-  try{ const w = P(); if(w && w.t) piece = `Chopin — ${w.t}`; }catch(e){}
-  return `${piece}, played with the engraved score synced bar by bar. `
-    + `Made at ${location.host} `
+  // The owner's wording: "Chopin <piece> score-video by chopin.weefeen.com".
+  // Named by the library, because the visitor never types a title and
+  // nothing they type may reach a caption we compose for them.
+  let piece = '';
+  try{ const w = P(); if(w && w.t) piece = w.t; }catch(e){}
+  const what = piece ? `Chopin ${piece} score-video` : 'Chopin score-video';
+  return `${what} by chopin.weefeen.com `
     + `#Chopin #Piano #ScoreVideo #weefeen`;
 }
 
