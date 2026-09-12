@@ -120,12 +120,14 @@ def environment(source: str, broker_url: str,
     return "\n".join(out) + "\n"
 
 
-def user_data(env: str) -> str:
+def user_data(env: str, pull_key: str = "",
+              web_host: str = "10.0.0.2") -> str:
     """The cloud-config a machine is created with.
 
     `write_files` before `runcmd`, which is cloud-init's own ordering, so the
     worker never starts against a half-written .env.
     """
+    pull_key = pull_key or "# no pull key supplied"
     return f"""#cloud-config
 # Written by the VideoSync scaler. Everything secret this machine holds
 # arrives here and is not in the image.
@@ -139,6 +141,11 @@ write_files:
     permissions: '0644'
     content: |
 {_indent(WORKER_UNIT, 6)}
+  - path: /root/.ssh/vsw_pull
+    permissions: '0600'
+    owner: root:root
+    content: |
+{_indent(pull_key, 6)}
 
 runcmd:
   # The account the worker runs as. The image was built by copying files in
@@ -147,21 +154,29 @@ runcmd:
   - [ id, -u, vsw ]
   - bash -c 'id -u vsw >/dev/null 2>&1 || useradd --system --home /srv/vsw --shell /usr/sbin/nologin vsw'
   - [ install, -d, -o, vsw, -g, vsw, /srv/vsw/shared/var ]
-  # THE ENV BRIDGE. The app loads its config from /srv/vsw/current/.env
-  # (REPO_ROOT/.env), but cloud-init wrote it to shared/.env above, and the
-  # image build excluded .env so the symlink the web box's deploy.sh makes is
-  # not baked in. Without this link the node reads an empty config, has no
-  # RABBITMQ_URL, and the worker exits and restart-loops on a machine that is
-  # being billed. This is the same link deploy.sh makes on the web box.
-  - bash -c 'ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env'
+  # THE ENV BRIDGE is made AFTER the code pull below: the pull uses --delete
+  # on /srv/vsw/current, so a symlink made before it would be removed again.
   - [ chown, -R, 'vsw:vsw', /srv/vsw/shared ]
   - [ chown, -h, 'vsw:vsw', /srv/vsw/current/.env ]
   - [ chown, -R, 'vsw:vsw', /srv/vsw/current ]
   # The venv's scripts are read and executed, not written, so ownership is
   # left alone — chowning 1.6 GB at every boot would add seconds to a
   # create that a visitor is waiting through.
+  # TODAY'S CODE, NOT THE IMAGE'S. The image is captured rarely and holds the
+  # heavy stable parts -- the venv, the scores, ffmpeg. The app changes every
+  # day, and a node booted from a week-old image runs a week-old worker: that
+  # is exactly how nodes ended up unable to fetch their input. Pulled from the
+  # web box over the private VLAN, which is the only network this node shares
+  # with it. If the pull fails the worker is NOT started, because a node
+  # quietly rendering with stale code is worse than one that never starts.
+  - [ chmod, '0700', /root/.ssh ]
+  - bash -c 'ssh-keyscan -H {web_host} >> /root/.ssh/known_hosts 2>/dev/null || true'
+  - bash -c 'rsync -a --delete --copy-unsafe-links -e "ssh -i /root/.ssh/vsw_pull -o StrictHostKeyChecking=no -o ConnectTimeout=20" root@{web_host}:/srv/vsw/current/ /srv/vsw/current/ && echo vsw-pull-ok > /srv/vsw/shared/pull.state || echo vsw-pull-FAILED > /srv/vsw/shared/pull.state'
+  - [ chown, -R, 'vsw:vsw', /srv/vsw/current ]
+  - bash -c 'ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env'
+  - [ chown, -h, 'vsw:vsw', /srv/vsw/current/.env ]
   - [ systemctl, daemon-reload ]
-  - [ systemctl, enable, --now, vsw-worker ]
+  - bash -c 'grep -q vsw-pull-ok /srv/vsw/shared/pull.state && systemctl enable --now vsw-worker || echo "code pull failed; worker not started"'
 
 # A marker the scaler can look for to know cloud-init finished rather than
 # guessing from uptime.

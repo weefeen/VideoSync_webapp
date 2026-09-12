@@ -113,7 +113,18 @@ class Scaler:
 
         broker = (f"amqp://vsw-compute:{password}@{settings.compute_broker_host}"
                   f":5672/vsw")
-        return cloudinit.user_data(cloudinit.environment(source, broker))
+
+        # The key the node uses to pull today app code off the web box over
+        # the VLAN. Without it a node runs whatever the image was captured
+        # with, which is how nodes ended up unable to fetch their input.
+        pull_key = ""
+        key_file = settings.work_dir.parent / "node_pull_key"
+        if key_file.is_file():
+            pull_key = key_file.read_text(encoding="utf-8")
+
+        return cloudinit.user_data(cloudinit.environment(source, broker),
+                                   pull_key=pull_key,
+                                   web_host=settings.compute_broker_host)
 
     # -- one tick --------------------------------------------------------
     def tick(self) -> dict:
