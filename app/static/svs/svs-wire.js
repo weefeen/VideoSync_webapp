@@ -1293,6 +1293,10 @@ deliverCSS.textContent = `
     cursor:pointer;text-decoration:none;border-bottom:1px solid var(--hair)}
   .delivery .shr:hover{border-color:var(--mag);color:var(--mag)}
   .delivery .shr.done{border-color:var(--mag);color:var(--mag)}
+  .delivery .shr.go{background:var(--b1);color:#fff;border-color:var(--b1);
+    font-weight:600}
+  .delivery .shr.go:hover{background:var(--b2);color:#fff}
+  .delivery .shr[disabled]{opacity:.65;cursor:default}
 `;
 document.head.appendChild(deliverCSS);
 
@@ -1374,16 +1378,95 @@ function shareCaption(){
  * post the video natively, paste the caption. The link buttons share the
  * job page (which unfurls the site's card) for people who just want to point
  * at it. */
-function shareRow(job){
-  // THE VIDEO IS THE VISITOR'S, and it plays on a social network only when it
-  // is UPLOADED there -- a shared link never plays, it just points back here.
-  // So this does not offer "share to Facebook" buttons that quietly post a
-  // link: it tells the person to download their own video and post it under
-  // their own name, and hands them a caption to paste. That is the honest
-  // path, and the only one that puts a playing video on their feed as theirs.
+/* THE VIDEO IS THE VISITOR'S, and it plays on a social network only when the
+ * FILE is uploaded there -- a shared link never plays, it only points back
+ * here. So nothing on this page posts on anybody's behalf or shares a link
+ * pretending to be a video. It hands the person their own file, in the
+ * fewest taps their device allows, with the caption already attached.
+ *
+ * On a phone that is one tap: the Web Share API takes the actual file, and
+ * the system sheet offers Instagram, Facebook, WhatsApp, TikTok with the
+ * caption pre-filled. On a desktop, where no such sheet exists, it is
+ * download plus a caption already on the clipboard. */
+function canShareFiles(){
+  try{
+    return !!(navigator.canShare && navigator.share
+              && navigator.canShare({ files: [new File([new Blob([1])],
+                                                       'a.mp4',
+                                                       { type: 'video/mp4' })] }));
+  }catch(e){ return false; }
+}
+
+async function shareTheVideo(job, btn){
   const caption = shareCaption();
+  const back = btn.textContent;
+  const say = t => { btn.textContent = t; };
+  try{
+    btn.disabled = true;
+    say('Getting your video…');
+    const response = await fetch(`/api/jobs/${job}/download`);
+    if(!response.ok) throw new Error('download failed');
+
+    // Streamed so the button can count up: the file is 100 MB or more and a
+    // silent wait on a phone reads as a dead button.
+    const total = Number(response.headers.get('content-length') || 0);
+    const reader = response.body && response.body.getReader
+      ? response.body.getReader() : null;
+    let blob;
+    if(reader){
+      const parts = []; let got = 0;
+      for(;;){
+        const { done, value } = await reader.read();
+        if(done) break;
+        parts.push(value); got += value.length;
+        if(total) say(`Getting your video… ${Math.round(got / total * 100)}%`);
+      }
+      blob = new Blob(parts, { type: 'video/mp4' });
+    }else{
+      blob = await response.blob();
+    }
+
+    const file = new File([blob], 'chopin-score-video.mp4',
+                          { type: 'video/mp4' });
+    if(!(navigator.canShare && navigator.canShare({ files: [file] }))){
+      throw new Error('this device will not share files');
+    }
+    say('Choose where…');
+    await navigator.share({ files: [file], text: caption });
+    say('Shared ✓');
+    setTimeout(() => say(back), 2500);
+  }catch(err){
+    // A cancelled share sheet is not a failure; anything else falls back to
+    // the download, which always works.
+    if(err && err.name === 'AbortError'){ say(back); }
+    else{
+      say('Download instead');
+      const link = document.querySelector('.delivery .get');
+      if(link) link.scrollIntoView({ block: 'nearest' });
+    }
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest && e.target.closest('.shr[data-share-job]');
+  if(!btn) return;
+  shareTheVideo(btn.dataset.shareJob, btn);
+});
+
+function shareRow(job){
+  const caption = shareCaption();
+  const phone = canShareFiles();
+  const hint = phone
+    ? 'This video is yours. One tap sends it straight to Instagram, Facebook, WhatsApp or TikTok, with the caption ready — post it under your own name.'
+    : 'This video is yours to post, under your own name. Download it and upload it to Instagram, Facebook, YouTube or TikTok like any other video — the caption is on your clipboard, ready to paste.';
+  const shareButton = phone
+    ? `<button class="shr go" data-share-job="${esc(job)}">Share the video</button>`
+    : '';
   return `<div class="share">
-    <span class="shrhint">This video is yours to post. Download it, upload it to Instagram, Facebook, YouTube or TikTok like any video, and paste this caption so people can find more:</span>
+    <span class="shrhint">${hint}</span>
+    ${shareButton}
     <button class="shr" data-caption="${esc(caption)}">Copy caption</button>
   </div>`;
 }
@@ -1546,6 +1629,14 @@ async function watchRender(job){
         box.insertAdjacentHTML('beforeend',
           `<a class="get" href="/api/jobs/${job}/download">Download the video</a>`
           + shareRow(job));
+        // Taking the file and writing the caption are one intention, so the
+        // caption is on the clipboard by the time the social app asks for
+        // words. Silent on failure: a clipboard a browser refuses is not
+        // worth a message over the video they just got.
+        const get = box.querySelector('.get');
+        if(get) get.addEventListener('click', () => {
+          try{ navigator.clipboard.writeText(shareCaption()); }catch(e){}
+        });
       }
       showCountAgain();
       return;
