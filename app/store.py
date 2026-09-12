@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     error       TEXT,
     result      TEXT,
     email       TEXT NOT NULL DEFAULT '',
+    told        INTEGER NOT NULL DEFAULT 0,
     client      TEXT NOT NULL DEFAULT '',
     duration    REAL,
     size_bytes  INTEGER,
@@ -242,6 +243,31 @@ CREATE TABLE IF NOT EXISTS compute_events (
     idle    REAL
 );
 CREATE INDEX IF NOT EXISTS compute_events_at ON compute_events(at);
+
+-- WHO HAS PROVED THEY OWN AN ADDRESS.
+--
+-- Nothing proved it before. Anyone could type any address and we mailed it,
+-- and the finished-video mail carries /app/#job=<id> -- which IS the
+-- download credential. A typo, or somebody else's address on purpose, and a
+-- stranger received a working link to a real person's performance. The spam
+-- exposure was the smaller half of that.
+--
+-- One row per address, lowercased. token_hash is the pending confirmation:
+-- the raw token exists only in the one mail and the link the person clicks,
+-- and is never stored, so a copy of this table cannot confirm anybody.
+-- suppressed is set when somebody says they did not ask for this. It is
+-- permanent and outranks confirmation, so they are never mailed again
+-- whatever a later visitor types.
+CREATE TABLE IF NOT EXISTS emails (
+    address      TEXT PRIMARY KEY,    -- lowercased
+    created      REAL NOT NULL,
+    token_hash   TEXT,                -- pending confirmation, sha256 hex
+    token_made   REAL,                -- when, so it can expire
+    confirmed    REAL,                -- when they clicked
+    suppressed   REAL,                -- when they said "not me". Permanent.
+    last_sent    REAL                 -- last confirmation mail, to not repeat
+);
+CREATE INDEX IF NOT EXISTS emails_token ON emails(token_hash);
 """
 
 # How close to the end of a paid hour a machine may be released. Linode
@@ -306,6 +332,11 @@ _ADDED = (
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
     ("jobs", "published_at", "REAL"),
     ("jobs", "object_key", "TEXT"),
+    # Whether the visitor has actually been sent their link. It
+    # was only ever a return value, so a job finished while the
+    # address was unconfirmed had no record that the mail was
+    # still owed, and confirming later could not release it.
+    ("jobs", "told", "INTEGER NOT NULL DEFAULT 0"),
     # The recognitions table once kept `client` — the visitor's address —
     # and now keeps the place it resolved to instead, so that deleting a
     # recording deletes the address with it. An older database still has the
@@ -1015,3 +1046,108 @@ def compute_alarm_cleared() -> str:
             conn.execute("UPDATE compute SET alarm = NULL, alarm_at = NULL"
                          " WHERE singleton = 1")
     return was
+
+
+# ---------------------------------------------------------------------------
+# addresses: who has proved they own one
+# ---------------------------------------------------------------------------
+def email_state(address: str) -> dict:
+    """What we know about an address. Never raises on an unknown one."""
+    row = one("SELECT * FROM emails WHERE address = ?",
+              ((address or "").strip().lower(),))
+    if row is None:
+        return {"known": False, "confirmed": False, "suppressed": False,
+                "last_sent": 0.0}
+    return {"known": True,
+            "confirmed": bool(row["confirmed"]),
+            "suppressed": bool(row["suppressed"]),
+            "last_sent": row["last_sent"] or 0.0}
+
+
+def may_mail(address: str) -> bool:
+    """The single gate every outgoing message to a visitor passes.
+
+    Confirmed, and not suppressed. Suppression outranks everything: somebody
+    who said they did not ask for this does not start receiving mail again
+    because a different visitor typed their address.
+    """
+    state = email_state(address)
+    return state["confirmed"] and not state["suppressed"]
+
+
+def start_confirmation(address: str, token_hash: str, now: float,
+                       quiet_seconds: float = 900.0) -> bool:
+    """Record a pending confirmation. False means do not send the mail.
+
+    False for a suppressed address, and false when one went out recently, so
+    resubmitting cannot be used to mail somebody over and over. The quiet
+    period is the thing that keeps one unsolicited message at one.
+    """
+    address = (address or "").strip().lower()
+    state = email_state(address)
+    if state["suppressed"]:
+        return False
+    if state["last_sent"] and (now - state["last_sent"]) < quiet_seconds:
+        return False
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO emails (address, created, token_hash, token_made, "
+            "last_sent) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(address) DO UPDATE SET token_hash=excluded.token_hash,"
+            " token_made=excluded.token_made, last_sent=excluded.last_sent",
+            (address, now, token_hash, now, now))
+    return True
+
+
+def confirm_by_token(token_hash: str, now: float,
+                     max_age: float = 14 * 86400) -> str | None:
+    """Mark the matching address confirmed. Returns the address, or None.
+
+    Single use: the token is cleared, so the link cannot be replayed. A token
+    older than max_age is refused and cleared rather than honoured.
+    """
+    if not token_hash:
+        return None
+    row = one("SELECT * FROM emails WHERE token_hash = ?", (token_hash,))
+    if row is None:
+        return None
+    with write() as conn:
+        if (now - (row["token_made"] or 0)) > max_age:
+            conn.execute("UPDATE emails SET token_hash=NULL WHERE address=?",
+                         (row["address"],))
+            return None
+        conn.execute("UPDATE emails SET confirmed=COALESCE(confirmed, ?), "
+                     "token_hash=NULL WHERE address=?", (now, row["address"]))
+    return row["address"]
+
+
+def suppress_by_token(token_hash: str, now: float) -> str | None:
+    """They did not ask for this. Permanent, and never mailed again."""
+    if not token_hash:
+        return None
+    row = one("SELECT * FROM emails WHERE token_hash = ?", (token_hash,))
+    if row is None:
+        return None
+    with write() as conn:
+        conn.execute("UPDATE emails SET suppressed=COALESCE(suppressed, ?), "
+                     "confirmed=NULL, token_hash=NULL WHERE address=?",
+                     (now, row["address"]))
+    return row["address"]
+
+
+def mark_told(job_id: str) -> None:
+    """Record that the visitor has been sent their link."""
+    with write() as conn:
+        conn.execute("UPDATE jobs SET told = 1 WHERE id = ?", (job_id,))
+
+
+def jobs_awaiting_mail(address: str, since: float) -> list:
+    """Finished jobs for an address that were never told about.
+
+    What confirming releases: somebody confirms after their video is already
+    done, and the link should arrive then rather than never.
+    """
+    return query(
+        "SELECT * FROM jobs WHERE lower(email) = ? AND state = 'done' "
+        "AND told = 0 AND created >= ? ORDER BY created DESC LIMIT 5",
+        ((address or "").strip().lower(), since))

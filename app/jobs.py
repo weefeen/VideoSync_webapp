@@ -31,6 +31,8 @@ import json
 import logging
 import os
 import pathlib
+import hashlib
+import secrets
 import threading
 import time
 import uuid
@@ -399,6 +401,16 @@ def _say_it_is_queued(job: Job) -> None:
     address = (job.email or "").strip()
     if not address or not settings.can_email:
         return
+
+    # NOTHING GOES TO AN ADDRESS NOBODY HAS PROVED THEY OWN. Until it is
+    # confirmed the only message it may receive is the request to confirm it,
+    # and `start_confirmation` refuses that too if the address is suppressed
+    # or was asked recently. The render is NOT held up by any of this: the
+    # visitor is watching the page and gets their video there regardless.
+    if not store.may_mail(address):
+        _ask_them_to_confirm(address, job)
+        return
+
     if not limits.allowed("mail_queued_email", address.lower()):
         logger.info("not sending a queued notice to %s: over its allowance",
                     address)
@@ -421,4 +433,35 @@ def _say_it_is_queued(job: Job) -> None:
                            address, job.id, exc_info=True)
 
     threading.Thread(target=work, name=f"queued-mail-{job.id}",
+                     daemon=True).start()
+
+
+def _ask_them_to_confirm(address: str, job) -> None:
+    """Send the one message an unproved address may receive.
+
+    Deliberately quiet about failure. An address that is suppressed, or that
+    was already asked in the last quarter hour, gets nothing at all and the
+    visitor is told nothing either -- saying "that address has blocked us"
+    would turn this into a way to probe who has blocked us.
+    """
+    token = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    if not store.start_confirmation(address, digest, time.time()):
+        logger.info("not asking %s to confirm: suppressed or asked recently",
+                    address)
+        return
+
+    base = (settings.public_base_url or "").rstrip("/")
+
+    def work() -> None:
+        try:
+            notify.send_confirm(address,
+                                f"{base}/confirm/{token}",
+                                f"{base}/confirm/{token}?no=1",
+                                piece=job.score or "")
+        except Exception:                            # noqa: BLE001
+            logger.warning("could not ask %s to confirm", address,
+                           exc_info=True)
+
+    threading.Thread(target=work, name=f"confirm-mail-{job.id}",
                      daemon=True).start()

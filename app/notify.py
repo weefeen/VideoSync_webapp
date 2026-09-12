@@ -339,6 +339,44 @@ def send_compute(action: str, reason: str, *, ready: int = 0,
     logger.info("told the operator a machine %s", verb)
 
 
+def send_confirm(address: str, confirm_url: str, refuse_url: str,
+                 piece: str = "") -> None:
+    """The ONE message we send to an address nobody has proved they own.
+
+    Everything else waits behind it. Before this existed, anyone could type
+    any address and we would mail it the finished-video link -- and that link
+    IS the download credential, so a typo or somebody else's address handed a
+    stranger a working link to a real person's performance.
+
+    Written for the person who did NOT ask for this, because that is who is
+    harmed if it is wrong: it says what happened, it asks for one click, and
+    it offers a way to stop it permanently that does not require replying or
+    trusting us. It deliberately does not carry the job link, the piece as a
+    title, or anything else about the upload -- an address we cannot vouch
+    for gets the minimum, not a description of somebody else's recording.
+    """
+    if not settings.can_email:
+        raise MailError(settings.why_cannot_email())
+    address = one_address(address)
+
+    named = f" of {piece}" if piece else ""
+    message = _compose(
+        "Confirm your email to get your score video", address,
+        f"Somebody -- we hope you -- uploaded a recording{named} at "
+        f"{settings.public_base_url} and asked us to email the finished "
+        f"video to this address.\n\n"
+        f"Confirm that this address is yours and we will send you the link "
+        f"as soon as the video is ready:\n\n"
+        f"{confirm_url}\n\n"
+        f"We will not email you again unless you click that.\n\n"
+        f"If this was not you, nothing has been sent anywhere and you can "
+        f"stop us from ever mailing this address:\n\n"
+        f"{refuse_url}\n\n"
+        f"-- Weefeen\n")
+    _send(message, address)
+    logger.info("asked %s to confirm the address", address)
+
+
 def send_queued(job_id: str, address: str, piece: str = "",
                 ahead: int = 0, minutes: float | None = None) -> None:
     """Send one "we have it, here is roughly how long" message.

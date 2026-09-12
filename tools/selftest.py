@@ -1519,6 +1519,15 @@ def check_a_failure_is_never_mailed_to_the_visitor() -> str:
             "is unset here, that setup has been removed and the check is "
             "proving nothing.")
 
+    # The visitor's address must be CONFIRMED, or the success mail is held
+    # back by design and this check would be measuring the confirmation gate
+    # instead of the thing it exists to prove. Confirming here keeps it
+    # testing exactly one idea: a failure is never mailed, a success is.
+    import hashlib as _h, time as _t
+    _tok = _h.sha256(b"selftest-confirm").hexdigest()
+    store.start_confirmation(VISITOR, _tok, _t.time())
+    store.confirm_by_token(_tok, _t.time())
+
     sent = SENT
     sent.clear()
     if True:
@@ -2575,6 +2584,66 @@ def check_the_delivery_page_can_show_the_download() -> str:
     return "watchRender binds box/stat/bar/what and inserts the download link"
 
 
+def check_nothing_is_mailed_to_an_unproved_address() -> str:
+    """No message reaches an address until its owner has clicked.
+
+    Nothing proved ownership before. Anyone could type any address and we
+    mailed it -- and the finished-video mail carries /app/#job=<id>, which IS
+    the download credential, so a typo or somebody else's address handed a
+    stranger a working link to a real person's performance. The spam exposure
+    was the smaller half of that.
+
+    Asserts the whole shape: unknown and pending addresses may not be mailed,
+    one request is one mail and not many, the click is single use, and a
+    refusal is permanent and outranks any later confirmation.
+    """
+    import hashlib
+    import secrets
+    import time as _time
+    from app import store
+
+    now = _time.time()
+    address = f"prove-{secrets.token_hex(4)}@example.invalid"
+
+    if store.may_mail(address):
+        raise Failed("a never-seen address may be mailed; the gate is open")
+
+    token = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    if not store.start_confirmation(address, digest, now):
+        raise Failed("could not start a confirmation for a fresh address")
+    if store.may_mail(address):
+        raise Failed("an address with a PENDING confirmation may be mailed — "
+                     "the link would go out before anyone proved they own it")
+    if store.start_confirmation(address, digest, now + 5):
+        raise Failed("a second confirmation mail was allowed straight away; "
+                     "resubmitting would let anyone mail a stranger repeatedly")
+
+    if store.confirm_by_token(digest, now + 10) != address:
+        raise Failed("the confirmation click did not confirm the address")
+    if not store.may_mail(address):
+        raise Failed("a confirmed address still may not be mailed")
+    if store.confirm_by_token(digest, now + 20) is not None:
+        raise Failed("the confirmation link worked twice; it must be single "
+                     "use so a forwarded mail cannot re-confirm")
+
+    # Refusal: permanent, and it outranks confirmation.
+    victim = f"nope-{secrets.token_hex(4)}@example.invalid"
+    vtoken = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+    store.start_confirmation(victim, vtoken, now)
+    if store.suppress_by_token(vtoken, now + 1) != victim:
+        raise Failed("refusing did not suppress the address")
+    if store.may_mail(victim):
+        raise Failed("a suppressed address may still be mailed")
+    if store.start_confirmation(victim, vtoken, now + 10 ** 6):
+        raise Failed("a suppressed address could be asked again — somebody "
+                     "who said 'not me' must not be re-mailed by a later "
+                     "visitor typing their address")
+
+    return ("unknown and pending refused; one ask per quiet period; click is "
+            "single use; refusal permanent and outranks confirmation")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2727,6 +2796,7 @@ def main() -> int:
         check_the_recogniser_is_marked_right_or_wrong,
         check_the_page_is_actually_styled,
         check_a_failure_is_never_mailed_to_the_visitor,
+        check_nothing_is_mailed_to_an_unproved_address,
         check_a_portrait_video_keeps_the_picture,
         check_the_output_is_postable,
         check_the_choices_survive_the_request,

@@ -18,6 +18,7 @@ import logging
 import time
 
 from .. import limits, notify, pipeline, stats, storage, store
+from .. import store
 from ..settings import settings
 from .messages import Event
 
@@ -300,6 +301,16 @@ def _tell_them(row) -> bool:
     if not email or not settings.can_email:
         return False
     address = email.lower()
+
+    # THE LINK IS THE CREDENTIAL. `/app/#job=<id>` is what downloads the
+    # video, so sending it to an address nobody proved they own hands a
+    # stranger a real person's performance. Held back until confirmed;
+    # `store.jobs_awaiting_mail` releases it if they confirm afterwards.
+    if not store.may_mail(address):
+        logger.info("job %s finished for an unconfirmed address; the link "
+                    "waits until it is confirmed", row["id"])
+        return False
+
     if not limits.allowed("mail_email", address):
         logger.info("not mailing %s: over its allowance", address)
         return False
@@ -309,6 +320,7 @@ def _tell_them(row) -> bool:
     try:
         notify.send_ready(row["id"], email, piece=row["score"] or "",
                           finished=row["finished"])
+        store.mark_told(row["id"])
         return True
     except notify.MailError as exc:
         logger.warning("could not tell %s about job %s: %s",

@@ -11,8 +11,10 @@ import pathlib
 import re
 import shutil
 import threading
+import time
 from urllib.parse import quote, urlsplit
 
+from markupsafe import escape
 from flask import (Blueprint, Flask, current_app, jsonify, redirect,
                    request, send_file, send_from_directory,
                    Response)
@@ -1220,3 +1222,95 @@ def create_app() -> Flask:
     # in run.py so it also happens under gunicorn.
     webside.start_threads()
     return app
+
+
+def _confirm_page(title: str, message: str, code: int = 200):
+    """A small self-contained page. No script, no fonts, no third party.
+
+    It is reached from a mail client, often an unfamiliar browser, sometimes
+    by somebody who did not ask for any of this -- so it loads nothing and
+    tells them plainly what just happened.
+    """
+    body = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<link rel=\"icon\" href=\"/app/assets/logo/CIRCLE/WHITE_PURPLE.svg\" type=\"image/svg+xml\">"
+        "<link rel=\"icon\" href=\"/app/assets/icon/icon-32.png\" sizes=\"32x32\" type=\"image/png\">"
+        "<title>" + escape(title) + "</title>"
+        "<style>body{margin:0;background:#F7F4EF;color:#17151A;"
+        "font:16px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        "display:flex;min-height:100vh;align-items:center;justify-content:center;"
+        "padding:24px}main{max-width:34rem}h1{font:600 27px/1.2 Georgia,serif;"
+        "margin:0 0 12px}p{margin:0 0 12px;color:#4A4652}"
+        "a{color:#D93B1E}</style></head><body><main>"
+        "<h1>" + escape(title) + "</h1><p>" + message + "</p>"
+        "</main></body></html>")
+    response = Response(body, status=code, mimetype="text/html; charset=utf-8")
+    # A confirmation link is a one-time credential. Keeping it out of caches
+    # and out of the referer header costs nothing and is the difference
+    # between "used once" and "used by whoever reads the proxy log".
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@bp.get("/confirm/<token>")
+def confirm_address(token: str):
+    """Prove an address, or refuse it for good with ?no=1.
+
+    A GET, because a mail client will not POST. That makes it safe only
+    because the token is 256 bits of randomness, single use, and cleared the
+    moment it is spent -- guessing one is not a thing that happens, and a
+    replay finds nothing.
+
+    Always the same answer for a token we do not recognise, whether it never
+    existed, expired, or was already used: an endpoint that distinguishes
+    those tells somebody with a list of tokens which ones are real.
+    """
+    digest = hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+    now = time.time()
+
+    if request.args.get("no"):
+        address = store.suppress_by_token(digest, now)
+        if address is None:
+            return _confirm_page(
+                "That link has expired",
+                "It may already have been used. Nothing has been sent to "
+                "this address.", code=410)
+        logger.info("address suppressed at its owner's request")
+        return _confirm_page(
+            "We will not email you again",
+            "That address is blocked from receiving anything from us, "
+            "permanently. Nothing about the upload was shared with anyone, "
+            "and no video was sent anywhere.")
+
+    address = store.confirm_by_token(digest, now)
+    if address is None:
+        return _confirm_page(
+            "That link has expired",
+            "Confirmation links last two weeks and work once. Upload again "
+            "and we will send a fresh one.", code=410)
+
+    # Their video may already be finished and waiting on exactly this click.
+    released = 0
+    for row in store.jobs_awaiting_mail(address, now - 30 * 86400):
+        try:
+            notify.send_ready(row["id"], row["email"],
+                              piece=row["score"] or "",
+                              finished=row["finished"])
+            store.mark_told(row["id"])
+            released += 1
+        except Exception:                             # noqa: BLE001
+            logger.warning("confirmed %s but could not send job %s",
+                           address, row["id"], exc_info=True)
+
+    logger.info("address confirmed; %d waiting video(s) released", released)
+    if released:
+        return _confirm_page(
+            "Thank you \u2014 your video is on its way",
+            "Your address is confirmed and the link to your finished video "
+            "has just been emailed to you.")
+    return _confirm_page(
+        "Thank you \u2014 your address is confirmed",
+        "We will email you the link as soon as your video is ready. You can "
+        "close this page.")
