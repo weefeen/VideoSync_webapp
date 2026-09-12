@@ -1463,7 +1463,19 @@ async function resumeFromLink(){
   JOB = job;
   copyForState(s.state);
   S.screen = 'done';
-  draw();
+
+  // draw() MUST NOT BE ABLE TO STOP THE DELIVERY. It renders the design
+  // stage, which wants a chosen piece and an uploaded file -- and somebody
+  // arriving from the link in their email has neither, so it can throw. It
+  // threw here, and because it sat between the heading and watchRender, the
+  // page said "your video is below" and then never built the box or the
+  // download link: the visitor's own video, finished and in the bucket,
+  // unreachable from the page that promised it.
+  //
+  // The design view is decoration on this screen. Delivering the video is
+  // not, so it goes first and a failure above it is swallowed.
+  try{ draw(); }catch(err){ console.warn('draw() skipped on resume:', err); }
+
   // Picks up wherever it is: still queued, mid-render, finished, or failed.
   watchRender(job);
 }
