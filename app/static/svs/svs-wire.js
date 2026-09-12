@@ -1388,12 +1388,25 @@ function shareCaption(){
  * the system sheet offers Instagram, Facebook, WhatsApp, TikTok with the
  * caption pre-filled. On a desktop, where no such sheet exists, it is
  * download plus a caption already on the clipboard. */
+/* Whether THIS device can really hand a video to another app.
+ *
+ * canShare() alone is not the answer, and trusting it is what put a "Share"
+ * button on a desktop that cannot share: it is asked with a one-byte test
+ * file, Windows says yes to that, and then refuses a hundred megabytes of
+ * real video. The visitor pressed Share, waited through a download, and got
+ * a download -- which is not what the word promised.
+ *
+ * A touch device is the honest signal. Phones and tablets hand files to
+ * Instagram and WhatsApp properly; desktops do not, whatever they claim, so
+ * a desktop is offered the download it was always going to get. */
 function canShareFiles(){
   try{
-    return !!(navigator.canShare && navigator.share
-              && navigator.canShare({ files: [new File([new Blob([1])],
-                                                       'a.mp4',
-                                                       { type: 'video/mp4' })] }));
+    if(!(navigator.canShare && navigator.share)) return false;
+    const touch = (navigator.maxTouchPoints || 0) > 1
+      || window.matchMedia('(pointer: coarse)').matches;
+    if(!touch) return false;
+    return navigator.canShare({ files: [new File([new Blob([1])], 'a.mp4',
+                                                 { type: 'video/mp4' })] });
   }catch(e){ return false; }
 }
 
@@ -1494,8 +1507,8 @@ function shareRow(job){
   const caption = shareCaption();
   const phone = canShareFiles();
   const hint = phone
-    ? 'This video is yours. One tap sends it straight to Instagram, Facebook, WhatsApp or TikTok, with the caption ready — post it under your own name.'
-    : 'This video is yours to post, under your own name. Download it and upload it to Instagram, Facebook, YouTube or TikTok like any other video — the caption is on your clipboard, ready to paste.';
+    ? 'This video is yours. One tap sends it straight to Instagram, Facebook, WhatsApp or TikTok, with the caption ready — posted under your own name.'
+    : 'This video is yours to post, under your own name. Download it, then upload it to Facebook, Instagram or YouTube the way you would any video. The caption is copied for you when you download — just paste it.';
   const shareButton = phone
     ? `<button class="shr go" data-share-job="${esc(job)}">Get your video</button>`
     : '';
