@@ -2645,6 +2645,49 @@ def check_nothing_is_mailed_to_an_unproved_address() -> str:
             "single use; refusal permanent and outranks confirmation")
 
 
+def check_the_video_carries_the_weefeen_mark() -> str:
+    """The mark the design screen draws is actually rendered.
+
+    The preview painted the weefeen logo and app/panel.py drew text only, so
+    every video went out unbranded while the design screen promised
+    otherwise -- the same preview/render mismatch as the transparent band,
+    and invisible to the styling check, which only proves CSS classes exist.
+
+    Placement follows the preview: the FULL logo at a panel's head, the
+    CIRCLE on the score band when there is no panel. Never both.
+    """
+    import tempfile as _tf
+    from app import render as rnd
+
+    work = pathlib.Path(_tf.mkdtemp())
+    seen = {}
+    for panel in (rnd.PANEL_OFF, rnd.PANEL_LEFT):
+        style = rnd.Style(aspect="16/9", panel=panel)
+        layout = rnd.compute_layout(style, 1306 / 244.0, 16 / 9)
+        placed = rnd._logo_placement(style, layout, work)
+        if placed is None:
+            raise Failed(f"no weefeen mark is drawn with panel={panel!r}; the "
+                         f"design screen shows one and the video would have "
+                         f"none")
+        path, x, y, w, h = placed
+        if not path.is_file():
+            raise Failed("the mark image was not produced")
+        cw, ch = layout.canvas
+        if x < 0 or y < 0 or x + w > cw or y + h > ch:
+            raise Failed(f"the mark falls outside the frame at panel={panel!r}"
+                         f": {w}x{h} at ({x},{y}) on {cw}x{ch}")
+        seen[panel] = path.name
+
+    if "FULL" not in seen[rnd.PANEL_LEFT]:
+        raise Failed("a panel should carry the FULL logo at its head, got "
+                     + seen[rnd.PANEL_LEFT])
+    if "CIRCLE" not in seen[rnd.PANEL_OFF]:
+        raise Failed("with no panel the band should carry the CIRCLE, got "
+                     + seen[rnd.PANEL_OFF])
+
+    return f"panel -> {seen[rnd.PANEL_LEFT]}; no panel -> {seen[rnd.PANEL_OFF]}"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2813,6 +2856,7 @@ def main() -> int:
         check_the_input_reaches_a_compute_node,
         check_a_transparent_band_floats_over_the_video,
         check_the_video_carries_a_mark,
+        check_the_video_carries_the_weefeen_mark,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
     ]

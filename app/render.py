@@ -708,6 +708,99 @@ def _run(cmd: list[str], what: str) -> None:
         raise ToolFailed(what, cmd, result.returncode, result.stderr or "")
 
 
+# The mark, as the design screen places it:
+#
+#   a panel exists      the FULL logo at the panel's head
+#   no panel at all     the CIRCLE on the score band
+#
+# Never both: a panel is where identity belongs, and the band is for the
+# notation. The preview has a third case -- somebody else's logo at the panel
+# head, ours at its foot -- which the renderer cannot reach, because the
+# interface never sends a logo choice.
+#
+# PNG, not SVG: rasterising needs cairo, which the render hosts have and a
+# developer machine may not, and a missing library must never cost a render.
+# They are rendered once at high resolution and scaled down here.
+_LOGO_DIR = pathlib.Path(__file__).resolve().parent / "static" / "svs" \
+    / "assets" / "logo" / "png"
+_LIGHT_VARIANT = {"FULL": "PURPLE", "CIRCLE": "WHITE_PURPLE"}
+
+
+def _luminance(hex_colour: str) -> float:
+    """0 for black, 1 for white. Mirrors luminance() in svs-wire.js."""
+    raw = (hex_colour or "#000").lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(c * 2 for c in raw)
+    try:
+        n = int(raw, 16)
+    except ValueError:
+        return 0.0
+    r, g, b = (n >> 16) & 255, (n >> 8) & 255, n & 255
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+
+
+def _logo_png(kind: str, surface: str, width_px: int, opacity: float,
+              workdir: pathlib.Path) -> tuple[pathlib.Path, int, int] | None:
+    """The mark sized for this frame, or None if the file is missing.
+
+    A missing asset returns None rather than raising: a logo is branding, and
+    branding is not worth failing somebody's video over.
+    """
+    from PIL import Image
+
+    variant = (_LIGHT_VARIANT[kind] if _luminance(surface) > 0.55 else "WHITE")
+    src = _LOGO_DIR / f"{kind}-{variant}.png"
+    if not src.is_file():
+        logger.warning("logo asset missing: %s", src)
+        return None
+
+    img = Image.open(src).convert("RGBA")
+    width_px = max(8, int(width_px))
+    height_px = max(8, round(width_px * img.height / img.width))
+    img = img.resize((width_px, height_px), Image.LANCZOS)
+
+    if opacity < 1.0:
+        alpha = img.getchannel("A").point(lambda a: round(a * opacity))
+        img.putalpha(alpha)
+
+    out = workdir / f"logo-{kind}-{variant}.png"
+    img.save(out, "PNG")
+    return out, img.width, img.height
+
+
+def _logo_placement(style: "Style", layout: Layout,
+                    workdir: pathlib.Path):
+    """Where the mark goes for this layout, or None.
+
+    Returns (path, x, y, w, h).
+    """
+    canvas_w, canvas_h = layout.canvas
+    if layout.panel is not None and style.panel != PANEL_OFF:
+        # THE PANEL HEAD. Width is 40% of the panel, as the preview draws it,
+        # inset by the same margin the panel text uses.
+        inset = _even_at(layout.panel.w * 0.12)
+        made = _logo_png("FULL", style.canvas_bg,
+                         layout.panel.w * 0.40, 1.0, workdir)
+        if made is None:
+            return None
+        path, w, h = made
+        return path, layout.panel.x + inset, layout.panel.y + inset, w, h
+
+    # THE BAND. A square the preview sizes at 5.5% of the frame height, in the
+    # band's bottom-right corner, faint so it never competes with the
+    # notation. It asks the BAND's paper which variant to use, not the
+    # backdrop, because that is the surface it actually sits on.
+    side = _even_at(canvas_h * 0.055)
+    made = _logo_png("CIRCLE", style.band_bg, side, 0.30, workdir)
+    if made is None:
+        return None
+    path, w, h = made
+    margin = _even_at(layout.band.w * 0.022)
+    x = layout.band.x + layout.band.w - w - margin
+    y = layout.band.y + layout.band.h - h - margin
+    return path, max(0, x), max(0, y), w, h
+
+
 def _watermark_font(px: int):
     """A face for the mark, trying the nice one and falling back gracefully.
 
@@ -884,12 +977,27 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
                 style.watermark_text, layout.canvas, workdir)
             mark = (wm_path, wm_w, wm_h)
 
-        # Inputs: 0 = backdrop, 1 = performance, 2 = band strip, 3 = mark.
+        # The weefeen mark: the FULL logo at a panel's head, or the CIRCLE on
+        # the band when there is no panel. The design screen has always drawn
+        # it; the renderer never did, so every video went out unbranded while
+        # the preview promised otherwise.
+        logo = _logo_placement(style, layout, workdir)
+
+        # Inputs: 0 = backdrop, 1 = performance, 2 = band strip, then the
+        # optional text mark, then the logo.
         cmd = [settings.ffmpeg, "-y"]
         cmd += _background_input(style, layout.canvas, info["fps"])
         cmd += ["-i", str(video), "-i", str(strip)]
+        next_input = 3
+        mark_idx = logo_idx = None
         if mark:
             cmd += ["-loop", "1", "-i", str(mark[0])]
+            mark_idx = next_input
+            next_input += 1
+        if logo:
+            cmd += ["-loop", "1", "-i", str(logo[0])]
+            logo_idx = next_input
+            next_input += 1
 
         chain = [
             # The backdrop keeps its aspect too: scaled to cover the canvas
@@ -911,7 +1019,7 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         # The panel writes to "out" unless the mark comes after it, in which
         # case it writes to an intermediate label and the mark overlay makes
         # "out". The mark is last so it sits over everything, panel included.
-        panel_out = "premark" if mark else "out"
+        panel_out = "premark" if (mark or logo) else "out"
         if layout.panel is not None and meta:
             on_progress("panel", "drawing the title panel")
             text_chain, temps = panel_mod.build_chain(
@@ -937,8 +1045,14 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
             if style.needs_alpha and style.band_position != TOP:
                 wy = min(wy, layout.band.y - wm_h - pad)
             wx, wy = max(0, wx), max(0, wy)
-            chain.append(f"[{last_label}][3:v]overlay=x={wx}:y={wy}"
-                         f":shortest=1[out]")
+            chain.append(f"[{last_label}][{mark_idx}:v]overlay=x={wx}:y={wy}"
+                         f":shortest=1[mk]")
+            last_label = "mk"
+
+        if logo:
+            _, lx, ly, _, _ = logo
+            chain.append(f"[{last_label}][{logo_idx}:v]"
+                         f"overlay=x={lx}:y={ly}:shortest=1[out]")
             last_label = "out"
 
         if last_label != "out":
