@@ -33,8 +33,8 @@ class RenderTask:
 
     Everything the worker needs is here. It does not read the job table,
     and on the next host it could not: `upload` is the only field that names
-    a place on a particular machine, and it is the one that becomes an
-    object key when the storage slice lands.
+    a place on a particular machine, and `input_key` is where the same file
+    lives in the bucket so a host that cannot see that disk can fetch it.
 
     What is deliberately NOT here: the email address. It stays on the web
     box with the SMTP credentials, and the mail is sent there when `done`
@@ -51,6 +51,11 @@ class RenderTask:
     style: dict[str, Any] = dataclasses.field(default_factory=dict)
     meta: dict[str, Any] = dataclasses.field(default_factory=dict)
     queued_at: float = 0.0
+    # Where the input recording lives in the bucket, for a host that does not
+    # share the web box's disk. Empty when nothing put it there (storage
+    # unconfigured, or compute off so only the local worker — which reads
+    # `upload` straight off the shared disk — will ever take this task).
+    input_key: str = ""
 
     def to_json(self) -> str:
         return _dump(self, "kind")

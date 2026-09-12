@@ -2235,6 +2235,94 @@ def check_a_compute_node_gets_no_dangerous_secret() -> str:
     return "linode/smtp/alert/turnstile/full-bucket withheld; scoped key sent"
 
 
+def check_the_input_reaches_a_compute_node() -> str:
+    """The recording a node renders can get to a host that lacks the disk.
+
+    This is the wire the SELECTED workflow needs and did not have. The web box
+    and its worker share a disk, so the worker read the upload straight off
+    it; a compute node is a different machine and cannot see that disk, so a
+    node picked up a job and failed looking for a file it had no way to reach.
+    Everything else about the node — create, render, destroy, image — was
+    built and tested, but the input never travelled, so the throwaway-host
+    render could not run end to end.
+
+    Now the web side stages the input in the bucket and puts the key on the
+    task; a host without the file fetches it. Proven here with an in-memory
+    bucket: stage on one side, fetch on a host where the upload path does not
+    exist, and the bytes match.
+
+    Also asserts the no-op: with compute OFF, nothing is staged — the render
+    path stays exactly what it is on the single box today.
+    """
+    import dataclasses
+    import importlib
+    from app import storage, pipeline
+    from app.queue import webside
+    from app.queue.messages import RenderTask
+    from app.settings import settings
+
+    # In-memory stand-in for the bucket.
+    bucket: dict = {}
+    saved = (storage.put, storage.head, storage.get, storage.available,
+             webside.settings)
+
+    def fput(local, key):
+        data = pathlib.Path(local).read_bytes(); bucket[key] = data
+        return len(data)
+    def fhead(key):
+        return len(bucket[key]) if key in bucket else None
+    def fget(key, local):
+        p = pathlib.Path(local); p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(bucket[key]); return len(bucket[key])
+
+    class Row(dict):
+        def __getitem__(self, k): return dict.get(self, k)
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    recording = tmp / "visitor.mp4"
+    recording.write_bytes(b"CHOPIN" * 200)
+    row = Row(id="input-check", upload=str(recording), score="Op39",
+              attempt=1, mode=None, duration=120.0, style=None, meta=None,
+              queued_at=0.0)
+
+    try:
+        storage.put, storage.head, storage.get = fput, fhead, fget
+        storage.available = lambda: True
+
+        # Compute OFF: nothing staged, today's behaviour unchanged.
+        webside.settings = dataclasses.replace(settings, compute_enabled=False)
+        if webside._ensure_input_in_bucket(row) != "":
+            raise Failed("with compute off, the input was staged to the "
+                         "bucket — that is bandwidth for nobody and a change "
+                         "to the single-box render path that should be a no-op")
+
+        # Compute ON: staged, keyed, and fetchable where the disk is absent.
+        webside.settings = dataclasses.replace(settings, compute_enabled=True)
+        key = webside._ensure_input_in_bucket(row)
+        if not key or fhead(key) != recording.stat().st_size:
+            raise Failed("the input was not staged in the bucket with compute "
+                         "on, so a node would have nothing to fetch")
+        task = webside._task(row)
+        if RenderTask.from_json(task.to_json()).input_key != key:
+            raise Failed("input_key does not survive the wire; a node would "
+                         "not know where to fetch the recording")
+
+        # A host that cannot see the shared disk.
+        fetched = pipeline.job_folder("input-check") / "input.mp4"
+        fetched.unlink(missing_ok=True)
+        storage.get(key, fetched)
+        if not fetched.is_file() or fetched.read_bytes() != recording.read_bytes():
+            raise Failed("the node's fetched recording does not match the "
+                         "original — a render on it would be a render of the "
+                         "wrong or a truncated file")
+    finally:
+        (storage.put, storage.head, storage.get, storage.available,
+         webside.settings) = saved
+
+    return "input staged and keyed with compute on; fetched byte-identical; "\
+           "nothing staged with compute off"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2398,6 +2486,7 @@ def main() -> int:
         check_a_job_id_is_not_guessable,
         check_the_bot_check_is_wired_and_inert_by_default,
         check_a_compute_node_gets_no_dangerous_secret,
+        check_the_input_reaches_a_compute_node,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

@@ -29,6 +29,7 @@ import pathlib
 import threading
 import time
 
+from .. import storage
 from .. import store
 from ..settings import settings
 from . import ledger, worker
@@ -137,7 +138,42 @@ def _task(row) -> RenderTask:
         duration=row["duration"],
         style=json.loads(row["style"]) if row["style"] else {},
         meta=json.loads(row["meta"] or "{}"),
-        queued_at=row["queued_at"] or 0.0)
+        queued_at=row["queued_at"] or 0.0,
+        input_key=_ensure_input_in_bucket(row))
+
+
+def _ensure_input_in_bucket(row) -> str:
+    """Put the recording in the bucket so a compute node can fetch it, and
+    return the key. Empty when there is nothing to do.
+
+    Only when compute could actually take the job: with `COMPUTE_ENABLED`
+    off, the only consumer is the local worker on this box, which reads the
+    upload straight off the shared disk, so uploading it to the bucket would
+    be bandwidth for nobody. With compute on, the input MUST be in the bucket
+    before a node picks the task up — a node cannot see this disk — so this
+    is the wire that makes the selected workflow (render on a throwaway host)
+    actually run rather than fail looking for a file it cannot reach.
+
+    Idempotent: a re-offer by the sweep finds the object already there by its
+    size and does not upload it again. A storage failure is swallowed and the
+    key comes back empty — the job still renders on the local worker, which
+    is the safe degradation while the reason is fixed.
+    """
+    if not (settings.compute_enabled and storage.available()):
+        return ""
+    local = pathlib.Path(row["upload"])
+    if not local.is_file():
+        return ""
+    key = storage.work_key(row["id"], "input" + local.suffix.lower())
+    try:
+        if storage.head(key) != local.stat().st_size:
+            storage.put(local, key)
+        return key
+    except Exception:                                  # noqa: BLE001
+        logger.warning("job %s: could not stage the input in the bucket; the "
+                       "local worker can still render it", row["id"],
+                       exc_info=True)
+        return ""
 
 
 def _apply(event) -> None:

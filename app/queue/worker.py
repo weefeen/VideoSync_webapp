@@ -126,9 +126,28 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
         if package is None:
             raise pipeline.PipelineError(
                 f"No score package named {task.package!r}.")
+
+        # Where the recording actually is on THIS host. On the web box it is
+        # `task.upload`, sitting on the shared disk, and this is a no-op. On a
+        # compute node that path does not exist — the node cannot see the web
+        # box's disk — so when the file is absent and the web side staged a
+        # copy in the bucket (`input_key`), it is fetched. This is the wire
+        # that lets the render run on a throwaway machine at all.
+        #
+        # When the file is absent and there is nothing to fetch, the original
+        # path is passed through unchanged and `pipeline.run` reports the
+        # missing input as it always did — this only ADDS the fetch, it does
+        # not change what happens when no fetch is possible.
+        video = pathlib.Path(task.upload)
+        if not video.is_file() and task.input_key and storage.available():
+            say("progress", stage="probe", detail="fetching the recording")
+            video = pipeline.job_folder(task.job_id) / (
+                "input" + pathlib.Path(task.upload).suffix.lower())
+            storage.get(task.input_key, video)
+
         style = rnd.Style(**task.style) if task.style else None
         result = pipeline.run(
-            package, pathlib.Path(task.upload), task.job_id, style,
+            package, video, task.job_id, style,
             task.mode, task.meta,
             lambda stage, detail="": say("progress", stage=stage, detail=detail))
         size = (result.output.stat().st_size

@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import pathlib
 import time
 import threading
@@ -155,6 +156,49 @@ def put(local: pathlib.Path, key: str) -> int:
         raise StorageError(
             f"{key} is {got} bytes, expected {expected} — the upload was "
             f"truncated and the local copy is the only whole one")
+    return got
+
+
+def get(key: str, local: pathlib.Path) -> int:
+    """Download an object to `local`, CONFIRM the size, return the bytes.
+
+    The mirror of `put`, and for the same reason a compute node exists: the
+    input a node renders is not on its disk — it is on the disk of the web
+    box, which the node cannot reach — so it is fetched from the bucket here.
+    The size confirmation matters as much as it does on the way up: a render
+    started on a truncated download produces a wrong video that still looks
+    finished, so a short file is a hard error, not something to render.
+    """
+    client = _connect()
+    if client is None:
+        raise StorageError(_problem or "no object storage configured")
+
+    expected = head(key)
+    if expected is None:
+        raise StorageError(f"{key} is not in the bucket to fetch")
+
+    local.parent.mkdir(parents=True, exist_ok=True)
+    partial = local.with_suffix(local.suffix + ".part")
+    partial.unlink(missing_ok=True)
+    try:
+        if _transfer is not None:
+            client.download_file(settings.object_bucket, key, str(partial),
+                                 Config=_transfer)
+        else:
+            client.download_file(settings.object_bucket, key, str(partial))
+    except Exception as exc:                          # noqa: BLE001
+        partial.unlink(missing_ok=True)
+        raise StorageError(f"download of {key} failed: {exc}") from exc
+
+    got = partial.stat().st_size
+    if got != expected:
+        partial.unlink(missing_ok=True)
+        raise StorageError(
+            f"{key} came down {got} bytes, expected {expected} — the "
+            f"download was truncated and rendering it would be rendering "
+            f"half a recording")
+    # Atomic, so a reader never sees a partial input at the real name.
+    os.replace(partial, local)
     return got
 
 
