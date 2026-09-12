@@ -139,6 +139,12 @@ class Style:
     # observed figures leave clear, and the person posting the video is the
     # one who can see what actually covers it.
     portrait_offset: float = 0.32
+    # A small mark burned into the pixels, so a video reposted without credit
+    # is still recognisable as coming from here — the one identification that
+    # survives a re-upload and a re-encode, unlike a caption or a hashtag. On
+    # by default; the text is the site so a found video points home.
+    watermark: bool = True
+    watermark_text: str = "chopin.weefeen.com"
     crf: int = 20
 
     def __post_init__(self) -> None:
@@ -698,6 +704,67 @@ def _run(cmd: list[str], what: str) -> None:
         raise ToolFailed(what, cmd, result.returncode, result.stderr or "")
 
 
+def _watermark_font(px: int):
+    """A face for the mark, trying the nice one and falling back gracefully.
+
+    Futura when the licensed files are present (the server), then DejaVu on
+    Linux, Arial on Windows, and PIL's built-in as the last resort — a mark
+    in a plain font is far better than a render that aborts because a font is
+    missing.
+    """
+    from PIL import ImageFont
+
+    candidates = []
+    try:
+        from . import fonts
+        if fonts.available():
+            candidates.append(str(fonts.futura("medium")))
+    except Exception:                                # noqa: BLE001
+        pass
+    candidates += ["DejaVuSans.ttf", "arial.ttf",
+                   "C:/Windows/Fonts/arial.ttf"]
+    for name in candidates:
+        try:
+            return ImageFont.truetype(name, px)
+        except Exception:                            # noqa: BLE001
+            continue
+    return ImageFont.load_default()
+
+
+def _watermark_png(text: str, canvas: tuple[int, int],
+                   workdir: pathlib.Path) -> tuple[pathlib.Path, int, int]:
+    """The mark as a transparent PNG, sized to the canvas. Returns path, w, h.
+
+    Drawn with PIL rather than ffmpeg's drawtext: drawtext needs fontconfig
+    and a parseable path and falls over without them, where PIL is already a
+    dependency and renders the same everywhere. White text with a soft dark
+    shadow so it stays legible over a bright score or a dark video alike, and
+    semi-transparent so it marks the video without dominating it.
+    """
+    from PIL import Image, ImageDraw
+
+    cw, ch = canvas
+    px = max(14, ch // 42)                    # ~26 px on 1080p, scales down
+    pad = max(6, px // 3)
+    font = _watermark_font(px)
+
+    scratch = Image.new("RGBA", (10, 10))
+    box = ImageDraw.Draw(scratch).textbbox((0, 0), text, font=font)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    w, h = tw + 2 * pad, th + 2 * pad
+
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    ox, oy = pad - box[0], pad - box[1]
+    # A shadow one pixel down-right, then the mark, both semi-transparent.
+    draw.text((ox + 1, oy + 1), text, font=font, fill=(0, 0, 0, 150))
+    draw.text((ox, oy), text, font=font, fill=(255, 255, 255, 205))
+
+    path = workdir / "watermark.png"
+    img.save(path, "PNG")
+    return path, w, h
+
+
 def _band_strip(pkg: ScorePackage, images: dict[int, pathlib.Path],
                 duration: float, fps: float, size: tuple[int, int],
                 workdir: pathlib.Path, keep_alpha: bool = False) -> pathlib.Path:
@@ -794,10 +861,21 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
                             keep_alpha=style.needs_alpha)
 
         width, height = layout.canvas
-        # Inputs: 0 = backdrop, 1 = performance, 2 = band strip.
+
+        # The mark, if it is on. A still PNG, so `-loop 1` makes it a stream
+        # for the whole render; it becomes input 3 when present.
+        mark = None
+        if style.watermark and style.watermark_text.strip():
+            wm_path, wm_w, wm_h = _watermark_png(
+                style.watermark_text, layout.canvas, workdir)
+            mark = (wm_path, wm_w, wm_h)
+
+        # Inputs: 0 = backdrop, 1 = performance, 2 = band strip, 3 = mark.
         cmd = [settings.ffmpeg, "-y"]
         cmd += _background_input(style, layout.canvas, info["fps"])
         cmd += ["-i", str(video), "-i", str(strip)]
+        if mark:
+            cmd += ["-loop", "1", "-i", str(mark[0])]
 
         chain = [
             # The backdrop keeps its aspect too: scaled to cover the canvas
@@ -816,13 +894,31 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         ]
         last_label = "s2"
 
+        # The panel writes to "out" unless the mark comes after it, in which
+        # case it writes to an intermediate label and the mark overlay makes
+        # "out". The mark is last so it sits over everything, panel included.
+        panel_out = "premark" if mark else "out"
         if layout.panel is not None and meta:
             on_progress("panel", "drawing the title panel")
             text_chain, temps = panel_mod.build_chain(
-                last_label, "out", layout.panel, layout.canvas, meta)
+                last_label, panel_out, layout.panel, layout.canvas, meta)
             if text_chain:
                 chain.append(text_chain)
-                last_label = "out"
+                last_label = panel_out
+
+        if mark:
+            _, wm_w, wm_h = mark
+            # Bottom-right of the VIDEO region, inset by a small margin, so it
+            # rides on the picture rather than the frame edge and adapts to
+            # whatever layout is in force. clamped into the canvas.
+            pad = max(8, height // 90)
+            wx = min(width - wm_w, layout.video.x + layout.video.w - wm_w - pad)
+            wy = min(height - wm_h,
+                     layout.video.y + layout.video.h - wm_h - pad)
+            wx, wy = max(0, wx), max(0, wy)
+            chain.append(f"[{last_label}][3:v]overlay=x={wx}:y={wy}"
+                         f":shortest=1[out]")
+            last_label = "out"
 
         if last_label != "out":
             chain.append(f"[{last_label}]null[out]")

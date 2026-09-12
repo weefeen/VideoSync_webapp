@@ -2454,6 +2454,41 @@ def check_a_compute_node_can_actually_run() -> str:
             "node skips declare, node/web-box distinguished")
 
 
+def check_the_video_carries_a_mark() -> str:
+    """A mark is burned into the pixels, so a repost is still traceable home.
+
+    A caption or a hashtag is stripped the moment someone re-uploads; a mark
+    in the pixels survives a re-encode, and is the one identification that
+    does. On by default, drawn with PIL (not ffmpeg drawtext, which needs
+    fontconfig and falls over without it), and sized to the canvas.
+    """
+    from PIL import Image
+    from app import render as rnd
+
+    # On by default, and the request does not have to ask for it.
+    if not rnd.Style().watermark:
+        raise Failed("the watermark is off by default; a video that leaves "
+                     "here should carry the mark unless it is turned off")
+
+    work = pathlib.Path(tempfile.mkdtemp())
+    for canvas in ((1920, 1080), (1080, 1920), (1080, 1080)):
+        path, w, h = rnd._watermark_png("chopin.weefeen.com", canvas, work)
+        if not path.is_file():
+            raise Failed("the watermark PNG was not produced")
+        img = Image.open(path)
+        if img.mode != "RGBA":
+            raise Failed("the watermark is not transparent, so it would paint "
+                         "a solid box over the video")
+        if w >= canvas[0] or h >= canvas[1] or w < 8 or h < 8:
+            raise Failed(f"the mark is {w}x{h} on a {canvas} canvas — it does "
+                         f"not fit or is invisibly small")
+        # Something was actually drawn (not a blank transparent image).
+        if img.getbbox() is None:
+            raise Failed("the watermark image is empty — no text was drawn")
+
+    return "on by default; transparent PNG, drawn and sized, fits every aspect"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2620,6 +2655,7 @@ def main() -> int:
         check_a_compute_node_can_actually_run,
         check_the_input_reaches_a_compute_node,
         check_a_transparent_band_floats_over_the_video,
+        check_the_video_carries_a_mark,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
