@@ -37,7 +37,13 @@
 set -euo pipefail
 
 ROOT="${VSW_ROOT:-/srv/vsw}"
-UNITS="${VSW_UNITS:-vsw-worker vsw-web}"
+# vsw-scaler IS ON THIS LIST. It was not, and the consequence was invisible
+# and expensive: the scaler builds the cloud-config every node boots from, so
+# a scaler left running old code kept creating nodes from the OLD config long
+# after the fix was deployed. The fix looked wrong; it had simply never been
+# loaded. Anything that renders configuration for other machines has to be
+# restarted with the release that changed it.
+UNITS="${VSW_UNITS:-vsw-worker vsw-web vsw-scaler}"
 HEALTH_URL="${VSW_HEALTH_URL:-http://127.0.0.1:5000/api/library}"
 KEEP="${VSW_KEEP_RELEASES:-5}"
 RELEASE="${1:?usage: deploy.sh <release-directory-name>}"
