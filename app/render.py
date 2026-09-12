@@ -139,11 +139,15 @@ class Style:
     # observed figures leave clear, and the person posting the video is the
     # one who can see what actually covers it.
     portrait_offset: float = 0.32
-    # A small mark burned into the pixels, so a video reposted without credit
-    # is still recognisable as coming from here — the one identification that
-    # survives a re-upload and a re-encode, unlike a caption or a hashtag. On
-    # by default; the text is the site so a found video points home.
-    watermark: bool = True
+    # A small text mark burned into the pixels. OFF: it was added on my own
+    # initiative and shipped without being asked for, and a line of text the
+    # owner did not choose has no business on somebody's performance. The
+    # code stays because the capability is sound -- a mark in the pixels is
+    # the only credit that survives a re-upload -- but it is opt-in now.
+    #
+    # It is also NOT the mark the design screen promises. That is the weefeen
+    # LOGO at the head of the title panel, which app/panel.py does not draw.
+    watermark: bool = False
     watermark_text: str = "chopin.weefeen.com"
     crf: int = 20
 

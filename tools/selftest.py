@@ -2474,10 +2474,11 @@ def check_the_video_carries_a_mark() -> str:
     from PIL import Image
     from app import render as rnd
 
-    # On by default, and the request does not have to ask for it.
-    if not rnd.Style().watermark:
-        raise Failed("the watermark is off by default; a video that leaves "
-                     "here should carry the mark unless it is turned off")
+    # OFF by default, deliberately: it was never asked for, and a line of
+    # text the owner did not choose does not belong on someone's performance.
+    if rnd.Style().watermark:
+        raise Failed("the text watermark is ON by default; it was added "
+                     "unasked and must stay opt-in")
 
     work = pathlib.Path(tempfile.mkdtemp())
     for canvas in ((1920, 1080), (1080, 1920), (1080, 1080)):
