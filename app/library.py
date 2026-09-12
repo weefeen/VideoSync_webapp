@@ -46,6 +46,7 @@ def _key(name: str) -> str:
     return unicodedata.normalize("NFC", name)
 
 from . import package as pkg
+from . import storage
 from .settings import settings
 
 # How long a scan of the score roots stays good. Short enough that adding a
@@ -137,6 +138,36 @@ class _Catalogue:
 
     @staticmethod
     def _scan() -> _Snapshot:
+        """The library, from the bucket where there is one, else from disk.
+
+        FROM THE BUCKET, because the web box does not have the scores any
+        more and has no business having them: it answers what is in the
+        library and draws one plate, and it was carrying twenty-five
+        megabytes of engraving per package to do it -- 26 GB once the 375
+        that are coming are installed.
+
+        Disk remains the answer where there is no bucket: a development box,
+        and the test suite, which builds packages in a temporary directory
+        and must keep working without a network.
+        """
+        if storage.available():
+            from . import scorestore
+            try:
+                found = scorestore.entries()
+            except Exception as exc:                   # noqa: BLE001
+                # Never take the library down for a bucket hiccup; the disk
+                # may still have something, and an empty catalogue tells
+                # every visitor their score is gone.
+                return _Snapshot({}, {"the published catalogue":
+                                      f"could not be read: {exc}"},
+                                 time.monotonic())
+            usable = {_key(e.name): e for e in found
+                      if not e.surname or settings.allows(e.surname)}
+            return _Snapshot(usable, {}, time.monotonic())
+        return _Catalogue._from_disk()
+
+    @staticmethod
+    def _from_disk() -> _Snapshot:
         usable: dict = {}
         broken: dict = {}
         for root in settings.score_roots:

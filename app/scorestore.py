@@ -30,6 +30,7 @@ correct rather than each repeating the same three corrections.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import pathlib
@@ -37,6 +38,8 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
+import time
 
 from . import storage
 from .settings import settings
@@ -44,6 +47,18 @@ from .settings import settings
 logger = logging.getLogger(__name__)
 
 PREFIX = "scores/"
+
+# One object holding every package's metadata. ONE, not one per package: the
+# web box reads this on a timer to answer "what is in the library", and 375
+# separate fetches to answer one page request is not a catalogue, it is a
+# fan-out. Publishing is rare and reads it first, so a single object costs
+# one extra GET at install time and saves 374 on every read.
+CATALOGUE = f"{PREFIX}catalogue.json"
+
+# How long the web box trusts its copy. Long enough that a burst of visitors
+# is one fetch, short enough that an operator who installs a score sees it
+# without restarting anything.
+CATALOGUE_SECONDS = 60.0
 
 
 def key(name: str) -> str:
@@ -69,6 +84,80 @@ def local_root() -> pathlib.Path | None:
         if root.exists:
             return root.path
     return None
+
+
+class _Band:
+    """Enough of a band for the catalogue to be counted and described.
+
+    The web box no longer has the band images -- that is the entire point --
+    so it cannot hand out real `Band` objects. What it is asked for is how
+    many there are and whether they are vector, and that is what this is.
+    """
+
+    __slots__ = ("is_vector", "first_measure")
+
+    def __init__(self, is_vector: bool, first_measure: int = 1) -> None:
+        self.is_vector = is_vector
+        self.first_measure = first_measure
+
+
+class Entry:
+    """One package as the web box knows it: everything but the bytes.
+
+    Deliberately the same attribute names a `ScorePackage` exposes, because
+    every reader of the library -- the works listing, the edition preference
+    order, the recognition answer -- was written against a package and there
+    is no reason for any of them to learn that the score is somewhere else
+    now. What they need is a title, an opus, a band shape and a count; none
+    of that requires twenty-five megabytes of engraving on this disk.
+    """
+
+    def __init__(self, data: dict) -> None:
+        self._d = data
+        self.name = data["name"]
+        self.title = data.get("title", "")
+        self.opus = data.get("opus", "")
+        self.edition = data.get("edition", "")
+        self.display_name = data.get("display_name") or self.name
+        self.surname = data.get("surname", "")
+        self.last_measure = int(data.get("last_measure") or 0)
+        self.has_vector = bool(data.get("has_vector"))
+        self.band_size = tuple(data.get("band_size") or (0, 0))
+        self.pages = int(data.get("pages") or 0)
+        # The score's own Humdrum header. Carried whole rather than as the
+        # two fields read today: it is a few hundred bytes, it is what the
+        # CC BY credit is built from, and a catalogue that drops it would
+        # have to be republished for all 375 packages the first time
+        # anything wanted one more record out of it.
+        self.metadata = dict(data.get("metadata") or {})
+        self.bands = [_Band(self.has_vector, m)
+                      for m in (data.get("band_measures") or [])]
+        # There is no local directory. Anything that reaches for one is
+        # asking for bytes this host does not have, and should say so
+        # rather than read a path that happens not to exist.
+        self.root = None
+
+    def to_json(self) -> dict:
+        return dict(self._d)
+
+
+def describe(package) -> dict:
+    """A package boiled down to what a catalogue needs."""
+    w, h = package.band_size
+    return {
+        "name": package.name,
+        "title": package.title,
+        "opus": package.opus,
+        "edition": package.edition,
+        "display_name": package.display_name,
+        "surname": package.surname,
+        "last_measure": package.last_measure,
+        "has_vector": package.has_vector,
+        "band_size": [int(w), int(h)],
+        "band_measures": [b.first_measure for b in package.bands],
+        "pages": len(sorted(package.root.glob("pages/page_*.svg"))),
+        "metadata": dict(package.metadata or {}),
+    }
 
 
 def publish(folder: pathlib.Path) -> int:
@@ -99,7 +188,165 @@ def publish(folder: pathlib.Path) -> int:
             capture_output=True, text=True)
         if done.returncode != 0:
             raise RuntimeError(f"tar failed for {name}: {done.stderr.strip()}")
-        return storage.put(archive, key(name))
+        stored = storage.put(archive, key(name))
+
+    # THE THREE THINGS A WEB BOX NEEDS, none of which is the package. It
+    # answers "what is in the library" from the catalogue and draws one
+    # decorative plate; it has no reason to carry the engraving, and until
+    # this existed it carried all of it -- 134 MB for two scores, and 26 GB
+    # for the 375 that are coming.
+    from . import package as pkgmod
+    loaded = pkgmod.load(folder)
+    _put_catalogue_entry(describe(loaded))
+    _put_preview(folder)
+    _cache.clear()
+    return stored
+
+
+# What the PREVIEW needs, published loose beside the tar. Loose, because the
+# web box wants exactly one of these and must not pull a hundred megabytes
+# to draw a background; and only these two, because they are all the site
+# ever shows before a render: the opening band at its true proportions, and
+# one engraved plate behind the page furniture.
+PREVIEW_BAND = "band.svg"
+
+
+def preview_key(name: str, relative: str) -> str:
+    """Where one preview asset lives in the bucket."""
+    return f"{PREFIX}{name}/{relative}"
+
+
+def plate_name(n: int) -> str:
+    """The nth engraved plate, numbered from one.
+
+    Renumbered on publish rather than keeping the engraver's filenames: the
+    endpoint has always addressed these by position in a sorted list, and
+    an index is the only thing a caller can ask for without first being
+    told what the files are called.
+    """
+    return f"pages/p{max(1, n)}.svg"
+
+
+def _put_preview(folder: pathlib.Path) -> int:
+    """The band and the plates, as loose objects. Returns how many."""
+    sent = 0
+    bands = sorted((folder / "score" / "lines").glob("*.svg"),
+                   key=lambda q: int(q.stem) if q.stem.isdigit() else 0)
+    if bands:
+        storage.put(bands[0], preview_key(folder.name, PREVIEW_BAND))
+        sent += 1
+    for n, plate in enumerate(sorted(folder.glob("pages/page_*.svg")), 1):
+        storage.put(plate, preview_key(folder.name, plate_name(n)))
+        sent += 1
+    return sent
+
+
+def preview(name: str, relative: str) -> pathlib.Path | None:
+    """One preview asset on local disk, fetched from the bucket if need be.
+
+    A CACHE, not a library. The web box used to carry every package -- 134
+    MB for two scores and 26 GB for the 375 that are coming -- to serve two
+    small files per score that a visitor might look at. This keeps those
+    two, for the scores somebody actually previews, and nothing else: a few
+    hundred kilobytes each, deletable at any moment, refetched when needed.
+
+    Returns None when the bucket has no such asset, which is ordinary: most
+    packages have no engraved plates at all.
+    """
+    if not storage.available():
+        return None
+    root = pathlib.Path(settings.work_dir) / "cache" / "preview" / name
+    local = root / relative
+    if local.is_file():
+        return local
+
+    key_ = preview_key(name, relative)
+    if storage.head(key_) is None:
+        return None
+    local.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        storage.get(key_, local)
+    except Exception:                                  # noqa: BLE001
+        logger.warning("could not fetch preview %s", key_, exc_info=True)
+        return None
+    return local
+
+
+def _put_catalogue_entry(entry: dict) -> None:
+    """Add or replace one package in the catalogue, keeping the rest.
+
+    Read, modify, write. Two installs running at once would lose one of
+    them; installs are an operator running a command and do not overlap,
+    and the repair is to publish the loser again.
+    """
+    current = {e["name"]: e for e in _read_catalogue()}
+    current[entry["name"]] = entry
+    body = json.dumps({"version": 1,
+                       "packages": [current[k] for k in sorted(current)]},
+                      ensure_ascii=False, indent=1).encode("utf-8")
+    with tempfile.TemporaryDirectory() as tmp:
+        out = pathlib.Path(tmp) / "catalogue.json"
+        out.write_bytes(body)
+        storage.put(out, CATALOGUE)
+
+
+def _read_catalogue() -> list[dict]:
+    """The catalogue as published, or an empty one if there is none yet."""
+    if storage.head(CATALOGUE) is None:
+        return []
+    with tempfile.TemporaryDirectory() as tmp:
+        out = pathlib.Path(tmp) / "catalogue.json"
+        storage.get(CATALOGUE, out)
+        try:
+            body = json.loads(out.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            logger.error("the published catalogue is not readable: %s", exc)
+            return []
+    return list(body.get("packages") or [])
+
+
+class _Cache:
+    """The catalogue, re-fetched on a timer.
+
+    The fetch happens outside the lock, like the disk scan it replaces: it
+    is a network round trip and holding every reader on it would make one
+    slow bucket a slow site.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._at = 0.0
+        self._entries: list[dict] = []
+
+    def clear(self) -> None:
+        with self._lock:
+            self._at = 0.0
+
+    def entries(self) -> list[dict]:
+        with self._lock:
+            fresh, at = list(self._entries), self._at
+        if at and time.monotonic() - at < CATALOGUE_SECONDS:
+            return fresh
+        try:
+            got = _read_catalogue()
+        except Exception:                              # noqa: BLE001
+            # A bucket that cannot be reached must not empty the library and
+            # tell every visitor their score is gone. The last good answer
+            # stands until it can be refreshed.
+            logger.warning("could not refresh the score catalogue; keeping "
+                           "the last one", exc_info=True)
+            return fresh
+        with self._lock:
+            self._entries, self._at = got, time.monotonic()
+        return list(got)
+
+
+_cache = _Cache()
+
+
+def entries() -> list[Entry]:
+    """Every package in the published library, as the web box sees it."""
+    return [Entry(e) for e in _cache.entries()]
 
 
 def published(name: str) -> int | None:

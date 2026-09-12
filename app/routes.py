@@ -23,6 +23,7 @@ from . import jobs, package as pkg, pipeline
 from .queue import webside
 from . import botcheck
 from . import identify as ident
+from . import scorestore
 from . import library
 from . import limits
 from . import metrics
@@ -397,13 +398,17 @@ def api_page(name: str):
     package = library.find(name)
     if package is None:
         return jsonify({"error": f"No score package named {name!r}."}), 404
-
-    pages = sorted(package.root.glob("pages/page_*.svg"))
-    if not pages:
+    if not package.pages:
         return jsonify({"error": "That score has no engraved pages."}), 404
 
     wanted = request.args.get("n", type=int) or 1
-    chosen = pages[max(0, min(len(pages) - 1, wanted - 1))]
+    wanted = max(1, min(package.pages, wanted))
+    # From the bucket, into a small cache. The plates are published as loose
+    # objects precisely so that drawing one costs one small file rather than
+    # the whole package.
+    chosen = scorestore.preview(name, scorestore.plate_name(wanted))
+    if chosen is None:
+        return jsonify({"error": "That page is not published."}), 404
 
     ink = _hex_colour(request.args.get("ink", ""))
     # Trimmed by default: as page furniture the blank margins are
@@ -445,8 +450,24 @@ def api_pages(name: str):
     package = library.find(name)
     if package is None:
         return jsonify({"error": f"No score package named {name!r}."}), 404
-    return jsonify({"pages": len(sorted(package.root.glob("pages/page_*.svg")))})
+    return jsonify({"pages": package.pages})
 
+
+class _PreviewBand:
+    """The one band the preview draws, as the handler below expects it.
+
+    The handler was written against a package's own Band -- a path and
+    whether it is vector -- and there is no reason for it to learn that the
+    file now arrives from the bucket instead of a score directory sitting
+    on this disk.
+    """
+
+    __slots__ = ("path", "is_vector", "first_measure")
+
+    def __init__(self, path, is_vector: bool) -> None:
+        self.path = path
+        self.is_vector = is_vector and str(path).lower().endswith(".svg")
+        self.first_measure = 1
 
 @bp.get("/api/library/<path:name>/band")
 def api_band(name: str):
@@ -461,18 +482,16 @@ def api_band(name: str):
     if package is None or not package.bands:
         return jsonify({"error": f"No score package named {name!r}."}), 404
 
-    measure = request.args.get("measure", type=int)
-    band = package.bands[0]
-    if measure is not None:
-        # The band in force at that measure: the last one that has started.
-        for candidate in package.bands:
-            if candidate.first_measure <= measure:
-                band = candidate
-            else:
-                break
-    elif not band.is_vector:
-        band = next((b for b in package.bands
-                     if b.first_measure == band.first_measure and b.is_vector), band)
+    # THE OPENING BAND, always. One band per score is published for the
+    # preview; the rest live only inside the package tar, and reaching a
+    # later one would mean pulling a hundred megabytes onto the web box to
+    # draw a thumbnail. `?measure=` is answered with the opening band
+    # rather than refused: nothing on the site asks for another, and a
+    # broken image would be a worse answer than the right piece of music.
+    path = scorestore.preview(name, scorestore.PREVIEW_BAND)
+    if path is None:
+        return jsonify({"error": "That score has no published band."}), 404
+    band = _PreviewBand(path, package.has_vector)
 
     # Tint the engraving, when asked and when it is vector. Verovio's own
     # stylesheet inside the file sets `stroke: currentColor` and leaves
@@ -1071,7 +1090,13 @@ def api_render(job_id: str):
     if not score:
         return jsonify({"error": "Pick a score first."}), 400
 
-    package = pipeline.find_package(score)
+    # AGAINST THE LIBRARY THE VISITOR WAS SHOWN, not against this box's
+    # disk. They chose from what /api/library offered, which is the
+    # published catalogue; validating the choice against a different source
+    # is how a perfectly good score gets refused. It also means this box
+    # does not need the score to accept a job for it -- the machine that
+    # renders fetches the package itself.
+    package = library.find(score)
     if package is None:
         # The request dies here, as it always did. Nothing is parked and the
         # visitor is told plainly that the score is not in the library.

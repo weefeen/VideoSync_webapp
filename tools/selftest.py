@@ -2829,6 +2829,138 @@ def check_the_score_reaches_a_compute_node() -> str:
             f"root fetched it and the loader played it back as "
             f"{usable[0].display_name!r}; cached, and not offered mid-fetch")
 
+def check_the_web_box_needs_no_scores() -> str:
+    """The site answers from the published catalogue, not from a disk.
+
+    THE PROBLEM. The web box carried every score package so that it could
+    answer three questions -- what is in the library, what does the opening
+    band look like, and what does one engraved plate look like -- and it
+    was carrying twenty-five megabytes of engraving per score to do it. Two
+    scores cost 134 MB. The 375 that are coming would cost about 26 GB, on
+    a box with 63 GB free, to serve a few hundred kilobytes of preview.
+
+    Recognition never needed them: it matches a recording against 8.8 MB of
+    fingerprint index and names a piece. Only the catalogue and the preview
+    ever touched a package, and neither needs the package.
+
+    So the catalogue is published to the bucket and the two preview files
+    are published loose beside it. Proven here with an in-memory bucket and
+    a score root that DOES NOT EXIST: publish, then answer every question
+    the site asks, with nowhere on disk for a score to be.
+    """
+    import dataclasses
+    import shutil
+    from app import library, package as pkg, scorestore, storage
+    from app.settings import settings
+
+    installed = library.packages()
+    if not installed:
+        raise Failed("no score package installed to publish")
+    source = min((q.root for q in installed),
+                 key=lambda r: sum(f.stat().st_size
+                                   for f in r.rglob("*") if f.is_file()))
+    real = pkg.load(source)
+
+    bucket: dict = {}
+    saved = (storage.put, storage.head, storage.get, storage.available,
+             storage.list_keys, library.settings, scorestore.settings)
+
+    def fput(local, key):
+        data = pathlib.Path(local).read_bytes(); bucket[key] = data
+        return len(data)
+
+    def fhead(key):
+        return len(bucket[key]) if key in bucket else None
+
+    def fget(key, local):
+        q = pathlib.Path(local); q.parent.mkdir(parents=True, exist_ok=True)
+        q.write_bytes(bucket[key]); return len(bucket[key])
+
+    def flist(prefix):
+        return [k for k in bucket if k.startswith(prefix)]
+
+    work = pathlib.Path(tempfile.mkdtemp())
+    try:
+        storage.put, storage.head, storage.get = fput, fhead, fget
+        storage.available = lambda: True
+        storage.list_keys = flist
+        scorestore.publish(source)
+
+        # A WEB BOX WITH NO SCORES. Not an empty directory -- no directory.
+        nowhere = dataclasses.replace(settings, score_roots=[],
+                                      work_dir=work)
+        library.settings = nowhere
+        scorestore.settings = nowhere
+        library._catalogue = library._Catalogue()      # noqa: SLF001
+
+        found = library.packages()
+        if len(found) != 1:
+            raise Failed(f"the library shows {len(found)} scores on a box "
+                         f"with none on disk; it should show the published "
+                         f"one")
+        entry = found[0]
+
+        # Everything /api/library puts on the page, and the licence credit
+        # the CC BY terms require, all without a package on this disk.
+        if entry.name != real.name or entry.last_measure != real.last_measure:
+            raise Failed("the catalogue disagrees with the score it came "
+                         "from about its name or its length")
+        if tuple(entry.band_size) != tuple(real.band_size):
+            raise Failed(f"the catalogue says the band is {entry.band_size} "
+                         f"and the score says {real.band_size}; the preview "
+                         f"would draw the wrong shape")
+        if len(entry.bands) != len(real.bands):
+            raise Failed("the catalogue lost bands")
+        if entry.metadata.get("PPR", "") != real.metadata.get("PPR", ""):
+            raise Failed("the publisher is missing from the catalogue, and "
+                         "the CC BY licence on these scores requires it")
+        if library.find(real.name) is None:
+            raise Failed("a score cannot be found by name, so the render "
+                         "request that names it would be refused")
+
+        # The preview, fetched one small file at a time.
+        band = scorestore.preview(real.name, scorestore.PREVIEW_BAND)
+        if band is None or not band.is_file() or band.stat().st_size < 1000:
+            raise Failed("the opening band did not arrive, so the preview "
+                         "would show an empty frame")
+        plates = len(sorted(source.glob("pages/page_*.svg")))
+        if entry.pages != plates:
+            raise Failed(f"the catalogue counts {entry.pages} engraved "
+                         f"plates and there are {plates}")
+        if plates:
+            got = scorestore.preview(real.name, scorestore.plate_name(1))
+            if got is None or not got.is_file():
+                raise Failed("the engraved plate did not arrive")
+
+        # AND THE POINT OF ALL OF IT: what landed on this box is the
+        # preview, not the library.
+        cached = sum(f.stat().st_size for f in work.rglob("*") if f.is_file())
+        whole = sum(f.stat().st_size
+                    for f in source.rglob("*") if f.is_file())
+        if cached > whole / 4:
+            raise Failed(f"{cached / 1e6:.0f} MB landed on the web box for a "
+                         f"{whole / 1e6:.0f} MB package; that is the library "
+                         f"again, not a preview")
+    finally:
+        (storage.put, storage.head, storage.get, storage.available,
+         storage.list_keys, library.settings, scorestore.settings) = saved
+        library._catalogue = library._Catalogue()      # noqa: SLF001
+        scorestore._cache.clear()                      # noqa: SLF001
+        shutil.rmtree(work, ignore_errors=True)
+
+    # Recognition is on the web box and must stay independent of all this:
+    # it names a recording from a fingerprint index, and a box with no
+    # scores must still be able to tell a visitor what they played.
+    id_src = (ROOT / "app" / "identify.py").read_text(encoding="utf-8")
+    if "score_roots" in id_src or "library" in id_src.split("\n")[0:0] or \
+            "from . import library" in id_src:
+        raise Failed("the recogniser reaches into the score library, so a "
+                     "box without the scores could not identify a recording")
+
+    return (f"catalogue, band and plate all served with no score root at "
+            f"all; {cached / 1e3:.0f} KB cached against a "
+            f"{whole / 1e6:.0f} MB package")
+
 def check_the_edition_is_credited() -> str:
     """The engraving's publisher is named on the band, quietly.
 
@@ -3050,6 +3182,7 @@ def main() -> int:
         check_a_compute_node_can_actually_run,
         check_the_input_reaches_a_compute_node,
         check_the_score_reaches_a_compute_node,
+        check_the_web_box_needs_no_scores,
         check_a_transparent_band_floats_over_the_video,
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
