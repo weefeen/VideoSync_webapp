@@ -13,9 +13,176 @@
     "to": "now"
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "job",
+        "type": "textbox",
+        "label": "Job",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "description": "Set by clicking a row above. Empty shows nothing below."
+      }
+    ]
   },
   "panels": [
+    {
+      "type": "table",
+      "title": "Every video made",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 14,
+        "x": 0,
+        "y": 0
+      },
+      "description": "Every finished video, newest first. `total` is what the visitor actually waited -- upload landing to video existing -- not render time, which is the smaller half. `sec/GB` is work per gigabyte of upload, which is comparable between jobs where raw duration is not: a longer recording is a bigger file, so duration says more about the upload than about us.\\n\\nClick a row to break it down below.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/renders",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "renders",
+          "columns": []
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "total_seconds": true
+            },
+            "indexByName": {
+              "when": 0,
+              "piece": 1,
+              "total_minutes": 2,
+              "seconds_per_gb": 3,
+              "upload_mb": 4,
+              "recording_minutes": 5,
+              "job": 6
+            },
+            "renameByName": {
+              "when": "Finished (UTC)",
+              "piece": "Composition",
+              "total_minutes": "Total (min)",
+              "seconds_per_gb": "sec / GB",
+              "upload_mb": "Upload (MB)",
+              "recording_minutes": "Recording (min)",
+              "job": "Job"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Job"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Break this job down",
+                    "url": "?${__url_time_range}&var-job=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Where that job's time went",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "vsw-infinity"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 10,
+        "x": 14,
+        "y": 0
+      },
+      "description": "The job selected above, phase by phase. TOTAL is the whole wait; `waiting to start` is everything before rendering began -- choosing a score, and the queue while a machine boots. That phase is usually the largest and is the one no other panel here measures.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "vsw-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://127.0.0.1:5000/api/renders?job=${job}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "phases",
+          "columns": []
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "phase": 0,
+              "seconds": 1,
+              "cpu_seconds": 2
+            },
+            "renameByName": {
+              "phase": "Phase",
+              "seconds": "Seconds",
+              "cpu_seconds": "CPU s"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
     {
       "type": "row",
       "title": "Now",
@@ -23,7 +190,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 11
       }
     },
     {
@@ -34,7 +201,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 1
+        "y": 12
       },
       "targets": [
         {
@@ -84,7 +251,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 1
+        "y": 12
       },
       "targets": [
         {
@@ -129,7 +296,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 1
+        "y": 12
       },
       "targets": [
         {
@@ -165,7 +332,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 1
+        "y": 12
       },
       "targets": [
         {
@@ -210,7 +377,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 1
+        "y": 12
       },
       "targets": [
         {
@@ -260,7 +427,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 1
+        "y": 12
       },
       "targets": [
         {
@@ -309,7 +476,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 16
       },
       "collapsed": false,
       "panels": []
@@ -326,7 +493,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 17
       },
       "targets": [
         {
@@ -517,7 +684,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 26
       },
       "collapsed": false,
       "panels": []
@@ -534,7 +701,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 27
       },
       "targets": [
         {
@@ -688,7 +855,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 27
       },
       "targets": [
         {
@@ -809,7 +976,7 @@
         "h": 9,
         "w": 16,
         "x": 0,
-        "y": 23
+        "y": 34
       },
       "targets": [
         {
@@ -980,7 +1147,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 23
+        "y": 34
       },
       "targets": [
         {
@@ -1089,7 +1256,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 43
       },
       "targets": [
         {
@@ -1261,7 +1428,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 40
+        "y": 51
       },
       "targets": [
         {
@@ -1442,7 +1609,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 40
+        "y": 51
       },
       "targets": [
         {
@@ -1608,7 +1775,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 40
+        "y": 51
       },
       "targets": [
         {
@@ -1753,7 +1920,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 59
       }
     },
     {
@@ -1768,7 +1935,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 59
       },
       "targets": [
         {
@@ -1879,7 +2046,7 @@
         "h": 7,
         "w": 14,
         "x": 0,
-        "y": 49
+        "y": 60
       },
       "targets": [
         {
@@ -1922,7 +2089,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 49
+        "y": 60
       },
       "targets": [
         {
@@ -1961,7 +2128,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 67
       }
     },
     {
@@ -1972,7 +2139,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 57
+        "y": 68
       },
       "targets": [
         {
@@ -2031,7 +2198,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 57
+        "y": 68
       },
       "targets": [
         {
@@ -2090,7 +2257,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 75
       }
     },
     {
@@ -2101,7 +2268,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 65
+        "y": 76
       },
       "targets": [
         {
@@ -2141,7 +2308,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 65
+        "y": 76
       },
       "targets": [
         {
@@ -2186,7 +2353,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 71
+        "y": 82
       }
     },
     {
@@ -2201,7 +2368,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 83
       },
       "targets": [
         {
@@ -2400,7 +2567,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 81
+        "y": 92
       },
       "collapsed": false,
       "panels": []
@@ -2417,7 +2584,7 @@
         "h": 9,
         "w": 10,
         "x": 0,
-        "y": 82
+        "y": 93
       },
       "targets": [
         {
@@ -2550,7 +2717,7 @@
         "h": 9,
         "w": 14,
         "x": 10,
-        "y": 82
+        "y": 93
       },
       "targets": [
         {
@@ -2725,7 +2892,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 102
       },
       "targets": [
         {
@@ -2980,7 +3147,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 101
+        "y": 112
       },
       "targets": [
         {

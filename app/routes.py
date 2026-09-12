@@ -1359,3 +1359,71 @@ def stop_mail(token: str):
         "That address is blocked from receiving anything from us, "
         "permanently. Any video already made is still reachable from the "
         "link you were given.")
+
+
+@bp.get("/api/renders")
+def api_renders():
+    """Every finished video, and -- with ?job= -- that one's phases.
+
+    Feeds two dashboard tables: the list of everything made, and the
+    breakdown you get by clicking a row. Both come from here so the numbers
+    cannot disagree with each other.
+
+    NO ADDRESSES. The list is about the work, not the people who asked for
+    it; `/api/visitors` is where addresses live, deliberately and separately.
+
+    `seconds_per_gb` is the honest cost measure: a long recording is a big
+    file, so raw duration says more about the upload than about us. Work per
+    gigabyte is comparable between jobs.
+    """
+    job_id = (request.args.get("job") or "").strip()
+
+    if job_id:
+        row = store.one(
+            "SELECT id, created, queued_at, finished FROM jobs WHERE id = ?",
+            (job_id,))
+        phases = []
+        if row is not None:
+            created = row["created"] or 0.0
+            queued = row["queued_at"] or 0.0
+            finished = row["finished"] or 0.0
+            if finished > created:
+                phases.append({"phase": "TOTAL", "seconds":
+                               round(finished - created, 1)})
+            if queued > created:
+                phases.append({"phase": "waiting to start", "seconds":
+                               round(queued - created, 1)})
+            for run in store.query(
+                    "SELECT stage, started, ended, cpu_seconds FROM stage_runs"
+                    " WHERE job_id = ? ORDER BY started", (job_id,)):
+                if run["stage"] == "render":      # the umbrella, not a phase
+                    continue
+                if run["started"] and run["ended"]:
+                    phases.append({
+                        "phase": run["stage"],
+                        "seconds": round(run["ended"] - run["started"], 1),
+                        "cpu_seconds": round(run["cpu_seconds"] or 0.0, 1),
+                    })
+        return jsonify({"job": job_id, "phases": phases})
+
+    renders = []
+    for row in store.query(
+            "SELECT id, score, created, finished, size_bytes, duration "
+            "FROM jobs WHERE state = ? AND finished IS NOT NULL "
+            "ORDER BY finished DESC LIMIT 200", (store.DONE,)):
+        created = row["created"] or 0.0
+        finished = row["finished"] or 0.0
+        total = max(0.0, finished - created)
+        gigabytes = (row["size_bytes"] or 0) / 1e9
+        renders.append({
+            "job": row["id"],
+            "piece": notify._pretty(row["score"] or "") or "(unknown)",
+            "when": time.strftime("%Y-%m-%d %H:%M",
+                                  time.gmtime(finished)) if finished else "",
+            "total_seconds": round(total, 1),
+            "total_minutes": round(total / 60.0, 1),
+            "upload_mb": round((row["size_bytes"] or 0) / 1e6, 1),
+            "recording_minutes": round((row["duration"] or 0) / 60.0, 1),
+            "seconds_per_gb": round(total / gigabytes, 1) if gigabytes else 0.0,
+        })
+    return jsonify({"renders": renders})

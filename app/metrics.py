@@ -82,6 +82,48 @@ def render() -> str:
         out.append(_line("vsw_jobs_in_stage", running.get(stage, 0),
                          {"stage": stage}))
 
+    # ── the last finished job, phase by phase ───────────────────────────
+    # EVERY OTHER TIMING HERE MEASURES THE RENDERER. None of them answered
+    # "how long did somebody actually wait", and on the job that prompted
+    # this the answer was 25.9 minutes, of which 18.8 were spent waiting to
+    # start -- 73% of the experience, invisible on a dashboard with 27
+    # panels. So this is deliberately wall-clock and end to end: from the
+    # moment the upload landed to the moment the video existed.
+    family("vsw_last_job_phase_seconds", "gauge",
+           "The most recently finished job, broken into phases. `total` is "
+           "upload to finished video; `waiting` is before rendering began; "
+           "the rest are the pipeline's own stages.")
+    last = store.query(
+        "SELECT id, created, queued_at, finished FROM jobs "
+        "WHERE state = ? AND finished IS NOT NULL "
+        "ORDER BY finished DESC LIMIT 1", (store.DONE,))
+    if last:
+        job = last[0]
+        created = job["created"] or 0.0
+        queued = job["queued_at"] or 0.0
+        finished = job["finished"] or 0.0
+
+        if finished > created:
+            out.append(_line("vsw_last_job_phase_seconds",
+                             round(finished - created, 1), {"phase": "total"}))
+        # The wait is the part nobody was measuring: choosing a score, and
+        # then the job sitting in the queue while a machine boots.
+        if queued > created:
+            out.append(_line("vsw_last_job_phase_seconds",
+                             round(queued - created, 1), {"phase": "waiting"}))
+
+        for run in store.query(
+                "SELECT stage, started, ended FROM stage_runs "
+                "WHERE job_id = ? ORDER BY started", (job["id"],)):
+            # `render` is the umbrella around the others; reporting it
+            # alongside them would double every total built from this.
+            if run["stage"] == "render":
+                continue
+            if run["started"] and run["ended"]:
+                out.append(_line("vsw_last_job_phase_seconds",
+                                 round(run["ended"] - run["started"], 1),
+                                 {"phase": run["stage"]}))
+
     # ── what each stage costs ───────────────────────────────────────────
     # Sums and counts rather than an average, so Prometheus can average over
     # whatever window is being looked at instead of over all history.
