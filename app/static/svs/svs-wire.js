@@ -1426,27 +1426,62 @@ async function shareTheVideo(job, btn){
       blob = await response.blob();
     }
 
+    // The caption goes on the clipboard now, whichever way this ends: the
+    // share sheet may drop it, and a download has nowhere to put it.
+    try{ await navigator.clipboard.writeText(caption); }catch(e){}
+
     const file = new File([blob], 'chopin-score-video.mp4',
                           { type: 'video/mp4' });
-    if(!(navigator.canShare && navigator.canShare({ files: [file] }))){
-      throw new Error('this device will not share files');
+
+    // canShare() was asked with a TOY file when the button was drawn, and a
+    // toy file is not what it is being asked to carry. Desktop share sheets
+    // in particular accept a one-byte mp4 and refuse a hundred megabytes of
+    // one. So it is asked again, with the real thing, and refusing is an
+    // ordinary answer rather than an error.
+    const sheetTakesIt = navigator.canShare
+      && navigator.canShare({ files: [file] });
+
+    if(sheetTakesIt){
+      say('Choose where…');
+      await navigator.share({ files: [file], text: caption });
+      say('Shared ✓');
+      setTimeout(() => say(back), 2500);
+      return;
     }
-    say('Choose where…');
-    await navigator.share({ files: [file], text: caption });
-    say('Shared ✓');
-    setTimeout(() => say(back), 2500);
+
+    // No sheet, so save the file instead. It is ALREADY HERE -- throwing away
+    // a download the visitor has just waited through, to tell them to press a
+    // different button and wait again, is the version of this that shipped
+    // first and was rightly called confusing.
+    saveBlob(blob);
+    say('Saved — caption copied ✓');
+    setTimeout(() => say(back), 3500);
   }catch(err){
-    // A cancelled share sheet is not a failure; anything else falls back to
-    // the download, which always works.
-    if(err && err.name === 'AbortError'){ say(back); }
-    else{
-      say('Download instead');
-      const link = document.querySelector('.delivery .get');
-      if(link) link.scrollIntoView({ block: 'nearest' });
+    if(err && err.name === 'AbortError'){
+      // They opened the sheet and changed their mind. Nothing is wrong, and
+      // the file is still in hand.
+      say(back);
+    }else{
+      say('Could not share — use Download');
+      setTimeout(() => say(back), 3500);
     }
   }finally{
     btn.disabled = false;
   }
+}
+
+/* Save a blob we already hold, under a name a person can find again. */
+function saveBlob(blob){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'chopin-score-video.mp4';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Released on the next tick: revoking immediately can cancel the save in
+  // some browsers before it has begun.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 document.addEventListener('click', e => {
@@ -1462,7 +1497,7 @@ function shareRow(job){
     ? 'This video is yours. One tap sends it straight to Instagram, Facebook, WhatsApp or TikTok, with the caption ready — post it under your own name.'
     : 'This video is yours to post, under your own name. Download it and upload it to Instagram, Facebook, YouTube or TikTok like any other video — the caption is on your clipboard, ready to paste.';
   const shareButton = phone
-    ? `<button class="shr go" data-share-job="${esc(job)}">Share the video</button>`
+    ? `<button class="shr go" data-share-job="${esc(job)}">Get your video</button>`
     : '';
   return `<div class="share">
     <span class="shrhint">${hint}</span>
