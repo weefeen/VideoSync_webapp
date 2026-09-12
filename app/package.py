@@ -76,6 +76,22 @@ class ScorePackage:
         return self.metadata.get("OPS", "").strip()
 
     @property
+    def edition(self) -> str:
+        """The publisher this engraving came from, as a musician would cite it.
+
+        Musicians choose editions deliberately -- a Breitkopf Chopin and a
+        Paderewski Chopin disagree about phrasing, fingering and sometimes
+        notes -- so a score video that will not say which one it used is
+        worth less to exactly the people who care most. The package has
+        carried PPR and PPP all along and nothing ever showed them.
+        """
+        publisher = (self.metadata.get("PPR", "") or "").strip()
+        place = (self.metadata.get("PPP", "") or "").strip()
+        if publisher and place:
+            return f"{publisher}, {place}"
+        return publisher or place
+
+    @property
     def display_name(self) -> str:
         """Something a musician would recognise, not the folder name."""
         parts = [p for p in (self.title, self.opus) if p]

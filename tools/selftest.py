@@ -2688,6 +2688,60 @@ def check_the_video_carries_the_weefeen_mark() -> str:
     return f"panel -> {seen[rnd.PANEL_LEFT]}; no panel -> {seen[rnd.PANEL_OFF]}"
 
 
+def check_the_edition_is_credited() -> str:
+    """The engraving's publisher is named on the band, quietly.
+
+    Musicians choose editions deliberately -- a Breitkopf Chopin and a
+    Paderewski Chopin disagree about phrasing, fingering and sometimes notes
+    -- so a score video that will not say which one it used is worth less to
+    exactly the people who care most. The package carried PPR and PPP all
+    along and nothing drew them.
+
+    The colour is mixed from the band's OWN ink towards its paper, never a
+    fixed grey: the band's colours change per video, and a hardcoded dark
+    would shout on dark paper and vanish on pale ink.
+    """
+    import tempfile as _tf
+    from PIL import Image
+    from app import library, render as rnd
+
+    packages = library.packages()
+    if not packages:
+        raise Failed("no score package installed to read an edition from")
+    pkg = packages[0]
+    if not pkg.edition:
+        raise Failed(f"{pkg.name} exposes no edition; PPR/PPP are missing")
+
+    if not rnd.Style().score_credit:
+        raise Failed("the edition credit is off by default")
+
+    work = pathlib.Path(_tf.mkdtemp())
+    style = rnd.Style(aspect="16/9")
+    made = rnd._credit_png(pkg.edition, (1920, 1080), style, work)
+    if made is None:
+        raise Failed("no credit image was produced")
+    path, w, h = made
+    if not path.is_file() or Image.open(path).getbbox() is None:
+        raise Failed("the credit image is empty; nothing was drawn")
+
+    # It follows the band, and is neither the ink nor the paper.
+    ink = rnd._blend(style.band_fg, style.band_bg, 0.55)
+    if ink == (0, 0, 0) or ink == (255, 255, 255):
+        raise Failed(f"the credit colour collapsed to {ink}; it must sit "
+                     f"between the notation and the paper")
+    pale = rnd._blend("#ffffff", "#111111", 0.55)
+    if pale == ink:
+        raise Failed("the credit colour ignores the band's colours")
+
+    # It must fit beside the weefeen mark, not under it.
+    layout = rnd.compute_layout(style, 1306 / 244.0, 16 / 9)
+    if w > layout.band.w / 2:
+        raise Failed(f"the credit is {w}px on a {layout.band.w}px band; it "
+                     f"would reach the weefeen mark at the other end")
+
+    return f"{pkg.edition!r} drawn in {ink}, {w}x{h}, on every band"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2857,6 +2911,7 @@ def main() -> int:
         check_a_transparent_band_floats_over_the_video,
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
+        check_the_edition_is_credited,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
     ]

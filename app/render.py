@@ -149,6 +149,11 @@ class Style:
     # LOGO at the head of the title panel, which app/panel.py does not draw.
     watermark: bool = False
     watermark_text: str = "chopin.weefeen.com"
+    # Whether the engraving's publisher is credited on the band. On, because
+    # a score video that will not say which edition it used is worth less to
+    # the people who care most -- a conservatoire, a competition jury, anyone
+    # who knows Breitkopf and Paderewski disagree. One flag to turn off.
+    score_credit: bool = True
     crf: int = 20
 
     def __post_init__(self) -> None:
@@ -872,6 +877,53 @@ def _watermark_png(text: str, canvas: tuple[int, int],
     return path, w, h
 
 
+def _blend(a: str, b: str, towards_b: float) -> tuple[int, int, int]:
+    """A colour part way from `a` to `b`. Both #rrggbb."""
+    def rgb(h):
+        h = (h or "#000").lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    x, y = rgb(a), rgb(b)
+    t = max(0.0, min(1.0, towards_b))
+    return tuple(round(x[i] + (y[i] - x[i]) * t) for i in range(3))
+
+
+def _credit_png(text: str, canvas: tuple[int, int], style: "Style",
+                workdir: pathlib.Path) -> tuple[pathlib.Path, int, int] | None:
+    """The edition line, in a muted shade of the band's own ink.
+
+    NOT a fixed grey. The band's colours are chosen per video, and a credit
+    hardcoded dark would shout on a dark paper and vanish on a pale ink. It
+    is mixed from the notation's colour most of the way towards the paper:
+    the same family, clearly readable, and quiet enough that the eye goes to
+    the music first -- which is the whole point of a credit rather than a
+    banner.
+    """
+    from PIL import Image, ImageDraw
+
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    cw, ch = canvas
+    px = max(11, ch // 68)
+    pad = max(4, px // 3)
+    font = _watermark_font(px)
+
+    scratch = Image.new("RGBA", (10, 10))
+    box = ImageDraw.Draw(scratch).textbbox((0, 0), text, font=font)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    ink = _blend(style.band_fg, style.band_bg, 0.55)
+    img = Image.new("RGBA", (tw + 2 * pad, th + 2 * pad), (0, 0, 0, 0))
+    ImageDraw.Draw(img).text((pad - box[0], pad - box[1]), text, font=font,
+                             fill=ink + (235,))
+
+    out = workdir / "credit.png"
+    img.save(out, "PNG")
+    return out, img.width, img.height
+
+
 def _band_strip(pkg: ScorePackage, images: dict[int, pathlib.Path],
                 duration: float, fps: float, size: tuple[int, int],
                 workdir: pathlib.Path, keep_alpha: bool = False) -> pathlib.Path:
@@ -983,6 +1035,23 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         # the preview promised otherwise.
         logo = _logo_placement(style, layout, workdir)
 
+        # The edition, at the band's other end, so the two marks balance
+        # rather than crowd: ours on the right, the engraver's on the left.
+        #
+        # On EVERY band, not only the first. Clips get trimmed for social
+        # media and a credit that appears once at the opening is the first
+        # thing lost -- the same reason the weefeen mark is not a title card.
+        credit = None
+        if style.score_credit:
+            made = _credit_png(pkg.edition, layout.canvas, style, workdir)
+            if made:
+                cpath, cw_, ch_ = made
+                margin = _even_at(layout.band.w * 0.022)
+                credit = (cpath,
+                          layout.band.x + margin,
+                          layout.band.y + layout.band.h - ch_ - margin,
+                          cw_, ch_)
+
         # Inputs: 0 = backdrop, 1 = performance, 2 = band strip, then the
         # optional text mark, then the logo.
         cmd = [settings.ffmpeg, "-y"]
@@ -997,6 +1066,11 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         if logo:
             cmd += ["-loop", "1", "-i", str(logo[0])]
             logo_idx = next_input
+            next_input += 1
+        credit_idx = None
+        if credit:
+            cmd += ["-loop", "1", "-i", str(credit[0])]
+            credit_idx = next_input
             next_input += 1
 
         chain = [
@@ -1019,7 +1093,7 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         # The panel writes to "out" unless the mark comes after it, in which
         # case it writes to an intermediate label and the mark overlay makes
         # "out". The mark is last so it sits over everything, panel included.
-        panel_out = "premark" if (mark or logo) else "out"
+        panel_out = "premark" if (mark or logo or credit) else "out"
         if layout.panel is not None and meta:
             on_progress("panel", "drawing the title panel")
             text_chain, temps = panel_mod.build_chain(
@@ -1052,7 +1126,13 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         if logo:
             _, lx, ly, _, _ = logo
             chain.append(f"[{last_label}][{logo_idx}:v]"
-                         f"overlay=x={lx}:y={ly}:shortest=1[out]")
+                         f"overlay=x={lx}:y={ly}:shortest=1[lg]")
+            last_label = "lg"
+
+        if credit:
+            _, cx, cy, _, _ = credit
+            chain.append(f"[{last_label}][{credit_idx}:v]"
+                         f"overlay=x={cx}:y={cy}:shortest=1[out]")
             last_label = "out"
 
         if last_label != "out":
