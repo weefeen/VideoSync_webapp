@@ -22,6 +22,7 @@ from typing import Callable
 
 from .. import pipeline
 from .. import render as rnd
+from .. import scorestore
 from .. import storage
 from . import attempt
 from .messages import Event, RenderTask
@@ -124,8 +125,26 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
     try:
         package = pipeline.find_package(task.package)
         if package is None:
+            # NOT ON THIS DISK YET. A compute node is created from an image
+            # that was captured whenever it was captured, and the library
+            # grows every week -- so the node's disk is the wrong place to
+            # ask what can be rendered. The bucket is the library; the node
+            # fetches the ONE package this job names, which is the same
+            # wire, and the same reason, as the input recording above.
+            #
+            # Tens of seconds for a package of thousands of SVGs, once per
+            # package per node, and a node renders several jobs. The visitor
+            # is told what the pause is for rather than watching a bar stop.
+            landed = scorestore.ensure(
+                task.package,
+                lambda detail: say("progress", stage="probe", detail=detail))
+            if landed is not None:
+                package = pipeline.find_package(task.package)
+        if package is None:
             raise pipeline.PipelineError(
-                f"No score package named {task.package!r}.")
+                f"No score package named {task.package!r}, and none was "
+                f"published to the bucket under that name. Install it with "
+                f"tools/check_score.py --install.")
 
         # Where the recording actually is on THIS host. On the web box it is
         # `task.upload`, sitting on the shared disk, and this is a no-op. On a

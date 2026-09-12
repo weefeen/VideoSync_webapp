@@ -396,7 +396,13 @@ def candidates(corpus_root: pathlib.Path) -> list[pathlib.Path]:
     if not corpus_root.is_dir():
         return []
     out = [corpus_root] if is_package(corpus_root) else []
-    out += [p for p in sorted(corpus_root.iterdir()) if p.is_dir()]
+    # Dot-directories are never packages. `.fetching` is where a compute
+    # node builds a package it is downloading from the bucket, so during a
+    # fetch this directory holds a half-extracted tree -- and without this
+    # line every catalogue listing on that node would carry a broken entry
+    # that comes and goes on its own.
+    out += [p for p in sorted(corpus_root.iterdir())
+            if p.is_dir() and not p.name.startswith(".")]
     return out
 
 

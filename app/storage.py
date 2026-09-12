@@ -214,6 +214,31 @@ def head(key: str) -> int | None:
         return None
 
 
+def list_keys(prefix: str) -> list[str]:
+    """Every object key under `prefix`, paged to the end.
+
+    Paged deliberately. A bucket listing returns a thousand keys at a time
+    and stops; code that reads the first page and calls it the answer works
+    perfectly until the library passes a thousand scores, and then silently
+    forgets the rest. This will hold the whole corpus.
+    """
+    client = _connect()
+    if client is None:
+        return []
+    out: list[str] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"Bucket": settings.object_bucket,
+                                  "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = client.list_objects_v2(**kwargs)
+        out.extend(item["Key"] for item in page.get("Contents", ()))
+        if not page.get("IsTruncated"):
+            return out
+        token = page.get("NextContinuationToken")
+
+
 def presigned_get(key: str, seconds: int = 900,
                   filename: str | None = None) -> str | None:
     """A link that works for fifteen minutes and is generated per click.

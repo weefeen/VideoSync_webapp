@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import shlex
 import subprocess
 import sys
 
@@ -323,41 +324,115 @@ def check(root: pathlib.Path) -> Report:
 
 
 def install(root: pathlib.Path) -> int:
-    """Send a checked package up, in the shape installed packages have."""
+    """Send a checked package up, in the shape installed packages have.
+
+    The renaming of performance/ to reference/ happens ON THE SERVER, not in
+    tar. Windows ships bsdtar, which has no --transform, and it does not fail
+    loudly: the first hand-install produced a package with BOTH folders and
+    looked like it had worked. Anything shape-changing therefore runs where
+    the shell is known.
+    """
     name = root.name
+    which = "reference" if (root / "reference").is_dir() else "performance"
+    if not (root / which).is_dir():
+        print("  nothing to send: no reference/ or performance/",
+              file=sys.stderr)
+        return 1
+
     excludes = []
     for rel in NEVER_SHIP:
         if (root / rel).is_file():
-            excludes.append(f"--exclude={rel}")
+            excludes.append("--exclude")
+            excludes.append(rel)
 
-    print(f"\n  installing {name} ...")
-    tar = subprocess.Popen(
-        ["tar", "-cf", "-", *excludes,
-         "--transform", "s|^performance/|reference/|",
-         "score"] + (["performance"] if (root / "performance").is_dir() else [])
-        + (["reference"] if (root / "reference").is_dir() else []),
-        cwd=str(root), stdout=subprocess.PIPE)
+    print()
+    print(f"  installing {name} ...")
+    print(f"    sending score/ and {which}/"
+          + (" (without the reference audio)" if excludes else ""))
+
+    tar = subprocess.Popen(["tar", "-cf", "-", *excludes, "score", which],
+                           cwd=str(root), stdout=subprocess.PIPE)
 
     remote = f"""
       set -e
       D='{REMOTE_SCORES}/{name}'
       rm -rf "$D"; mkdir -p "$D"
       tar -xf - -C "$D"
-      # The loader only looks under score/; projects keep it beside the
-      # performance it was computed from.
-      [ -f "$D/score/chroma.npy" ] || cp "$D/reference/chroma.npy" "$D/score/chroma.npy"
+      # Installed packages keep the alignment in reference/; a project calls
+      # it performance/. Renamed here, where the shell is GNU and known.
+      if [ -d "$D/performance" ] && [ ! -d "$D/reference" ]; then
+          mv "$D/performance" "$D/reference"
+      fi
       rmdir "$D/performance" 2>/dev/null || true
+      # The loader only looks under score/ for the reference chroma.
+      if [ ! -f "$D/score/chroma.npy" ] && [ -f "$D/reference/chroma.npy" ]; then
+          cp "$D/reference/chroma.npy" "$D/score/chroma.npy"
+      fi
       chown -R vsw:vsw "$D"
-      du -sh "$D"
+      echo "    installed: $(du -sh "$D" | cut -f1)"
     """
     done = subprocess.run(["ssh", "-o", "BatchMode=yes", SERVER, remote],
                           stdin=tar.stdout)
     tar.wait()
-    if done.returncode != 0:
+    if done.returncode != 0 or tar.returncode != 0:
         print("  install FAILED", file=sys.stderr)
         return 1
-    print("  installed.")
+
+    # AND INTO THE BUCKET, which is the part that makes it renderable.
+    # The web box does not render; compute nodes do, and a node is created
+    # from an image that knows nothing about a score installed after it was
+    # captured. The bucket is the only library both machines can reach, so
+    # a package that is on the web box and not in the bucket is installed
+    # nowhere that matters.
+    #
+    # Pushed FROM THE SERVER: that is where the bucket credentials live and
+    # where the package now sits in its corrected shape. Uploading from a
+    # laptop would mean putting the bucket key on the laptop.
+    print("    publishing to the bucket, so compute nodes can fetch it")
+    if _remote_python(PUBLISH, name) != 0:
+        print("  the package is on the web box but NOT in the bucket, so no "
+              "compute node can render it", file=sys.stderr)
+        return 1
+
+    # Installed is not the same as usable: ask the server's own loader, on
+    # the server, rather than trusting that a copy succeeded.
+    _remote_python(PROBE, name)
     return 0
+
+
+# Run on the server, against the app's own code, with the package name as
+# argv[1] -- never interpolated into the source, because these names carry
+# spaces, parentheses and accents and one of them will eventually carry a
+# quote.
+PUBLISH = """
+import pathlib, sys
+sys.path.insert(0, '.')
+from app import scorestore
+name = sys.argv[1]
+n = scorestore.publish(pathlib.Path('/srv/vsw/scores') / name)
+print('    in the bucket: %.0f MB at %s' % (n / 1e6, scorestore.key(name)))
+"""
+
+PROBE = """
+import sys
+sys.path.insert(0, '.')
+from app import library, scorestore
+name = sys.argv[1]
+m = [p for p in library.packages() if p.name == name]
+if m:
+    print('    the server loads it:', m[0].display_name, '|', m[0].edition)
+else:
+    print('    THE SERVER CANNOT SEE IT')
+print('    the bucket now holds %d score(s)' % len(scorestore.catalogue()))
+"""
+
+
+def _remote_python(script: str, *args: str) -> int:
+    """Run a snippet on the server, as the app user, inside the app."""
+    cmd = ("cd /srv/vsw/current && sudo -u vsw /srv/vsw/venv/bin/python -c "
+           + shlex.quote(script)
+           + "".join(" " + shlex.quote(a) for a in args))
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", SERVER, cmd]).returncode
 
 
 def main() -> int:

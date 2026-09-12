@@ -2688,6 +2688,147 @@ def check_the_video_carries_the_weefeen_mark() -> str:
     return f"panel -> {seen[rnd.PANEL_LEFT]}; no panel -> {seen[rnd.PANEL_OFF]}"
 
 
+def check_the_score_reaches_a_compute_node() -> str:
+    """The score a node renders can get to a host that has never had it.
+
+    THE BUG THIS EXISTS FOR. Scores reached a compute node exactly one way:
+    they were rsynced onto a machine which was captured as a Linode image,
+    and nodes booted from that image. Installing a score therefore meant
+    re-capturing a multi-gigabyte image -- and until somebody did, the score
+    sat on the web box, which does not render. A score could be installed,
+    catalogued, advertised to a visitor, and unrenderable. It happened: the
+    Rondo was installed and the only machine that could have used it had no
+    idea it existed.
+
+    The suite had "the input reaches a compute node" and no sibling for the
+    score, which is why nothing said a word. This is that sibling.
+
+    Proven with an in-memory bucket and a REAL package: publish it, then
+    fetch it into a score root that starts empty -- a host that has never
+    seen this score -- and ask the loader, on that root, whether it can play
+    it. Not "the files copied": the loader's own verdict.
+    """
+    import dataclasses
+    import shutil
+    from app import package as pkg, scorestore, storage
+    from app import library
+    from app.settings import settings
+
+    packages = library.packages()
+    if not packages:
+        raise Failed("no score package installed to publish")
+    # The smallest, because this tars it for real.
+    source = min((p.root for p in packages),
+                 key=lambda r: sum(f.stat().st_size
+                                   for f in r.rglob("*") if f.is_file()))
+
+    bucket: dict = {}
+    saved = (storage.put, storage.head, storage.get, storage.available,
+             storage.list_keys)
+
+    def fput(local, key):
+        data = pathlib.Path(local).read_bytes(); bucket[key] = data
+        return len(data)
+
+    def fhead(key):
+        return len(bucket[key]) if key in bucket else None
+
+    def fget(key, local):
+        q = pathlib.Path(local); q.parent.mkdir(parents=True, exist_ok=True)
+        q.write_bytes(bucket[key]); return len(bucket[key])
+
+    def flist(prefix):
+        return [k for k in bucket if k.startswith(prefix)]
+
+    fresh = pathlib.Path(tempfile.mkdtemp())
+    try:
+        storage.put, storage.head, storage.get = fput, fhead, fget
+        storage.available = lambda: True
+        storage.list_keys = flist
+
+        # Nothing published: the answer is a clean "no", not an exception.
+        # The worker turns this into "install it with check_score.py", and
+        # it must be able to tell that apart from a broken download.
+        if scorestore.fetch(source.name, fresh) is not None:
+            raise Failed("fetching an unpublished score did not report it "
+                         "missing, so a node could not tell 'nobody "
+                         "installed this' from 'the download broke'")
+
+        stored = scorestore.publish(source)
+        if fhead(scorestore.key(source.name)) != stored:
+            raise Failed("publishing a score did not leave it in the bucket")
+        if scorestore.catalogue() != [source.name]:
+            raise Failed("the published score is not in the bucket's "
+                         "catalogue, so nothing can discover it")
+
+        # A host that has never had this score.
+        if list(fresh.iterdir()):
+            raise Failed("the fixture is wrong; the fresh root is not empty")
+        landed = scorestore.fetch(source.name, fresh)
+        if landed is None or not landed.is_dir():
+            raise Failed("the score did not arrive on a host without it")
+
+        # THE LOADER'S VERDICT, on the fresh root, not a file count.
+        verdicts = list(pkg.inspect(fresh))
+        usable = [got for _, got, _ in verdicts if got is not None]
+        if len(usable) != 1:
+            why = "; ".join(w for _, got, w in verdicts if got is None)
+            raise Failed(f"a node could not load the score it fetched: {why}")
+        if usable[0].name != source.name:
+            raise Failed(f"the fetched package calls itself "
+                         f"{usable[0].name!r}, not {source.name!r}; the "
+                         f"recogniser resolves on that exact string")
+
+        # Bands are what a render draws; a package without them is installed
+        # and useless, which is the failure this whole module is about.
+        bands = list((landed / "score" / "lines").glob("*"))
+        original = list((source / "score" / "lines").glob("*"))
+        if len(bands) != len(original) or not bands:
+            raise Failed(f"{len(bands)} band images arrived, {len(original)} "
+                         f"were published")
+
+        # Fetched once per host, not once per job: a node renders several
+        # jobs and re-downloading 110 MB for each is the node's whole hour.
+        before = len(bucket)
+        again = scorestore.fetch(source.name, fresh)
+        if again != landed or len(bucket) != before:
+            raise Failed("a second fetch did not reuse the package already "
+                         "on the host")
+
+        # The staging directory must not read as a package. During a fetch
+        # it holds a half-extracted tree, and a catalogue that lists it
+        # would show a broken score that appears and vanishes on its own.
+        (fresh / ".fetching").mkdir(exist_ok=True)
+        if any(c.name.startswith(".") for c in pkg.candidates(fresh)):
+            raise Failed("the staging directory is offered as a score "
+                         "package")
+    finally:
+        (storage.put, storage.head, storage.get, storage.available,
+         storage.list_keys) = saved
+        shutil.rmtree(fresh, ignore_errors=True)
+
+    # And the worker asks for it. Everything above is the mechanism; this is
+    # the line that connects it to a job, and its absence is what made the
+    # mechanism worth nothing for as long as it did not exist.
+    worker_src = (ROOT / "app" / "queue" / "worker.py").read_text(
+        encoding="utf-8")
+    if "scorestore.ensure" not in worker_src:
+        raise Failed("the worker never asks the bucket for a score it does "
+                     "not have, so a node still renders only what its image "
+                     "happened to be captured with")
+
+    # A node given a key scoped to jobs/ alone would meet this as a
+    # permissions error at render time. The contract says scores/ out loud.
+    cloud_src = (ROOT / "app" / "compute" / "cloudinit.py").read_text(
+        encoding="utf-8")
+    if "scores/" not in cloud_src:
+        raise Failed("the scoped compute credential's contract does not "
+                     "mention scores/, so scoping it would break rendering")
+
+    return (f"published {stored / 1e6:.0f} MB; a host with an empty score "
+            f"root fetched it and the loader played it back as "
+            f"{usable[0].display_name!r}; cached, and not offered mid-fetch")
+
 def check_the_edition_is_credited() -> str:
     """The engraving's publisher is named on the band, quietly.
 
@@ -2908,6 +3049,7 @@ def main() -> int:
         check_a_compute_node_gets_no_dangerous_secret,
         check_a_compute_node_can_actually_run,
         check_the_input_reaches_a_compute_node,
+        check_the_score_reaches_a_compute_node,
         check_a_transparent_band_floats_over_the_video,
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,

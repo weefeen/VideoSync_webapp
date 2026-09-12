@@ -101,15 +101,28 @@ def environment(source: str, broker_url: str,
     out.append(f"RABBITMQ_URL={broker_url}")
     out.append(f"WORK_DIR={work_dir}")
 
-    # The object-storage credential the node uploads results with. Prefer a
-    # SCOPED one — OBJECT_KEY_COMPUTE / OBJECT_SECRET_COMPUTE on the web box —
-    # emitted under the ordinary names the worker reads. That key should be
-    # limited to writing under jobs/ with no delete and no read of backups/,
-    # so a compromised node cannot wipe the bucket or read other visitors'
-    # videos. If it is not configured, the web box's full-bucket key is sent
-    # as before and a marker line records that the containment is not in
-    # place — visible in the node's .env and in `redacted` output, so nobody
-    # turns compute on believing it is scoped when it is not.
+    # The object-storage credential the node uses. Prefer a SCOPED one —
+    # OBJECT_KEY_COMPUTE / OBJECT_SECRET_COMPUTE on the web box — emitted
+    # under the ordinary names the worker reads.
+    #
+    # THE SCOPE THAT KEY NEEDS, exactly:
+    #     write  jobs/          the render and its working files
+    #     read   jobs/          its own input recording
+    #     read   scores/        THE SCORE LIBRARY — see app/scorestore.py
+    #     none   backups/       another visitor's video is not its business
+    #     no delete anywhere    a compromised node must not be able to wipe
+    #
+    # `scores/` is on that list because the node no longer carries the score
+    # library on its disk. It used to: the library was baked into the image,
+    # which meant installing a score required re-capturing a multi-gigabyte
+    # image and, until somebody did, the score was installed on a box that
+    # does not render. A key scoped to jobs/ alone would bring that failure
+    # back in a form that looks like a permissions error at render time.
+    #
+    # If none is configured, the web box's full-bucket key is sent as before
+    # and a marker line records that the containment is not in place —
+    # visible in the node's .env and in `redacted` output, so nobody turns
+    # compute on believing it is scoped when it is not.
     key = values.get("OBJECT_KEY_COMPUTE") or values.get("OBJECT_KEY", "")
     secret = values.get("OBJECT_SECRET_COMPUTE") or values.get("OBJECT_SECRET", "")
     scoped = bool(values.get("OBJECT_KEY_COMPUTE"))
