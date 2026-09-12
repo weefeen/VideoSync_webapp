@@ -52,7 +52,13 @@ $SSH "root@$NODE" '
 say "The stack"
 # NO -L. The `var` inside a release is a symlink to the shared working
 # directory, and following it copies every rendered video onto the image.
-for d in venv scores VideoScoreSync music_fingerprints; do
+# NO `scores` HERE. The score library used to be baked into the image, and
+# that is what made installing a score mean re-capturing a multi-gigabyte
+# image -- until somebody did, a newly installed score sat on the web box,
+# which does not render. Nodes now fetch the one package a job names from
+# the bucket (app/scorestore.py), in about a second. Baking a copy in would
+# only guarantee that every node starts with a stale library it believes.
+for d in venv VideoScoreSync music_fingerprints; do
     [ -e "$ROOT/$d" ] || continue
     printf '  %-20s' "$d"
     rsync -a --delete "$ROOT/$d/" "root@$NODE:/srv/vsw/$d/"
