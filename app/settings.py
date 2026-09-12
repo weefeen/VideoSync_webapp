@@ -161,6 +161,21 @@ class Settings:
     # Where a compute node reaches the broker: the web box's VLAN address,
     # never its public one.
     compute_broker_host: str = "10.0.0.2"
+    # The private VLAN a node is attached to, and the address it takes on it.
+    # A Linode VLAN is named by a label and is region-local; the first machine
+    # to use a label creates it. The web box sits at compute_broker_host on
+    # the same VLAN. Without an interface on this VLAN a created node has only
+    # a public NIC and cannot reach the broker at all — the node comes up,
+    # restart-loops, and is billed for nothing.
+    compute_vlan: str = "vsw-vlan"
+    compute_node_ip: str = "10.0.0.3"
+    # The broker user the RABBITMQ_URL carries. A node is handed the narrow
+    # `vsw-compute` user; the web box uses the full `vsw`. It is the one
+    # reliable "am I a node?" signal reachable from inside the worker — the
+    # node has no other flag — and it decides two things: a node must NOT try
+    # to declare the topology (its user is forbidden to, and the web box has
+    # already made it), and the web box's own worker must stand aside when
+    # compute is on so a node, not it, takes the render.
     geoip_db: pathlib.Path | None = None
     vss_root: pathlib.Path | None = None
     sync_python: str = ""
@@ -251,6 +266,23 @@ class Settings:
         if self.pair_list and not self.pair_list.is_file():
             return f"PAIR_LIST is set but there is no file at {self.pair_list}."
         return ""
+
+    @property
+    def is_compute_node(self) -> bool:
+        """Whether this process is a disposable render node, not the web box.
+
+        Read from the broker user in RABBITMQ_URL: a node is handed the narrow
+        `vsw-compute` user, the web box uses `vsw`. It is the only signal a
+        worker has about which machine it is on, and it decides that a node
+        must not declare the topology (forbidden to, and already made) and
+        that the web box's worker steps aside for a node when compute is on.
+        """
+        url = self.rabbitmq_url
+        try:
+            user = url.split("://", 1)[1].split("@", 1)[0].split(":", 1)[0]
+        except (IndexError, AttributeError):
+            return False
+        return user == "vsw-compute"
 
     @property
     def bot_check(self) -> bool:
@@ -409,6 +441,8 @@ def load() -> Settings:
         compute_ssh_key=os.getenv("COMPUTE_SSH_KEY", "").strip(),
         compute_enabled=os.getenv("COMPUTE_ENABLED", "").strip().lower()
         in ("1", "true", "yes"),
+        compute_vlan=os.getenv("COMPUTE_VLAN", "vsw-vlan").strip(),
+        compute_node_ip=os.getenv("COMPUTE_NODE_IP", "10.0.0.3").strip(),
         compute_broker_host=os.getenv("COMPUTE_BROKER_HOST",
                                       "10.0.0.2").strip(),
         geoip_db=_one("GEOIP_DB"),

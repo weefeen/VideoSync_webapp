@@ -21,12 +21,14 @@ network, or a cent.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import secrets
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,8 @@ class Machine:
 
 class Driver(Protocol):
     def create(self, label: str, plan: str, image: str, region: str,
-               user_data: str, ssh_keys: list[str]) -> Machine: ...
+               user_data: str, ssh_keys: list[str],
+               interfaces: list[dict[str, Any]] | None = None) -> Machine: ...
     def find_ours(self) -> list[Machine]: ...
     def get(self, machine_id: int) -> Machine | None: ...
     def destroy(self, machine_id: int) -> bool: ...
@@ -100,26 +103,44 @@ class LinodeDriver:
 
     # -- the three things that matter ------------------------------------
     def create(self, label: str, plan: str, image: str, region: str,
-               user_data: str, ssh_keys: list[str]) -> Machine:
+               user_data: str, ssh_keys: list[str],
+               interfaces: list[dict[str, Any]] | None = None) -> Machine:
         """One machine. NOT retried — see the module docstring."""
         if not label.startswith(LABEL_PREFIX):
             raise ComputeError(
                 f"refusing to create {label!r}: every machine this makes must "
                 f"be named {LABEL_PREFIX}… so that `destroy` can tell its own "
                 f"work from somebody else's")
-        row = self._call("POST", "/linode/instances", {
+        body: dict[str, Any] = {
             "region": region,
             "type": plan,
             "label": label,
             "image": image,
-            # Credentials reach the machine here and nowhere else: not in
-            # the image, not in the repository, not on a disk anyone can
+            # BASE64. The Metadata service requires user_data base64-encoded;
+            # raw #cloud-config text is rejected 400, and the machine either
+            # never gets created or boots with no config. This is the one
+            # channel the node's .env and broker password travel through.
+            "metadata": {
+                "user_data": base64.b64encode(
+                    user_data.encode("utf-8")).decode("ascii")},
+            # An image build requires a root password even when only keys are
+            # used to log in. It is random and never stored: SSH is by key
+            # (authorized_keys below), and a password nobody knows locks out
+            # password login rather than enabling it.
+            "root_pass": secrets.token_urlsafe(32),
+            # Credentials reach the machine only through user_data above: not
+            # in the image, not in the repository, not on a disk anyone can
             # read afterwards.
-            "metadata": {"user_data": user_data},
             "authorized_keys": ssh_keys,
             "booted": True,
             "tags": ["vsw-compute"],
-        })
+        }
+        # The private VLAN the node reaches the broker on, plus a public NIC
+        # for the object store and package mirrors. Without the VLAN the node
+        # cannot see the broker at all.
+        if interfaces:
+            body["interfaces"] = interfaces
+        row = self._call("POST", "/linode/instances", body)
         made = self._machine(row)
         logger.info("created %s (%s) as %s", made.label, plan, made.id)
         return made
@@ -175,7 +196,8 @@ class FakeDriver:
         self._next = 1000
 
     def create(self, label: str, plan: str, image: str, region: str,
-               user_data: str, ssh_keys: list[str]) -> Machine:
+               user_data: str, ssh_keys: list[str],
+               interfaces: list[dict] | None = None) -> Machine:
         if not label.startswith(LABEL_PREFIX):
             self.refused.append(label)
             raise ComputeError(f"refusing to create {label!r}")
@@ -183,6 +205,8 @@ class FakeDriver:
         made = Machine(self._next, label, "provisioning", "203.0.113.1")
         self.machines[made.id] = made
         self.creates += 1
+        self.last_interfaces = interfaces        # so a test can inspect it
+        self.last_user_data = user_data
         return made
 
     def find_ours(self) -> list[Machine]:

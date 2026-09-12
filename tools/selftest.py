@@ -2375,6 +2375,85 @@ def check_a_transparent_band_floats_over_the_video() -> str:
     return "opaque: video beside; transparent: video behind, top and bottom; "           "preview mirrors it"
 
 
+def check_a_compute_node_can_actually_run() -> str:
+    """The four defects that each stopped a created node from taking a task.
+
+    The node lifecycle was written but never ran end to end — a created node
+    could not read its env, had no route to the broker, was forbidden to
+    declare the topology it consumed, and was sent user_data the provider
+    rejects. Each is independent and each is fatal, so the automated
+    create→render→destroy loop had never worked; the hand-run tests fixed
+    these by hand. This asserts the code no longer has them.
+
+    Provider and broker SEMANTICS (does Linode accept this body, does the
+    broker admit this consumer) cannot be proven without a real create and a
+    real broker, and are not claimed here — only that the code now sends the
+    right shape and takes the right branch.
+    """
+    import base64
+    from app import settings as settings_mod
+    from app.compute import cloudinit
+    from app.compute.driver import LinodeDriver
+    from app.queue.transport import AmqpTransport
+
+    # 1) The env bridge: cloud-init links current/.env -> shared/.env, the
+    #    path the app actually loads.
+    ud = cloudinit.user_data("X=1")
+    if "ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env" not in ud:
+        raise Failed("cloud-init does not link the node's .env into the path "
+                     "the app loads; the node boots with empty config and the "
+                     "worker restart-loops")
+
+    # 2) A VLAN interface reaches the create body, and 4) user_data is base64
+    #    with a root_pass.
+    driver = LinodeDriver.__new__(LinodeDriver)
+    seen = {}
+    driver._call = lambda m, p, body=None: (
+        seen.update(body=body)
+        or {"id": 1, "label": body["label"], "status": "x", "ipv4": ["1.2.3.4"]})
+    driver.create("vsw-compute-1", "g6-dedicated-4", "private/1", "eu-central",
+                  "#cloud-config\n", ["ssh-ed25519 AAA"],
+                  interfaces=[{"purpose": "public"},
+                              {"purpose": "vlan", "label": "vsw-vlan",
+                               "ipam_address": "10.0.0.3/24"}])
+    body = seen["body"]
+    if not any(i.get("purpose") == "vlan" for i in body.get("interfaces", [])):
+        raise Failed("the create body has no VLAN interface; the node has "
+                     "only a public NIC and cannot reach the broker")
+    if not base64.b64decode(body["metadata"]["user_data"]).startswith(b"#cloud"):
+        raise Failed("user_data is not base64-encoded; the Metadata service "
+                     "rejects it and the node boots with no config")
+    if not body.get("root_pass"):
+        raise Failed("no root_pass in the create body; an image build "
+                     "requires one even when only keys are used")
+
+    # 3) A node (vsw-compute user) must NOT declare; the web box (vsw) must.
+    node = AmqpTransport("amqp://vsw-compute:pw@10.0.0.2:5672/vsw")
+    web = AmqpTransport("amqp://vsw:pw@127.0.0.1:5672/vsw")
+    if node._may_declare:
+        raise Failed("a compute node would try to declare the topology, which "
+                     "its narrow broker user is forbidden to do — an "
+                     "ACCESS_REFUSED that drops it into a reconnect loop")
+    if not web._may_declare:
+        raise Failed("the web box would NOT declare the topology, so nothing "
+                     "creates the queues")
+
+    # 5) The web box's worker stands aside when compute is on; a node does not.
+    #    Both hang off the same is_compute_node signal (the broker user).
+    import dataclasses as _dc
+    as_node = _dc.replace(settings_mod.settings,
+                          rabbitmq_url="amqp://vsw-compute:p@h/vsw")
+    as_web = _dc.replace(settings_mod.settings,
+                         rabbitmq_url="amqp://vsw:p@h/vsw")
+    if not as_node.is_compute_node:
+        raise Failed("a node is not recognised as a node from its broker user")
+    if as_web.is_compute_node:
+        raise Failed("the web box is mis-recognised as a node")
+
+    return ("env bridged, VLAN interface sent, user_data base64 + root_pass, "
+            "node skips declare, node/web-box distinguished")
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2538,6 +2617,7 @@ def main() -> int:
         check_a_job_id_is_not_guessable,
         check_the_bot_check_is_wired_and_inert_by_default,
         check_a_compute_node_gets_no_dangerous_secret,
+        check_a_compute_node_can_actually_run,
         check_the_input_reaches_a_compute_node,
         check_a_transparent_band_floats_over_the_video,
     ]

@@ -181,6 +181,20 @@ class AmqpTransport:
 
     def __init__(self, url: str) -> None:
         self._url = url
+        # Whether this process may DECLARE the topology. A compute node is
+        # handed the narrow `vsw-compute` broker user, which is forbidden to
+        # declare, bind or delete (`configure ^$`), on purpose — a
+        # compromised node must not be able to reshape or wipe the queues.
+        # The web box, on the full `vsw` user, has already made the topology,
+        # so a node only ever consumes `vsw.render` and publishes `vsw.events`
+        # that already exist. Declaring anyway is an ACCESS_REFUSED that
+        # closes the channel and drops the node into a reconnect loop where it
+        # never takes a task. So a node skips every declare and every bind.
+        try:
+            user = url.split("://", 1)[1].split("@", 1)[0].split(":", 1)[0]
+        except (IndexError, AttributeError):
+            user = ""
+        self._may_declare = user != "vsw-compute"
 
     # -- connections -----------------------------------------------------
     def _open(self):
@@ -199,7 +213,8 @@ class AmqpTransport:
             connection = self._open()
             try:
                 channel = connection.channel()
-                declare(channel)
+                if self._may_declare:
+                    declare(channel)
                 # Confirms turn a silent loss into an exception. Without them
                 # a publish can vanish while the caller logs success, and the
                 # job sits in `queued` for ever with nobody wondering why.
@@ -235,7 +250,8 @@ class AmqpTransport:
         connection = self._open()
         try:
             channel = connection.channel()
-            declare(channel)
+            if self._may_declare:
+                declare(channel)
             # One delivery at a time. With one consumer that IS the "one
             # render at a time" cap, enforced by the broker rather than by us
             # remembering to.
@@ -297,7 +313,8 @@ class AmqpTransport:
                 connection = self._open()
                 try:
                     channel = connection.channel()
-                    declare(channel)
+                    if self._may_declare:
+                        declare(channel)
                     channel.basic_qos(prefetch_count=100)
                     logger.info("consuming %s", EVENTS_QUEUE)
                     for method, _props, body in channel.consume(

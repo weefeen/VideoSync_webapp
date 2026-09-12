@@ -189,10 +189,19 @@ class Scaler:
                 f"so check before raising it.")
         keys = [settings.compute_ssh_key] if settings.compute_ssh_key else []
         label = f"{LABEL}-{int(time.time())}"
+        # A public NIC for the object store and package mirrors, and the
+        # private VLAN the node reaches the broker on. Without the VLAN the
+        # node has no route to the broker and never takes a task.
+        interfaces = [
+            {"purpose": "public"},
+            {"purpose": "vlan", "label": settings.compute_vlan,
+             "ipam_address": f"{settings.compute_node_ip}/24"},
+        ]
         try:
             machine = self.driver.create(
                 label, settings.compute_plan, settings.compute_image,
-                settings.compute_region, self._user_data(), keys)
+                settings.compute_region, self._user_data(), keys,
+                interfaces=interfaces)
         except ComputeError as exc:
             # NOT retried here. A create that failed may still have made a
             # machine, and retrying is how one becomes three; the next tick

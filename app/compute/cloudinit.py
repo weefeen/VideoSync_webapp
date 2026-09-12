@@ -147,7 +147,15 @@ runcmd:
   - [ id, -u, vsw ]
   - bash -c 'id -u vsw >/dev/null 2>&1 || useradd --system --home /srv/vsw --shell /usr/sbin/nologin vsw'
   - [ install, -d, -o, vsw, -g, vsw, /srv/vsw/shared/var ]
+  # THE ENV BRIDGE. The app loads its config from /srv/vsw/current/.env
+  # (REPO_ROOT/.env), but cloud-init wrote it to shared/.env above, and the
+  # image build excluded .env so the symlink the web box's deploy.sh makes is
+  # not baked in. Without this link the node reads an empty config, has no
+  # RABBITMQ_URL, and the worker exits and restart-loops on a machine that is
+  # being billed. This is the same link deploy.sh makes on the web box.
+  - bash -c 'ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env'
   - [ chown, -R, 'vsw:vsw', /srv/vsw/shared ]
+  - [ chown, -h, 'vsw:vsw', /srv/vsw/current/.env ]
   - [ chown, -R, 'vsw:vsw', /srv/vsw/current ]
   # The venv's scripts are read and executed, not written, so ownership is
   # left alone — chowning 1.6 GB at every boot would add seconds to a

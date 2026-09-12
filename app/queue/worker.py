@@ -276,6 +276,7 @@ def main() -> int:
     import logging
     import signal
     import sys
+    import threading
 
     from ..settings import settings
     from . import transport as transport_module
@@ -290,6 +291,28 @@ def main() -> int:
               "broker to take work from; with the in-process queue the web "
               "process is already the worker.", file=sys.stderr)
         return 2
+
+    # The web box's own worker STANDS ASIDE when compute is on. Scale-to-zero
+    # means a disposable node does the rendering, and a second consumer on the
+    # web box — an already-connected one — would take the task first, so the
+    # scaler creates a node that idles for a paid hour while this box renders.
+    # A node (the `vsw-compute` user) always consumes; the web box (the `vsw`
+    # user) consumes only while compute is off, which is also the in-process
+    # fallback. Identified by the broker user, the one signal a worker has.
+    if settings.compute_enabled and not settings.is_compute_node:
+        logger.info("compute is enabled and this is the web box; the render "
+                    "worker stands aside so a compute node takes the work")
+        # Idle instead of exiting: `Restart=always` would otherwise spin this
+        # unit forever. Block until signalled; the handlers raise SystemExit,
+        # which interrupts the wait. `threading.Event().wait()` blocks on
+        # every platform, unlike signal.pause().
+        signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        try:
+            threading.Event().wait()
+        except (SystemExit, KeyboardInterrupt):
+            pass
+        return 0
 
     bus = transport()
     logger.info("worker %s consuming tasks", name())
