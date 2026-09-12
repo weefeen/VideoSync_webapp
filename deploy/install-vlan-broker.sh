@@ -69,9 +69,25 @@ rabbitmqctl -q add_user vsw-compute "$COMPUTE_PASS" >/dev/null
 # Read the render queue, write the events queue, and nothing else: it may
 # not declare, delete or purge, so a compromised node cannot remove the work
 # of others or reshape the topology.
+# WRITE INCLUDES amq.default. Publishing to a queue by name goes through the
+# default exchange, so write on the queues alone is not enough: the node
+# connected, consumed, rendered, and then could not report the result --
+# "ACCESS_REFUSED - write access to exchange 'amq.default'". Configure stays
+# empty: a node still may not declare, delete or reshape anything.
 rabbitmqctl -q set_permissions -p vsw vsw-compute \
-    '^$' '^(vsw\.events|vsw\.render)$' '^(vsw\.events|vsw\.render)$' >/dev/null
+    '^$' '^(amq\.default|vsw\.events|vsw\.render)$' \
+    '^(vsw\.events|vsw\.render)$' >/dev/null
 echo "  user vsw-compute created, limited to vsw.render and vsw.events"
+
+# THE FIREWALL HAS TO LET THEM IN. ufw allows 22/80/443 and nothing else, so
+# a node on the VLAN could reach the broker's port only after this rule --
+# the connection simply timed out, which reads like a broker problem and is
+# not one. Scoped to the VLAN: 5672 is never open to the internet.
+if command -v ufw >/dev/null 2>&1; then
+    ufw allow from 10.0.0.0/24 to any port 5672 proto tcp \
+        comment 'RabbitMQ from compute nodes on the VLAN' >/dev/null
+    echo "  ufw: 5672 open to 10.0.0.0/24 only"
+fi
 
 say "Restart, and check what is listening"
 systemctl restart rabbitmq-server

@@ -175,8 +175,21 @@ runcmd:
   - [ chown, -R, 'vsw:vsw', /srv/vsw/current ]
   - bash -c 'ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env'
   - [ chown, -h, 'vsw:vsw', /srv/vsw/current/.env ]
+  # THE VENV'S OWNERSHIP. The image was built by rsyncing the venv with -a,
+  # which preserves the NUMERIC uid from the web box -- and `vsw` has a
+  # different uid here, so every file arrives owned by a user that does not
+  # exist. numba then cannot write its JIT cache beside librosa and the
+  # alignment dies with "no locator available". The image build skipped this
+  # chown to save seconds; measured on a real node it takes 0.8 of one.
+  - bash -c 'chown -R vsw:vsw /srv/vsw/venv /srv/vsw/scores /srv/vsw/VideoScoreSync /srv/vsw/music_fingerprints 2>/dev/null || true'
   - [ systemctl, daemon-reload ]
-  - bash -c 'grep -q vsw-pull-ok /srv/vsw/shared/pull.state && systemctl enable --now vsw-worker || echo "code pull failed; worker not started"'
+  # NOT `enable --now`. This unit is ordered After=cloud-final.service and
+  # these commands RUN INSIDE cloud-final: `--now` blocks until the unit
+  # starts, systemd will not start it until cloud-final finishes, and the two
+  # wait for each other for ever. The node boots, does nothing, and is billed.
+  # `enable` records the want, `start --no-block` queues it without waiting,
+  # and systemd runs it the moment cloud-final exits.
+  - bash -c 'if grep -q vsw-pull-ok /srv/vsw/shared/pull.state; then systemctl enable vsw-worker; systemctl start --no-block vsw-worker; else echo "code pull failed; worker not started"; fi'
 
 # A marker the scaler can look for to know cloud-init finished rather than
 # guessing from uptime.
