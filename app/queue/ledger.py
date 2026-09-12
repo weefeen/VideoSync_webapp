@@ -318,8 +318,10 @@ def _tell_them(row) -> bool:
         logger.warning("daily mail cap reached; not mailing %s", address)
         return False
     try:
+        base = (settings.public_base_url or "").rstrip("/")
+        stop = f"{base}/stop/{store.unsubscribe_token(email)}"
         notify.send_ready(row["id"], email, piece=row["score"] or "",
-                          finished=row["finished"])
+                          finished=row["finished"], unsubscribe=stop)
         store.mark_told(row["id"])
         return True
     except notify.MailError as exc:

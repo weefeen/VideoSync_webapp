@@ -265,7 +265,8 @@ CREATE TABLE IF NOT EXISTS emails (
     token_made   REAL,                -- when, so it can expire
     confirmed    REAL,                -- when they clicked
     suppressed   REAL,                -- when they said "not me". Permanent.
-    last_sent    REAL                 -- last confirmation mail, to not repeat
+    last_sent    REAL,                -- last confirmation mail, to not repeat
+    unsub_token  TEXT                 -- stable one-click unsubscribe
 );
 CREATE INDEX IF NOT EXISTS emails_token ON emails(token_hash);
 """
@@ -337,6 +338,10 @@ _ADDED = (
     # address was unconfirmed had no record that the mail was
     # still owed, and confirming later could not release it.
     ("jobs", "told", "INTEGER NOT NULL DEFAULT 0"),
+    # Every visitor mail needs a one-click unsubscribe URL, which
+    # means a token that stays the same across messages -- unlike
+    # the confirmation token, which is single use and cleared.
+    ("emails", "unsub_token", "TEXT"),
     # The recognitions table once kept `client` — the visitor's address —
     # and now keeps the place it resolved to instead, so that deleting a
     # recording deletes the address with it. An older database still has the
@@ -1190,3 +1195,49 @@ def compute_snapshot() -> dict[str, Any]:
         "creates": int(row["creates"] or 0),
         "destroys": int(row["destroys"] or 0),
     }
+
+
+def unsubscribe_token(address: str) -> str:
+    """A stable token for this address, created once and kept.
+
+    Not the confirmation token: that one is single use and cleared the moment
+    it is spent, so it cannot appear in later mail. Yahoo and Gmail require a
+    one-click unsubscribe URL on automated mail, and a URL that stops working
+    after the first message is worse than none.
+
+    It suppresses and nothing else -- it grants no access to a video, an
+    address or a job -- so it is stored as issued rather than hashed: it has
+    to be reproducible for every future message to the same person.
+    """
+    import secrets
+    address = (address or "").strip().lower()
+    if not address:
+        return ""
+    row = one("SELECT unsub_token FROM emails WHERE address = ?", (address,))
+    if row is not None and row["unsub_token"]:
+        return row["unsub_token"]
+
+    token = secrets.token_urlsafe(24)
+    now = time.time()
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO emails (address, created, unsub_token) VALUES (?,?,?) "
+            "ON CONFLICT(address) DO UPDATE SET "
+            "unsub_token = COALESCE(emails.unsub_token, excluded.unsub_token)",
+            (address, now, token))
+    row = one("SELECT unsub_token FROM emails WHERE address = ?", (address,))
+    return (row["unsub_token"] if row else token) or token
+
+
+def suppress_by_unsub(token: str, now: float) -> str | None:
+    """One-click unsubscribe. Permanent, and it outranks confirmation."""
+    if not token:
+        return None
+    row = one("SELECT address FROM emails WHERE unsub_token = ?", (token,))
+    if row is None:
+        return None
+    with write() as conn:
+        conn.execute("UPDATE emails SET suppressed = COALESCE(suppressed, ?), "
+                     "confirmed = NULL, token_hash = NULL WHERE address = ?",
+                     (now, row["address"]))
+    return row["address"]

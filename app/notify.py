@@ -186,7 +186,7 @@ def _compose(subject: str, address: str, body: str,
         outs.append(f"<{unsubscribe}>")
     sender = _address_only(settings.smtp_from)
     if sender:
-        outs.append(f"<mailto:{sender}?subject=unsubscribe>")
+        outs.append(f"<mailto:{sender}?subject=stop>")
     if outs:
         message["List-Unsubscribe"] = ", ".join(outs)
         if unsubscribe:
@@ -436,7 +436,8 @@ def send_confirm(address: str, confirm_url: str, refuse_url: str,
 
 
 def send_queued(job_id: str, address: str, piece: str = "",
-                ahead: int = 0, minutes: float | None = None) -> None:
+                ahead: int = 0, minutes: float | None = None,
+                unsubscribe: str = "") -> None:
     """Send one "we have it, here is roughly how long" message.
 
     Sent because a render can take the better part of an hour and silence
@@ -486,14 +487,16 @@ def send_queued(job_id: str, address: str, piece: str = "",
         f"You can also follow it here, or come back to it later:\n\n"
         f"{_link(job_id)}\n\n"
         f"You do not need to keep the page open.\n\n"
-        f"— Weefeen\n")
+        f"— Weefeen\n",
+        unsubscribe=unsubscribe)
     _send(message, address)
     logger.info("told %s that job %s is queued (%d ahead)",
                 address, job_id, ahead)
 
 
 def send_ready(job_id: str, address: str, piece: str = "",
-               finished: float | None = None) -> None:
+               finished: float | None = None,
+               unsubscribe: str = "") -> None:
     """Send one "it's ready" message. Raises MailError if it cannot."""
     if not settings.can_email:
         raise MailError(settings.why_cannot_email())
@@ -518,7 +521,8 @@ def send_ready(job_id: str, address: str, piece: str = "",
         f"Your video{named} has finished rendering.\n\n"
         f"{_link(job_id)}\n\n"
         f"{window}\n\n"
-        f"— Weefeen\n")
+        f"— Weefeen\n",
+        unsubscribe=unsubscribe)
 
     _send(message, address)
     logger.info("told %s that job %s is ready", address, job_id)

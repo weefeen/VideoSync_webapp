@@ -1329,3 +1329,33 @@ def confirm_address(token: str):
         "Thank you \u2014 your address is confirmed",
         "We will email you the link as soon as your video is ready. You can "
         "close this page.")
+
+
+@bp.route("/stop/<token>", methods=["GET", "POST"])
+def stop_mail(token: str):
+    """Stop mailing this address, for good.
+
+    POST as well as GET: RFC 8058 one-click, which is what Yahoo and Gmail
+    actually require, has the mail client POST here with no interaction. GET
+    is for the person who clicks the link themselves.
+
+    Called /stop rather than /unsubscribe because nobody subscribed to
+    anything: somebody asked for one video. The HEADER has to be
+    List-Unsubscribe, which the RFC fixes and mail clients look for, but no
+    wording a person reads has to borrow it.
+
+    An unknown token gets the same answer as a spent one, so a list of tokens
+    learns nothing from the difference.
+    """
+    address = store.suppress_by_unsub(token, time.time())
+    if address is None:
+        return _confirm_page(
+            "That link has expired",
+            "This address is not on our list. Nothing will be sent to it.",
+            code=410)
+    logger.info("address asked to receive no more mail")
+    return _confirm_page(
+        "You will not hear from us again",
+        "That address is blocked from receiving anything from us, "
+        "permanently. Any video already made is still reachable from the "
+        "link you were given.")

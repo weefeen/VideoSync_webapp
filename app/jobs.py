@@ -424,10 +424,13 @@ def _say_it_is_queued(job: Job) -> None:
 
     def work() -> None:
         try:
+            base = (settings.public_base_url or "").rstrip("/")
+            stop = f"{base}/stop/{store.unsubscribe_token(address)}"
             notify.send_queued(job.id, address,
                                piece=job.score or "",
                                ahead=ahead,
-                               minutes=(eta / 60.0) if eta else None)
+                               minutes=(eta / 60.0) if eta else None,
+                               unsubscribe=stop)
         except Exception:                            # noqa: BLE001
             logger.warning("could not send a queued notice to %s for job %s",
                            address, job.id, exc_info=True)
