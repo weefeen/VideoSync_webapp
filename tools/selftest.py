@@ -2536,6 +2536,45 @@ def check_one_person_cannot_hold_billions_of_buckets() -> str:
     return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
 
 
+def check_the_delivery_page_can_show_the_download() -> str:
+    """`watchRender` must BIND the elements it writes into.
+
+    The function used `box`, `stat`, `bar` and `what`, and bound none of them:
+    it called `deliveryBox()` and threw the result away. svs-wire.js runs
+    under 'use strict', so the first `bar.style.width` was a ReferenceError
+    that killed the function before it could reach the done branch. The page
+    said "your video is below" and then showed nothing below it — for every
+    visitor, including everyone arriving from the link in their email, while
+    the server had the finished video and served it correctly.
+
+    Narrow on purpose: it asserts the four names are declared inside the
+    function rather than trying to be a JavaScript linter.
+    """
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8", errors="ignore")
+
+    start = wire.find("async function watchRender(")
+    if start < 0:
+        raise Failed("watchRender is gone; this check needs rewriting")
+    nxt = wire.find("\nasync function ", start + 10)
+    alt = wire.find("\nfunction ", start + 10)
+    ends = [e for e in (nxt, alt) if e > 0]
+    body = wire[start:min(ends)] if ends else wire[start:]
+
+    for name in ("box", "stat", "bar", "what"):
+        if (f"const {name}" not in body and f"let {name}" not in body
+                and f"var {name}" not in body):
+            raise Failed(
+                f"watchRender writes to `{name}` and never declares it — "
+                f"under 'use strict' that is a ReferenceError, and the "
+                f"download link is never inserted into the page")
+
+    if "insertAdjacentHTML" not in body or "/download" not in body:
+        raise Failed("watchRender no longer inserts the download link")
+
+    return "watchRender binds box/stat/bar/what and inserts the download link"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2703,6 +2742,7 @@ def main() -> int:
         check_the_input_reaches_a_compute_node,
         check_a_transparent_band_floats_over_the_video,
         check_the_video_carries_a_mark,
+        check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "

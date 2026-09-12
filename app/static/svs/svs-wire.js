@@ -1481,6 +1481,21 @@ async function watchRender(job){
   const started = Date.now();
 
   while(Date.now() - started < 40 * 60 * 1000){
+    // THE BOX AND ITS PARTS, RE-ACQUIRED ON EVERY PASS. The comment above
+    // said this happened; the code called deliveryBox() and threw the result
+    // away, so `box`, `stat`, `bar` and `what` were never bound to anything.
+    // Under 'use strict' the first `bar.style.width` was a ReferenceError
+    // that killed this function before it could ever reach the done branch —
+    // so the page said "your video is below" and the download link was never
+    // inserted, for every visitor, including those arriving from the link in
+    // their email.
+    const box = deliveryBox();
+    if(!box) return;
+    const stat = box.querySelector('.stat');
+    const bar  = box.querySelector('.rail i');
+    const what = box.querySelector('.what');
+    if(!stat || !bar || !what) return;
+
     let s;
     try{
       const r = await fetch(`/api/jobs/${job}/status`);
@@ -1518,7 +1533,9 @@ async function watchRender(job){
     }
     await new Promise(r => setTimeout(r, 2000));
   }
-  what.textContent = 'This is taking longer than expected.';
+  const late = deliveryBox();
+  const lateWhat = late && late.querySelector('.what');
+  if(lateWhat) lateWhat.textContent = 'This is taking longer than expected.';
 }
 
 /* The tally moves when a video lands. */
