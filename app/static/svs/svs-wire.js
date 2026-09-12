@@ -1504,7 +1504,6 @@ document.addEventListener('click', e => {
 });
 
 function shareRow(job){
-  const caption = shareCaption();
   const phone = canShareFiles();
   const hint = phone
     ? 'This video is yours. One tap sends it straight to Instagram, Facebook, WhatsApp or TikTok, with the caption ready — posted under your own name.'
@@ -1512,31 +1511,14 @@ function shareRow(job){
   const shareButton = phone
     ? `<button class="shr go" data-share-job="${esc(job)}">Get your video</button>`
     : '';
+  // No "Copy caption" button. The caption is copied when the file is taken,
+  // which is the moment it is wanted; a second button for the same text is
+  // one more thing to read and decide about on a page whose whole job is
+  // handing somebody their video.
   return `<div class="share">
     <span class="shrhint">${hint}</span>
     ${shareButton}
-    <button class="shr" data-caption="${esc(caption)}">Copy caption</button>
   </div>`;
-}
-
-/* One handler for every Copy-caption button, present or future. */
-document.addEventListener('click', e => {
-  const btn = e.target.closest && e.target.closest('.shr[data-caption]');
-  if(!btn) return;
-  const text = btn.getAttribute('data-caption') || '';
-  const done = () => { btn.textContent = 'Copied ✓'; btn.classList.add('done');
-    setTimeout(() => { btn.textContent = 'Copy caption'; btn.classList.remove('done'); }, 2000); };
-  try{
-    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
-  }catch(err){ fallbackCopy(text, done); }
-});
-function fallbackCopy(text, done){
-  try{
-    const t = document.createElement('textarea');
-    t.value = text; t.style.position = 'fixed'; t.style.opacity = '0';
-    document.body.appendChild(t); t.select();
-    document.execCommand('copy'); t.remove(); done();
-  }catch(e){ /* nothing more to try; leave the button as it was */ }
 }
 
 /* Say what is true on the screen that claimed an email. */
