@@ -66,7 +66,8 @@ scrape_configs:
   # reports what the BOX has, which is the other half of the only question
   # that matters here — whether the next job fits. A render has already been
   # measured at 2457 MB of 3915 on a 7-minute recording, and the upload cap
-  # is 25 minutes.
+  # is 8 minutes — lowered from 25 because 14.1 minutes measured 4.62 GB
+  # against 3.9 GB of RAM and OOM-killed the box.
   - job_name: node
     static_configs:
       - targets: ['127.0.0.1:9100']
