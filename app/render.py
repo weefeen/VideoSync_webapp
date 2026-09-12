@@ -288,15 +288,25 @@ def compute_layout(style: Style, band_aspect: float,
             "The score band alone is taller than the frame. Reduce the panel "
             "width, or choose a wider aspect ratio.")
 
-    video_box_h = content_h - band_h - style.gap
+    # A TRANSPARENT band floats over the VIDEO, not over the backdrop. When
+    # the paper is see-through the band is composited last, over the picture,
+    # so the video must extend BEHIND it — otherwise the only thing under the
+    # notes is the dark canvas, and turning the paper transparent revealed a
+    # flat colour instead of the performance. So when the band needs alpha the
+    # video fills the whole content height and the band is laid on top of it;
+    # when the paper is solid the video sits beside the band as before, since
+    # an opaque band hides whatever is behind it and a smaller video keeps all
+    # of the picture rather than cropping it under a band nobody sees through.
+    behind = style.needs_alpha
+    video_box_h = content_h if behind else content_h - band_h - style.gap
     if video_box_h < 16:
         raise RenderError("No room left for the video beside the band.")
 
-    # The video fills the space beside the band completely, in both
-    # directions, and whatever overflows is cropped. Fitting it inside
-    # instead would leave a bar down the sides on a wide frame and a band
-    # of dead space above it on a narrow one — which is what happened
-    # beside a title panel, where the picture is too short for its column.
+    # The video fills the space (beside the band, or the whole frame behind a
+    # transparent one) completely, in both directions, and whatever overflows
+    # is cropped. Fitting it inside instead would leave a bar down the sides on
+    # a wide frame and a band of dead space above it on a narrow one — which is
+    # what happened beside a title panel, where the picture is too short.
     video_w = _even(content_w)
     video_h = _even(video_box_h)
 
@@ -315,11 +325,16 @@ def compute_layout(style: Style, band_aspect: float,
     video_x = content_x
     band_x = content_x + _even_at((content_w - band_w) / 2)
 
-    # The video is pushed against the band rather than centred in what is
-    # left, so the two always meet. Where the picture is shorter than its
-    # box — a narrower column beside a panel — the slack goes to the far
-    # edge instead of opening a seam down the middle.
-    if style.band_position == TOP:
+    # Behind a transparent band the video fills the whole content and the band
+    # is laid on top of it — at the top edge or the bottom, whichever was
+    # chosen. Beside a solid band the video is pushed against it so the two
+    # meet, and any slack from a picture shorter than its box goes to the far
+    # edge rather than opening a seam down the middle.
+    if behind:
+        video_y = content_y
+        band_y = content_y if style.band_position == TOP \
+            else content_y + content_h - band_h
+    elif style.band_position == TOP:
         band_y = content_y
         video_y = content_y + band_h + style.gap
     else:

@@ -2323,6 +2323,58 @@ def check_the_input_reaches_a_compute_node() -> str:
            "nothing staged with compute off"
 
 
+def check_a_transparent_band_floats_over_the_video() -> str:
+    """Max paper transparency shows the VIDEO through the notes, not the void.
+
+    A transparent band is composited last, over the picture. If the video
+    sits in a separate region beside the band, the only thing under the
+    floating notes is the dark canvas — so turning the paper see-through
+    revealed a flat colour instead of the performance, which is the opposite
+    of the point. When the band needs alpha the video now fills the whole
+    content and the band is laid on top of it; when the paper is solid the
+    video sits beside the band as before (an opaque band hides what is behind
+    it, and a smaller video keeps all of the picture uncropped).
+
+    The preview mirror in svs-wire.js is switched by the same `S.alpha <= 0`,
+    so the design screen shows what the render produces rather than notes over
+    a backdrop the video never had.
+    """
+    from app import render as rnd
+
+    ba, va = 1306 / 244.0, 16 / 9
+    for pos in ("top", "bottom"):
+        opaque = rnd.compute_layout(
+            rnd.Style(aspect="16/9", band_bg_opacity=1.0, band_position=pos),
+            ba, va)
+        clear = rnd.compute_layout(
+            rnd.Style(aspect="16/9", band_bg_opacity=0.0, band_position=pos),
+            ba, va)
+
+        def covers(L):
+            return (L.video.y <= L.band.y
+                    and L.video.y + L.video.h >= L.band.y + L.band.h)
+
+        if covers(opaque):
+            raise Failed(f"an OPAQUE band ({pos}) has the video behind it — "
+                         f"that crops the picture under a band nobody sees "
+                         f"through, for no gain")
+        if not covers(clear):
+            raise Failed(f"a TRANSPARENT band ({pos}) does NOT have the video "
+                         f"behind it, so the floating notes sit over the dark "
+                         f"canvas instead of the performance — the bug this "
+                         f"guards")
+
+    # And the preview is switched by the same signal, or it lies again.
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8", errors="ignore")
+    if "S.alpha <= 0" not in wire or "behind ? contentH" not in wire:
+        raise Failed("the preview no longer mirrors the transparent-band "
+                     "layout; it will show the notes over a backdrop the "
+                     "render puts them over the video")
+
+    return "opaque: video beside; transparent: video behind, top and bottom; "           "preview mirrors it"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2487,6 +2539,7 @@ def main() -> int:
         check_the_bot_check_is_wired_and_inert_by_default,
         check_a_compute_node_gets_no_dangerous_secret,
         check_the_input_reaches_a_compute_node,
+        check_a_transparent_band_floats_over_the_video,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

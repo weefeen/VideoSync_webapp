@@ -155,13 +155,21 @@ function botToken(){
       document.body.appendChild(box);
     }
     box.innerHTML = '';
+    box.hidden = false;
     let settled = false;
-    const done = t => { if(!settled){ settled = true; resolve(t); } };
+    // Take the box off the screen the instant it has done its job. Managed
+    // mode leaves the "Success!" card sitting there otherwise, which reads as
+    // "something is still happening" when the upload has already gone. The
+    // token is single-use and a fresh widget is rendered on the next upload,
+    // so removing it here loses nothing.
+    const clear = () => { try { window.turnstile.remove(box); } catch (e) {}
+      box.hidden = true; box.innerHTML = ''; };
+    const done = t => { if(settled) return; settled = true; clear(); resolve(t); };
     window.turnstile.render(box, {
       sitekey: key,
       callback: t => done(t),
-      'error-callback': () => { if(!settled){ settled = true;
-        reject(new Error('the human-check did not pass')); } },
+      'error-callback': () => { if(settled) return; settled = true; clear();
+        reject(new Error('the human-check did not pass')); },
       'timeout-callback': () => done(''),
     });
   }));
@@ -719,7 +727,12 @@ function renderLayout(){
   bandW = even(bandH * bandAspect);
   if(bandW > contentW){ bandW = even(contentW); bandH = even(bandW / bandAspect); }
 
-  const boxH = contentH - bandH - GAP;
+  // Mirrors `compute_layout`: a TRANSPARENT band floats over the video, so
+  // the video fills the whole content behind it and the band is laid on top;
+  // a solid band sits beside the video. Without this the preview showed the
+  // notes over the dark backdrop while the render put them over the picture.
+  const behind = S.alpha <= 0;
+  const boxH = behind ? contentH : contentH - bandH - GAP;
   if(boxH < 16) return null;
 
   // Cover the box on both axes: fitting inside would leave a bar down the
@@ -731,10 +744,16 @@ function renderLayout(){
   const surplusX = Math.max(0, sourceW - videoW);     // centred, no choice
 
   const top = S.bandPos === 'top';
-  const bandY = top ? contentY : contentY + boxH + GAP;
-  // Against the band, not centred: they meet, and any slack goes to the
-  // far edge rather than opening a seam between them.
-  const videoY = top ? contentY + bandH + GAP : bandY - GAP - videoH;
+  let bandY, videoY;
+  if(behind){
+    videoY = contentY;
+    bandY = top ? contentY : contentY + contentH - bandH;
+  } else {
+    bandY = top ? contentY : contentY + boxH + GAP;
+    // Against the band, not centred: they meet, and any slack goes to the
+    // far edge rather than opening a seam between them.
+    videoY = top ? contentY + bandH + GAP : bandY - GAP - videoH;
+  }
 
   return { cw, ch, surplus, surplusX,
     band:  { x: contentX + evenAt((contentW - bandW) / 2), y: bandY, w: bandW, h: bandH },
