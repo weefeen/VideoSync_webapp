@@ -1224,6 +1224,17 @@ def create_app() -> Flask:
     return app
 
 
+def _esc(text: str) -> str:
+    """Escape, and come back as a plain str.
+
+    markupsafe.escape() returns Markup, and Markup.__add__ escapes whatever
+    it is concatenated WITH. So one escaped value in the middle of a page
+    built by + turned the whole page into escaped text, and the browser
+    displayed the markup instead of rendering it. str() breaks that chain.
+    """
+    return str(escape(text))
+
+
 def _confirm_page(title: str, message: str, code: int = 200):
     """A small self-contained page. No script, no fonts, no third party.
 
@@ -1236,14 +1247,14 @@ def _confirm_page(title: str, message: str, code: int = 200):
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         "<link rel=\"icon\" href=\"/app/assets/logo/CIRCLE/WHITE_PURPLE.svg\" type=\"image/svg+xml\">"
         "<link rel=\"icon\" href=\"/app/assets/icon/icon-32.png\" sizes=\"32x32\" type=\"image/png\">"
-        "<title>" + escape(title) + "</title>"
+        "<title>" + _esc(title) + "</title>"
         "<style>body{margin:0;background:#F7F4EF;color:#17151A;"
         "font:16px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
         "display:flex;min-height:100vh;align-items:center;justify-content:center;"
         "padding:24px}main{max-width:34rem}h1{font:600 27px/1.2 Georgia,serif;"
         "margin:0 0 12px}p{margin:0 0 12px;color:#4A4652}"
         "a{color:#D93B1E}</style></head><body><main>"
-        "<h1>" + escape(title) + "</h1><p>" + message + "</p>"
+        "<h1>" + _esc(title) + "</h1><p>" + message + "</p>"
         "</main></body></html>")
     # `mimetype` takes the TYPE only: Flask appends the charset itself,
     # and passing one here produced "text/html; charset=utf-8;

@@ -31,6 +31,7 @@ import smtplib
 import socket
 import ssl
 import unicodedata
+from email import policy as email_policy
 from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid
 
@@ -148,7 +149,14 @@ def _compose(subject: str, address: str, body: str,
     The domain in the Message-ID is taken from the sending address, so it
     aligns with From and SPF instead of leaking the machine's hostname.
     """
-    message = EmailMessage()
+    # NO LINE-LENGTH FOLDING. Python folds headers past 78 characters, and
+    # for a header it does not recognise it folds by RFC 2047 ENCODING the
+    # value -- so List-Unsubscribe went out as
+    # "=?utf-8?q?=3Chttps=3A//...=3E?=", which no receiver can parse, making
+    # the header worse than absent. Unfolded, the URL stays literal. Subjects
+    # with accents are still encoded: that is driven by the characters, not
+    # by the line length, and is unaffected.
+    message = EmailMessage(policy=email_policy.default.clone(max_line_length=None))
     message["Subject"] = subject
     message["From"] = settings.smtp_from
     message["To"] = address
