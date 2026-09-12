@@ -47,7 +47,7 @@ import shlex
 # undoes the disposable-node containment. See `environment`.
 WITHHELD = ("LINODE_TOKEN", "SMTP_", "ALERT_EMAIL", "COMPUTE_",
             "TRUST_PROXY", "PUBLIC_BASE_URL", "GEOIP_DB", "TURNSTILE_",
-            "OBJECT_KEY", "OBJECT_SECRET", "FACEBOOK_")
+            "OBJECT_KEY", "OBJECT_SECRET")
 
 WORKER_UNIT = """[Unit]
 Description=VideoSync render worker

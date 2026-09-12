@@ -1375,20 +1375,16 @@ function shareCaption(){
  * job page (which unfurls the site's card) for people who just want to point
  * at it. */
 function shareRow(job){
-  // THE SITE, NOT THE JOB. The job link is a capability -- whoever holds it
-  // can download the video -- and it stops working after the retention
-  // window, so a post built on it hands strangers somebody's performance and
-  // is a dead link two days later. The site link is permanent, carries no
-  // access, and sends people somewhere that means something.
-  const pageUrl = location.origin + '/app/';
+  // THE VIDEO IS THE VISITOR'S, and it plays on a social network only when it
+  // is UPLOADED there -- a shared link never plays, it just points back here.
+  // So this does not offer "share to Facebook" buttons that quietly post a
+  // link: it tells the person to download their own video and post it under
+  // their own name, and hands them a caption to paste. That is the honest
+  // path, and the only one that puts a playing video on their feed as theirs.
   const caption = shareCaption();
-  const e = encodeURIComponent;
   return `<div class="share">
-    <span class="shrhint">Posting it yourself? Download the video, then paste this caption — the hashtag is how people find it.</span>
+    <span class="shrhint">This video is yours to post. Download it, upload it to Instagram, Facebook, YouTube or TikTok like any video, and paste this caption so people can find more:</span>
     <button class="shr" data-caption="${esc(caption)}">Copy caption</button>
-    <a class="shr" target="_blank" rel="noopener" href="https://twitter.com/intent/tweet?text=${e(caption)}&url=${e(pageUrl)}">Post to X</a>
-    <a class="shr" target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u=${e(pageUrl)}">Facebook</a>
-    <a class="shr" target="_blank" rel="noopener" href="https://wa.me/?text=${e(caption + ' ' + pageUrl)}">WhatsApp</a>
   </div>`;
 }
 

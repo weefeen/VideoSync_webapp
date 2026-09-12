@@ -2688,87 +2688,6 @@ def check_the_video_carries_the_weefeen_mark() -> str:
     return f"panel -> {seen[rnd.PANEL_LEFT]}; no panel -> {seen[rnd.PANEL_OFF]}"
 
 
-def check_a_video_can_be_put_on_facebook() -> str:
-    """The publisher asks Facebook the right thing, and leaks nothing.
-
-    A shared link never plays on Facebook; only video Facebook hosts does.
-    So the video is published to a Page through the Graph API, by handing
-    Facebook a presigned link it fetches itself -- the bucket stays private
-    and the link dies shortly after. This proves the request shape without
-    touching Facebook, and that the Page token never reaches a compute node.
-    """
-    import dataclasses as _dc
-    import urllib.parse as _up
-    from app import social
-    from app import settings as settings_mod
-    from app.compute import cloudinit
-
-    # 1. The token is withheld from a compute node's environment.
-    env = cloudinit.environment(
-        "FACEBOOK_PAGE_TOKEN=secret-page-token\nFACEBOOK_PAGE_ID=123\n"
-        "FONT_DIR=/f\n", "amqp://x")
-    if "FACEBOOK" in env:
-        raise Failed("a Facebook credential would be sent to a compute node")
-
-    # 2. Unconfigured, it refuses rather than trying.
-    saved = social.settings
-    social.settings = _dc.replace(settings_mod.settings,
-                                  facebook_page_id="", facebook_page_token="")
-    try:
-        try:
-            social.post_video("anything")
-            raise Failed("post_video ran with no Page configured")
-        except social.SocialError:
-            pass
-
-        # 3. Configured: exactly one POST to /<page>/videos with file_url,
-        #    description and the token -- and the answer's id becomes a link.
-        social.settings = _dc.replace(settings_mod.settings,
-                                      facebook_page_id="4242",
-                                      facebook_page_token="tok-secret")
-        seen = {}
-
-        class _Resp:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def read(self): return b'{"id": "9911"}'
-
-        def fake_open(req, timeout=0):
-            seen["url"] = req.full_url
-            seen["body"] = _up.parse_qs(req.data.decode())
-            return _Resp()
-
-        saved_open = social.urllib.request.urlopen
-        saved_get = social.store.get_job
-        saved_sign = social.storage.presigned_get
-        social.urllib.request.urlopen = fake_open
-        social.store.get_job = lambda jid: {"state": "done", "object_key": "k/v.mp4",
-                                            "score": "Op.39_x"}
-        social.storage.presigned_get = lambda key, seconds=0: "https://b/v.mp4?sig"
-        try:
-            answer = social.post_video("job1")
-        finally:
-            social.urllib.request.urlopen = saved_open
-            social.store.get_job = saved_get
-            social.storage.presigned_get = saved_sign
-
-        if not seen["url"].endswith("/4242/videos"):
-            raise Failed(f"posted to {seen['url']}, not the Page's videos edge")
-        body = seen["body"]
-        if body.get("file_url") != ["https://b/v.mp4?sig"]:
-            raise Failed("Facebook was not given the presigned link to fetch")
-        if body.get("access_token") != ["tok-secret"]:
-            raise Failed("the Page token was not sent")
-        if not body.get("description", [""])[0].startswith("Chopin"):
-            raise Failed("the caption is not the owner's wording")
-        if answer.get("permalink") != "https://www.facebook.com/9911":
-            raise Failed("the video id did not become a Facebook link")
-    finally:
-        social.settings = saved
-
-    return "token withheld from nodes; refuses unconfigured; POSTs file_url + caption to /<page>/videos"
-
-
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2938,7 +2857,6 @@ def main() -> int:
         check_a_transparent_band_floats_over_the_video,
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
-        check_a_video_can_be_put_on_facebook,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
     ]
