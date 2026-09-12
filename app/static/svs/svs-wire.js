@@ -1699,9 +1699,12 @@ function sayTheLimit(){
   const mb = SERVER.maxUploadMb || 0;
   if(!mb) return;
   const size = mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 ? 1 : 0)} gb` : `${mb} mb`;
-  const mins = SERVER.maxMinutes || 0;
-  lab.textContent = `mp4 · mov · avi · mkv · webm — up to ${size}` +
-                    (mins ? `, ${mins | 0} minutes` : '');
+  // The LENGTH is deliberately not advertised. It is a limit of the machine
+  // this happens to run on, not of what the site is for, and printing it on
+  // the drop zone turned a temporary ceiling into a promise about the
+  // repertoire. It is still enforced on the server; a recording over it is
+  // refused there with the actual number, which is where the number belongs.
+  lab.textContent = `mp4 · mov · avi · mkv · webm — up to ${size}`;
 }
 
 /* The "it's on its way" screen still promised seven days.
