@@ -200,6 +200,11 @@ class Settings:
     # and belongs only in .env; the site key is public and reaches the page.
     turnstile_site_key: str = ""
     turnstile_secret: str = ""
+    # Publishing finished videos to a Facebook PAGE, where they play in
+    # the feed -- a shared link never does. The token can post as the
+    # Page: .env only, never a compute node, never printed.
+    facebook_page_id: str = ""
+    facebook_page_token: str = ""
     # How long the emailed link keeps working. Afterwards the video is
     # archived rather than deleted — still ours, no longer a download.
     #
@@ -459,6 +464,8 @@ def load() -> Settings:
         public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/"),
         turnstile_site_key=os.getenv("TURNSTILE_SITE_KEY", "").strip(),
         turnstile_secret=os.getenv("TURNSTILE_SECRET", "").strip(),
+        facebook_page_id=os.getenv("FACEBOOK_PAGE_ID", "").strip(),
+        facebook_page_token=os.getenv("FACEBOOK_PAGE_TOKEN", "").strip(),
         retention_hot_hours=_number("RETENTION_HOT_HOURS", 48.0),
         archive_transition_days=int(_number("ARCHIVE_TRANSITION_DAYS", 3)),
     )
