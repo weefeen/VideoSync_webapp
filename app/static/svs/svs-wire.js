@@ -1361,6 +1361,7 @@ function shareCaption(){
   let piece = 'Chopin, with the score playing along';
   try{ const w = P(); if(w && w.t) piece = `Chopin — ${w.t}`; }catch(e){}
   return `${piece}, played with the engraved score synced bar by bar. `
+    + `Made at ${location.host} `
     + `#Chopin #Piano #ScoreVideo #weefeen`;
 }
 
@@ -1371,7 +1372,12 @@ function shareCaption(){
  * job page (which unfurls the site's card) for people who just want to point
  * at it. */
 function shareRow(job){
-  const pageUrl = location.origin + '/app/#job=' + encodeURIComponent(job);
+  // THE SITE, NOT THE JOB. The job link is a capability -- whoever holds it
+  // can download the video -- and it stops working after the retention
+  // window, so a post built on it hands strangers somebody's performance and
+  // is a dead link two days later. The site link is permanent, carries no
+  // access, and sends people somewhere that means something.
+  const pageUrl = location.origin + '/app/';
   const caption = shareCaption();
   const e = encodeURIComponent;
   return `<div class="share">
