@@ -635,7 +635,11 @@ def send_job_ended(*, job_id: str, ok: bool, piece: str = "",
         return
     to = one_address(to)
 
-    named = _ascii(piece or job_id)
+    # The package FOLDER is not a piece name. The operator mail carried
+    # "Op.39_3eme Scherzo pour le Piano_(Breitkopf)__039-1-BH" in its
+    # subject and body, which is unreadable in an inbox listing.
+    pretty = _pretty(piece) if piece else ""
+    named = _ascii(pretty or job_id)
 
     if ok:
         took = ""
@@ -643,7 +647,7 @@ def send_job_ended(*, job_id: str, ok: bool, piece: str = "",
             took = (f" in {seconds / 60:.0f} min {seconds % 60:.0f} s"
                     if seconds >= 60 else f" in {seconds:.0f} s")
         lines = [f"Job {job_id} finished{took}.", "",
-                 f"    Piece  {piece or '(none recorded)'}",
+                 f"    Piece  {pretty or '(none recorded)'}",
                  f"    Told   " + ("yes, the link has been mailed to them"
                                    if told else
                                    "NOBODY - there was no address, or the "
@@ -651,7 +655,7 @@ def send_job_ended(*, job_id: str, ok: bool, piece: str = "",
                  "", _link(job_id), ""]
     else:
         lines = [f"Job {job_id} did not finish.", "",
-                 f"    Piece  {piece or '(none recorded)'}",
+                 f"    Piece  {pretty or '(none recorded)'}",
                  f"    Stage  {stage or '(unknown)'}"]
         if error_class:
             lines.append(f"    Class  {error_class}")

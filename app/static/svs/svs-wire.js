@@ -1489,21 +1489,29 @@ async function watchRender(job){
     // so the page said "your video is below" and the download link was never
     // inserted, for every visitor, including those arriving from the link in
     // their email.
+    let s;
+    try{
+      const r = await fetch(`/api/jobs/${job}/status`);
+      s = (await r.json()).job || {};
+    }catch(err){
+      const b = deliveryBox(), w = b && b.querySelector('.what');
+      if(w) w.textContent = 'Lost contact with the server while rendering.';
+      return;
+    }
+
+    // ACQUIRED AFTER THE AWAIT, NOT BEFORE IT. The fetch above yields to the
+    // event loop, and a deferred draw() rebuilds the done section while we
+    // are suspended -- so a box fetched beforehand is DETACHED by the time
+    // the answer arrives, and everything written into it, the download link
+    // included, goes into an element that is no longer in the page. The
+    // symptom is a page that says "your video is below" above nothing at
+    // all, which is exactly what it did.
     const box = deliveryBox();
     if(!box) return;
     const stat = box.querySelector('.stat');
     const bar  = box.querySelector('.rail i');
     const what = box.querySelector('.what');
     if(!stat || !bar || !what) return;
-
-    let s;
-    try{
-      const r = await fetch(`/api/jobs/${job}/status`);
-      s = (await r.json()).job || {};
-    }catch(err){
-      what.textContent = 'Lost contact with the server while rendering.';
-      return;
-    }
     const stages = s.stages || {};
     const order = ['prepare', 'align', 'bands', 'strip', 'encode', 'done'];
     const at = order.filter(k => stages[k] === 'done').length;
@@ -1517,9 +1525,11 @@ async function watchRender(job){
       bar.style.width = '100%';
       const size = s.output_bytes ? ` · ${(s.output_bytes / 1e6).toFixed(0)} MB` : '';
       what.innerHTML = `Your scored video is ready${size}.`;
-      box.insertAdjacentHTML('beforeend',
-        `<a class="get" href="/api/jobs/${job}/download">Download the video</a>`
-        + shareRow(job));
+      if(!box.querySelector('.get')){
+        box.insertAdjacentHTML('beforeend',
+          `<a class="get" href="/api/jobs/${job}/download">Download the video</a>`
+          + shareRow(job));
+      }
       showCountAgain();
       return;
     }
