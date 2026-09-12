@@ -130,8 +130,12 @@ class Scaler:
     def tick(self) -> dict:
         """Reconcile, decide, act. Returns what it saw and did."""
         live = self._reconcile()
+        # `live` tells the tick that this decision WILL be acted on, so it
+        # does not also write a would-create/would-destroy row in front of
+        # the real created/destroyed one.
         shadow = store.compute_tick(settings.compute_grace_seconds,
-                                    settings.compute_keep_if_arrivals)
+                                    settings.compute_keep_if_arrivals,
+                                    live=self.enabled)
         wanted = shadow["state"] == "wanted"
 
         # There is actual work, right now.

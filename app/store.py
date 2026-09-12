@@ -844,7 +844,8 @@ def compute_row() -> sqlite3.Row:
 
 
 def compute_tick(grace_seconds: float,
-                 keep_if_arrivals: float = 1.0) -> dict[str, Any]:
+                 keep_if_arrivals: float = 1.0,
+                 live: bool = False) -> dict[str, Any]:
     """Decide what a scaler would do now, and remember it. Returns the state.
 
     THE SCRAPE IS THE TICK. Prometheus polls every 30 s, which is a fine
@@ -946,7 +947,12 @@ def compute_tick(grace_seconds: float,
             " creates=?, destroys=?, updated=? WHERE singleton = 1",
             (state, row["since"] if state == row["state"] else now,
              idle_since, round(would_run, 3), creates, destroys, now))
-        if event:
+        # "would-create" is only the truth while nothing acts on it. Once the
+        # scaler really creates and destroys, it records `created` and
+        # `destroyed` itself a few seconds later, and writing both put a
+        # would-pair in front of every real action -- two rows for one event,
+        # in a table whose whole job is to say what happened.
+        if event and not live:
             conn.execute(
                 "INSERT INTO compute_events (at, action, reason, ready,"
                 " unacked, idle) VALUES (?,?,?,?,?,?)",
@@ -1151,3 +1157,36 @@ def jobs_awaiting_mail(address: str, since: float) -> list:
         "SELECT * FROM jobs WHERE lower(email) = ? AND state = 'done' "
         "AND told = 0 AND created >= ? ORDER BY created DESC LIMIT 5",
         ((address or "").strip().lower(), since))
+
+
+def compute_snapshot() -> dict[str, Any]:
+    """What the compute state IS. Reads; never decides, never writes.
+
+    `compute_tick` is a decision: it moves the state, counts a create, and
+    records an event. It was being called from the metrics endpoint as well
+    as the scaler, so every Prometheus scrape ran a second, competing
+    decision -- inflating the counters and writing a "would-create" a few
+    seconds before the scaler's real "created". A dashboard is an observer;
+    observing must not change what is observed.
+    """
+    counts = {r["state"]: r["n"] for r in query(
+        "SELECT state, COUNT(*) AS n FROM jobs GROUP BY state")}
+    ready = int(counts.get(QUEUED, 0))
+    unacked = int(counts.get(RUNNING, 0))
+
+    row = compute_row()
+    now = time.time()
+    began = row["since"] or now
+    paid_until = began + math.ceil(max(now - began, 1) / 3600.0) * 3600
+    idle_since = row["idle_since"]
+    return {
+        "state": row["state"],
+        "ready": ready,
+        "unacked": unacked,
+        "paid_left": (max(0.0, paid_until - now)
+                      if row["state"] == "wanted" else 0.0),
+        "idle_seconds": 0.0 if idle_since is None else now - idle_since,
+        "would_run": float(row["would_run"] or 0.0),
+        "creates": int(row["creates"] or 0),
+        "destroys": int(row["destroys"] or 0),
+    }

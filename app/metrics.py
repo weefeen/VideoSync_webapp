@@ -162,15 +162,14 @@ def render() -> str:
     out.append(_line("vsw_videos_delivered_total", whole["n"]))
 
 
-    # ── the compute node, in shadow ─────────────────────────────────────
-    # Nothing creates a machine yet. Every scrape records what a scaler
-    # WOULD have decided, so the trigger can be watched against real traffic
-    # before it is given the power to spend money — and so the grace period
-    # is chosen from evidence rather than guessed. THE SCRAPE IS THE TICK.
-    shadow = store.compute_tick(settings.compute_grace_seconds,
-                                settings.compute_keep_if_arrivals)
-    if shadow.get("event"):
-        _tell_the_operator(shadow)
+    # ── the compute node ────────────────────────────────────────────────
+    # READ ONLY. The scrape used to BE the tick, which was right while
+    # nothing acted on the decision. Once the scaler creates and destroys
+    # real machines, a second ticker on every scrape is a competing decision:
+    # it inflated the create/destroy counters and wrote a "would-create" a
+    # few seconds before each genuine "created". The scaler owns the
+    # decision; this endpoint reports it.
+    shadow = store.compute_snapshot()
 
     family("vsw_queue_ready", "gauge",
            "Jobs accepted and not yet started — what a scaler reads as "
