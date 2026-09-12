@@ -69,8 +69,8 @@ groups:
               range: false
               # Fraction of the machine that is genuinely spoken for.
               expr: >-
-                1 - (node_memory_MemAvailable_bytes /
-                     node_memory_MemTotal_bytes)
+                1 - (node_memory_MemAvailable_bytes{job="node"} /
+                     node_memory_MemTotal_bytes{job="node"})
           - refId: over
             relativeTimeRange:
               from: 600
@@ -143,8 +143,8 @@ groups:
               instant: true
               range: false
               expr: >-
-                vsw_peak_rss_bytes / on() group_left()
-                node_memory_MemTotal_bytes
+                vsw_peak_rss_bytes
+                / scalar(max(node_memory_MemTotal_bytes))
           - refId: over
             relativeTimeRange:
               from: 3600

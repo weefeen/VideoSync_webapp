@@ -182,6 +182,15 @@ runcmd:
   # alignment dies with "no locator available". The image build skipped this
   # chown to save seconds; measured on a real node it takes 0.8 of one.
   - bash -c 'chown -R vsw:vsw /srv/vsw/venv /srv/vsw/scores /srv/vsw/VideoScoreSync /srv/vsw/music_fingerprints 2>/dev/null || true'
+  # THE MACHINE'S OWN METRICS. Rendering moved here, and the dashboard's CPU
+  # and memory panels were still scraping the web box -- which now does
+  # nothing, so they described an idle machine while this one did the work.
+  # Bound to the VLAN address, never 0.0.0.0: this node has a public NIC and
+  # an unauthenticated metrics endpoint on it would publish the machine's
+  # internals to the internet.
+  - bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends prometheus-node-exporter >/dev/null 2>&1 || true'
+  - bash -c 'V=$(ip -4 -o addr show | grep -o "10[.]0[.]0[.][0-9]*" | head -1); if [ -n "$V" ]; then echo ARGS=--web.listen-address=$V:9100 > /etc/default/prometheus-node-exporter; fi'
+  - bash -c 'systemctl enable prometheus-node-exporter >/dev/null 2>&1; systemctl restart --no-block prometheus-node-exporter || true'
   - [ systemctl, daemon-reload ]
   # NOT `enable --now`. This unit is ordered After=cloud-final.service and
   # these commands RUN INSIDE cloud-final: `--now` blocks until the unit

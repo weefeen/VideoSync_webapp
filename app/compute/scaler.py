@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import logging
 import signal
+import json
+import pathlib
 import time
 
 from .. import limits, notify, storage, store
@@ -45,6 +47,37 @@ logger = logging.getLogger(__name__)
 # One machine, one name. The provider enforces label uniqueness per account,
 # which is the last thing standing between two scalers and two machines.
 LABEL = "vsw-compute"
+
+
+# Where Prometheus looks for compute nodes. File-based discovery, because a
+# node is ephemeral and a static target would be permanently down between
+# renders; Prometheus re-reads the directory on its own, so nothing has to be
+# reloaded. Written when a machine is created, emptied when it goes away.
+TARGETS_FILE = pathlib.Path("/etc/prometheus/targets/compute.json")
+
+
+def _publish_target(present: bool) -> None:
+    """Tell Prometheus whether there is a node to scrape. Never fatal.
+
+    A dashboard that cannot see the renderer is a real cost, but it is not
+    worth failing a create or a destroy over -- the video matters more than
+    the graph of it.
+    """
+    try:
+        TARGETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if present:
+            body = json.dumps([{
+                "targets": [f"{settings.compute_node_ip}:9100"],
+                "labels": {"job": "compute", "host": "compute-node"},
+            }])
+        else:
+            body = "[]"
+        tmp = TARGETS_FILE.with_suffix(".tmp")
+        tmp.write_text(body, encoding="utf-8")
+        tmp.replace(TARGETS_FILE)          # atomic: never a half-read file
+    except Exception:                      # noqa: BLE001
+        logger.warning("could not update the Prometheus target file",
+                       exc_info=True)
 
 
 class Scaler:
@@ -227,11 +260,13 @@ class Scaler:
                 f"next tick will look again in case the machine was in fact "
                 f"created.")
         store.compute_record_create(machine.id, machine.label)
+        _publish_target(True)
         return f"created {machine.label} ({machine.id})"
 
     def _destroy(self, machine: Machine) -> str:
         if not self.enabled:
             return f"would destroy {machine.label} ({self.why_not()})"
+        _publish_target(False)
         try:
             self.driver.destroy(machine.id)
         except ComputeError as exc:
