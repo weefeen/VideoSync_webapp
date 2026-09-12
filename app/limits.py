@@ -21,6 +21,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import ipaddress
 import os
 import threading
 import time
@@ -233,5 +234,30 @@ def client_key(request) -> str:
                      (request.headers.get("X-Forwarded-For") or "").split(",")
                      if p.strip()]
         if forwarded:
-            return forwarded[-1]
-    return request.remote_addr or "unknown"
+            return _bucket(forwarded[-1])
+    return _bucket(request.remote_addr or "unknown")
+
+
+def _bucket(address: str) -> str:
+    """One key per CUSTOMER, which for IPv6 is a /64 and not an address.
+
+    An IPv4 address is a person. An IPv6 address is not: the smallest thing
+    handed to a home or a phone is a /64, and many providers give a /56 or
+    /48. Keying on the full address therefore gave a single visitor 2^64
+    buckets — every limit in this app was one `ping6` away from being
+    unlimited, without spoofing anything, just by using the next address in
+    a range that is legitimately theirs. Truncating to the /64 makes the
+    quota belong to the subscriber the way it already does on IPv4.
+
+    A /64 can be shared (carrier NAT, a university), so this errs toward
+    treating a few people as one rather than one person as billions. An
+    address that will not parse is returned unchanged: it is still a stable
+    string to count against, and refusing to count is worse.
+    """
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if parsed.version == 6:
+        return str(ipaddress.ip_network(f"{parsed}/64", strict=False).network_address) + "/64"
+    return str(parsed)

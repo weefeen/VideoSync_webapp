@@ -2489,6 +2489,33 @@ def check_the_video_carries_a_mark() -> str:
     return "on by default; transparent PNG, drawn and sized, fits every aspect"
 
 
+def check_one_person_cannot_hold_billions_of_buckets() -> str:
+    """An IPv6 visitor is a /64, not an address.
+
+    An IPv4 address is roughly a person. An IPv6 address is not: the smallest
+    allocation to a home or a phone is a /64. Keying limits on the full
+    address gave one visitor 2**64 buckets — every cap here was one address
+    away from unlimited, with no spoofing at all, just by using the next
+    address in a range legitimately theirs. This asserts the truncation.
+    """
+    from app.limits import _bucket
+
+    a = _bucket("2001:db8:abcd:1234:5:6:7:8")
+    b = _bucket("2001:db8:abcd:1234:ffff:ffff:ffff:ffff")
+    if a != b:
+        raise Failed(f"two addresses in ONE /64 got different buckets "
+                     f"({a} vs {b}) — the cap is bypassed by changing address")
+    if _bucket("2001:db8:abcd:9999::1") == a:
+        raise Failed("two different /64s share a bucket — unrelated visitors "
+                     "would spend each other's quota")
+    if _bucket("203.0.113.9") != "203.0.113.9":
+        raise Failed("an IPv4 address was rewritten; it is already one person")
+    if _bucket("unknown") != "unknown":
+        raise Failed("an unparseable key was dropped; refusing to count is "
+                     "worse than counting something odd")
+    return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
+
+
 def check_the_page_is_actually_styled() -> str:
     """Everything the script puts on the page can be seen, and the CSS parses.
 
@@ -2656,6 +2683,7 @@ def main() -> int:
         check_the_input_reaches_a_compute_node,
         check_a_transparent_band_floats_over_the_video,
         check_the_video_carries_a_mark,
+        check_one_person_cannot_hold_billions_of_buckets,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
