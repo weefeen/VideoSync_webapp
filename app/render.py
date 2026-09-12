@@ -915,6 +915,13 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
             wx = min(width - wm_w, layout.video.x + layout.video.w - wm_w - pad)
             wy = min(height - wm_h,
                      layout.video.y + layout.video.h - wm_h - pad)
+            # KEEP IT OFF THE SCORE. Behind a transparent band the video fills
+            # the whole frame, so "bottom-right of the video" is also on top of
+            # the notation — the mark landed across the staff, over the one
+            # thing the video exists to show. Lift it clear of the band when
+            # the band is at the bottom; a band at the top never reaches here.
+            if style.needs_alpha and style.band_position != TOP:
+                wy = min(wy, layout.band.y - wm_h - pad)
             wx, wy = max(0, wx), max(0, wy)
             chain.append(f"[{last_label}][3:v]overlay=x={wx}:y={wy}"
                          f":shortest=1[out]")

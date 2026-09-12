@@ -2486,7 +2486,27 @@ def check_the_video_carries_a_mark() -> str:
         if img.getbbox() is None:
             raise Failed("the watermark image is empty — no text was drawn")
 
-    return "on by default; transparent PNG, drawn and sized, fits every aspect"
+    # And it must not land ON the notation. Behind a transparent band the
+    # video fills the frame, so "bottom-right of the video" is also on top of
+    # the score — the mark sat across the staff, over the one thing the video
+    # exists to show.
+    for opacity in (0.0, 1.0):
+        style = rnd.Style(aspect="16/9", band_bg_opacity=opacity,
+                          band_position="bottom")
+        L = rnd.compute_layout(style, 1306 / 244.0, 16 / 9)
+        _, mark_w, mark_h = rnd._watermark_png("chopin.weefeen.com",
+                                               L.canvas, work)
+        pad = max(8, L.canvas[1] // 90)
+        wy = min(L.canvas[1] - mark_h, L.video.y + L.video.h - mark_h - pad)
+        if style.needs_alpha and style.band_position != rnd.TOP:
+            wy = min(wy, L.band.y - mark_h - pad)
+        if wy + mark_h > L.band.y:
+            raise Failed(f"at opacity {opacity} the mark overlaps the score "
+                         f"band (mark ends {wy + mark_h}, band starts "
+                         f"{L.band.y}) — it would sit across the notation")
+
+    return ("on by default; transparent PNG, drawn and sized, fits every "
+            "aspect, and clear of the score band")
 
 
 def check_one_person_cannot_hold_billions_of_buckets() -> str:
