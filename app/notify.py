@@ -419,17 +419,17 @@ def send_confirm(address: str, confirm_url: str, refuse_url: str,
     named = f" of {_pretty(piece)}" if piece else ""
     message = _compose(
         "Confirm your email to get your score video", address,
-        f"Somebody -- we hope you -- uploaded a recording{named} at "
+        f"Someone uploaded a recording{named} at "
         f"{settings.public_base_url} and asked us to email the finished "
         f"video to this address.\n\n"
-        f"Confirm that this address is yours and we will send you the link "
-        f"as soon as the video is ready:\n\n"
+        f"If that was you, confirm the address and we will send the link as "
+        f"soon as the video is ready:\n\n"
         f"{confirm_url}\n\n"
         f"We will not email you again unless you click that.\n\n"
-        f"If this was not you, nothing has been sent anywhere and you can "
+        f"If it was not you, nothing has been sent anywhere, and you can "
         f"stop us from ever mailing this address:\n\n"
         f"{refuse_url}\n\n"
-        f"-- Weefeen\n",
+        f"Weefeen\n",
         unsubscribe=refuse_url)
     _send(message, address)
     logger.info("asked %s to confirm the address", address)
