@@ -756,9 +756,19 @@ def _watermark_png(text: str, canvas: tuple[int, int],
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     ox, oy = pad - box[0], pad - box[1]
-    # A shadow one pixel down-right, then the mark, both semi-transparent.
-    draw.text((ox + 1, oy + 1), text, font=font, fill=(0, 0, 0, 150))
-    draw.text((ox, oy), text, font=font, fill=(255, 255, 255, 205))
+    # An OUTLINE, not just a drop shadow. White text with a shadow reads well
+    # over dark footage and nearly vanishes over a brightly lit stage or a
+    # white piano — and which of those a visitor uploads is not ours to
+    # choose. A dark stroke around every glyph keeps the mark legible on any
+    # background, which is the whole point of burning it in.
+    stroke = max(1, px // 14)
+    try:
+        draw.text((ox, oy), text, font=font, fill=(255, 255, 255, 225),
+                  stroke_width=stroke, stroke_fill=(0, 0, 0, 165))
+    except TypeError:
+        # Pillow older than 6.2 has no stroke; fall back to the shadow.
+        draw.text((ox + 1, oy + 1), text, font=font, fill=(0, 0, 0, 150))
+        draw.text((ox, oy), text, font=font, fill=(255, 255, 255, 205))
 
     path = workdir / "watermark.png"
     img.save(path, "PNG")
