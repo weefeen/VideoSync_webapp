@@ -1245,7 +1245,11 @@ def _confirm_page(title: str, message: str, code: int = 200):
         "a{color:#D93B1E}</style></head><body><main>"
         "<h1>" + escape(title) + "</h1><p>" + message + "</p>"
         "</main></body></html>")
-    response = Response(body, status=code, mimetype="text/html; charset=utf-8")
+    # `mimetype` takes the TYPE only: Flask appends the charset itself,
+    # and passing one here produced "text/html; charset=utf-8;
+    # charset=utf-8" -- a malformed header that browsers refuse to treat
+    # as HTML, so the confirmation page arrived as visible source.
+    response = Response(body, status=code, mimetype="text/html")
     # A confirmation link is a one-time credential. Keeping it out of caches
     # and out of the referer header costs nothing and is the difference
     # between "used once" and "used by whoever reads the proxy log".

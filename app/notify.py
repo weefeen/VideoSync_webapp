@@ -97,7 +97,37 @@ def one_address(raw: str) -> str:
     return raw
 
 
-def _compose(subject: str, address: str, body: str) -> EmailMessage:
+def _pretty(piece: str) -> str:
+    """A name a musician would recognise, not the package folder.
+
+    Mail carried the folder verbatim -- "Op.39_3eme Scherzo pour le
+    Piano_(Breitkopf)__039-1-BH" -- underscores, edition code, mangled
+    accent. To a person that reads as machine output, and to a spam filter it
+    reads the same way. The package knows its own title; falling back to a
+    tidied folder name keeps a missing package from emptying the sentence.
+    """
+    piece = (piece or "").strip()
+    if not piece:
+        return ""
+    try:
+        from . import library
+        for pkg in library.packages():
+            if pkg.name == piece:
+                return pkg.display_name
+    except Exception:                                # noqa: BLE001
+        pass
+    # No package to ask: drop the trailing edition code and the underscores.
+    tidy = piece.split("__")[0].replace("_", " ").strip()
+    return " ".join(tidy.split())
+
+def _address_only(raw: str) -> str:
+    """`Weefeen <info@weefeen.com>` -> `info@weefeen.com`."""
+    from email.utils import parseaddr
+    return parseaddr(raw or "")[1]
+
+
+def _compose(subject: str, address: str, body: str,
+             unsubscribe: str = "") -> EmailMessage:
     """One message, with the headers a receiver expects to find.
 
     Written because Yahoo filed the first real message as spam, and three of
@@ -136,6 +166,25 @@ def _compose(subject: str, address: str, body: str) -> EmailMessage:
     # a mailer that will not say which build it is looks like software
     # pretending to be a mail client.
     message["X-Mailer"] = "VideoSync 1.0"
+
+    # LIST-UNSUBSCRIBE. Yahoo and Gmail have required this of automated
+    # senders since February 2024, and its absence is on its own enough to
+    # get a message filed as spam -- which is what happened: SPF, DKIM and
+    # DMARC all passed and Yahoo still said "we think this is spam". A
+    # one-click URL where we have one, and the mailbox either way, so there
+    # is always a way out that does not depend on reading the body.
+    outs = []
+    if unsubscribe:
+        outs.append(f"<{unsubscribe}>")
+    sender = _address_only(settings.smtp_from)
+    if sender:
+        outs.append(f"<mailto:{sender}?subject=unsubscribe>")
+    if outs:
+        message["List-Unsubscribe"] = ", ".join(outs)
+        if unsubscribe:
+            # One-click is what the requirement actually asks for; it is only
+            # honoured on an https URL, never on the mailto.
+            message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     message.set_content(_plain(body), cte="7bit")
     return message
 
@@ -359,7 +408,7 @@ def send_confirm(address: str, confirm_url: str, refuse_url: str,
         raise MailError(settings.why_cannot_email())
     address = one_address(address)
 
-    named = f" of {piece}" if piece else ""
+    named = f" of {_pretty(piece)}" if piece else ""
     message = _compose(
         "Confirm your email to get your score video", address,
         f"Somebody -- we hope you -- uploaded a recording{named} at "
@@ -372,7 +421,8 @@ def send_confirm(address: str, confirm_url: str, refuse_url: str,
         f"If this was not you, nothing has been sent anywhere and you can "
         f"stop us from ever mailing this address:\n\n"
         f"{refuse_url}\n\n"
-        f"-- Weefeen\n")
+        f"-- Weefeen\n",
+        unsubscribe=refuse_url)
     _send(message, address)
     logger.info("asked %s to confirm the address", address)
 
@@ -420,7 +470,7 @@ def send_queued(job_id: str, address: str, piece: str = "",
     elif ahead > 1:
         line = f"There are {ahead} videos ahead of yours. "
 
-    named = f" of {piece}" if piece else ""
+    named = f" of {_pretty(piece)}" if piece else ""
     message = _compose(
         "We are making your score video", address,
         f"We have your recording{named} and it is being made into a video.\n\n"
@@ -454,7 +504,7 @@ def send_ready(job_id: str, address: str, piece: str = "",
                   f"video is made.")
 
     # `piece` comes from our own library, never from the uploader.
-    named = f" of {piece}" if piece else ""
+    named = f" of {_pretty(piece)}" if piece else ""
     message = _compose(
         "Your score video is ready", address,
         f"Your video{named} has finished rendering.\n\n"
