@@ -62,6 +62,20 @@ mkdir -p "$ROOT/shared/var"
 ln -sfn "$ROOT/shared/var"  "$NEW/var"
 ln -sfn "$ROOT/shared/.env" "$NEW/.env"
 
+say "What a compute node may read from here"
+# Installed on every deploy, from the release, so it cannot drift from the
+# code that relies on it. It used to exist only on this box, made by hand:
+# nothing in the repository said it was there, so when cloud-init began
+# pulling two more directories at boot the wrapper refused both and the
+# `|| true` hid it. Two deployed fixes did nothing for a day.
+if [ -f "$ROOT/releases/$RELEASE/deploy/vsw-pull-only" ]; then
+    install -m 755 "$ROOT/releases/$RELEASE/deploy/vsw-pull-only"             /usr/local/bin/vsw-pull-only
+    echo "  /usr/local/bin/vsw-pull-only updated"
+else
+    echo "  WARNING: deploy/vsw-pull-only is missing from this release;" >&2
+    echo "  a node's boot-time pulls may be refused" >&2
+fi
+
 say "Dependencies"
 # ONE environment shared by every release, rather than one per release as
 # the script this was adapted from does. Two reasons, both specific to this

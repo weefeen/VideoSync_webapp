@@ -1,0 +1,48 @@
+#!/bin/sh
+# What a compute node is allowed to ask this box for.
+#
+# The node's pull key is authorised in root's authorized_keys with
+#
+#   from="10.0.0.0/24",command="/usr/local/bin/vsw-pull-only",no-pty,...
+#
+# so EVERY ssh from a node runs this, whatever the node asked for. That is
+# the containment: a node holds a key to root on the web box, and a node is
+# a machine that runs strangers' media through ffmpeg. It may read three
+# directories and do nothing else -- no shell, no write, no port forwarding.
+#
+# THIS FILE LIVES IN THE REPOSITORY because it did not, and that cost a day.
+# It existed only on the server, made by hand, so:
+#
+#   * rebuilding the web box would have dropped the restriction silently,
+#     leaving a node with unrestricted root ssh and nobody any the wiser;
+#   * and when app/compute/cloudinit.py started pulling two more directories
+#     at boot -- the music fonts and the alignment engine -- the wrapper
+#     refused both, because nothing in the repository said it existed. The
+#     cloud-init swallowed the refusal with `|| true`, so a tempo marking
+#     kept rendering as an empty box and nodes kept running an engine from
+#     whenever the image was captured. Both fixes were live, deployed, and
+#     doing nothing.
+#
+# So: when a node needs to read something new, it is added HERE, and the
+# caller must record whether the pull worked. A pull that can fail quietly
+# is a fix that can be deployed and have no effect.
+#
+# --sender is rsync's read side. A command without it is a WRITE, and is
+# refused: the node must never be able to put anything on this box.
+
+case "$SSH_ORIGINAL_COMMAND" in
+  # today's application code -- without it the worker is not started at all
+  "rsync --server --sender "*" /srv/vsw/current/"|\
+  # the music fonts unpacked from installed scores, so a band's tempo
+  # marking is drawn rather than boxed (app/smufl.py)
+  "rsync --server --sender "*" /srv/vsw/shared/fonts/"|\
+  # the alignment engine, so a node is not stuck with the image's copy
+  "rsync --server --sender "*" /srv/vsw/VideoScoreSync/")
+      exec /bin/sh -c "$SSH_ORIGINAL_COMMAND" ;;
+  *)
+      echo "vsw-pull-only: refused. A node may read /srv/vsw/current/," >&2
+      echo "  /srv/vsw/shared/fonts/ or /srv/vsw/VideoScoreSync/, and" >&2
+      echo "  only in rsync --sender (read) mode. Asked for:" >&2
+      echo "  $SSH_ORIGINAL_COMMAND" >&2
+      exit 1 ;;
+esac

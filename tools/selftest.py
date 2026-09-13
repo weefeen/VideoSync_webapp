@@ -2655,6 +2655,68 @@ def check_one_person_cannot_hold_billions_of_buckets() -> str:
     return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
 
 
+def check_a_node_may_read_what_it_is_told_to_pull() -> str:
+    """Everything cloud-init pulls at boot must be permitted by the wrapper.
+
+    A node's pull key is authorised on the web box with a FORCED COMMAND --
+    `command="/usr/local/bin/vsw-pull-only"` -- so every ssh from a node runs
+    that wrapper whatever it asked for. It is the containment: a node holds a
+    key to root on a box it must only ever read three directories from.
+
+    THE FAILURE THIS EXISTS FOR. The wrapper lived only on the server, made
+    by hand, mentioned nowhere in this repository. When cloud-init began
+    pulling the music fonts and the alignment engine at boot, the wrapper
+    refused both -- and the cloud-init swallowed the refusal with `|| true`.
+    Both fixes were committed, deployed, and did nothing: a tempo marking
+    kept rendering as an empty box on a node that had been told to install
+    the font, and nodes kept running whatever engine the image was captured
+    with. It took a rendered video to notice.
+
+    So the two halves are compared here rather than trusted to stay in step.
+    """
+    import re
+
+    cloud = (ROOT / "app" / "compute" / "cloudinit.py").read_text(
+        encoding="utf-8")
+    wrapper_path = ROOT / "deploy" / "vsw-pull-only"
+    if not wrapper_path.is_file():
+        raise Failed("deploy/vsw-pull-only is missing. It is the forced "
+                     "command on a node's key; without it in the repository "
+                     "a rebuilt web box has no restriction at all, and "
+                     "nothing here can say what a node may read.")
+    wrapper = wrapper_path.read_text(encoding="utf-8")
+
+    # What cloud-init asks to read: the remote side of each rsync.
+    wanted = set(re.findall(r"root@\{web_host\}:(\S+?)\s", cloud))
+    if not wanted:
+        raise Failed("cloud-init pulls nothing from the web box; this check "
+                     "can no longer tell whether the wrapper matches it")
+
+    # What the wrapper permits: the paths in its --sender cases.
+    allowed = set(re.findall(r'"rsync --server --sender "\*" (\S+?)"', wrapper))
+    if not allowed:
+        raise Failed("no permitted paths could be read out of "
+                     "deploy/vsw-pull-only; this check cannot do its job")
+
+    refused = sorted(w for w in wanted if w not in allowed)
+    if refused:
+        raise Failed(
+            f"cloud-init pulls {refused} at boot and vsw-pull-only permits "
+            f"only {sorted(allowed)}. The forced command would refuse it, "
+            f"and the node would carry on without it.")
+
+    # And a pull that cannot fail loudly is a fix that can be deployed and
+    # do nothing, which is exactly what happened.
+    for path in sorted(wanted):
+        line = next((l for l in cloud.splitlines() if path in l and "rsync" in l), "")
+        if "|| true" in line:
+            raise Failed(f"the boot-time pull of {path} swallows its own "
+                         f"failure with `|| true`; a refusal would be "
+                         f"invisible, as it already has been once")
+
+    return (f"{len(wanted)} boot-time pull(s), all permitted by the forced "
+            f"command, none of them silent about failing")
+
 def check_music_glyphs_survive_the_rasteriser() -> str:
     """A tempo's metronome note must not come out as a tofu box.
 
@@ -3726,6 +3788,7 @@ def main() -> int:
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
         check_the_edition_is_credited,
+        check_a_node_may_read_what_it_is_told_to_pull,
         check_music_glyphs_survive_the_rasteriser,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,

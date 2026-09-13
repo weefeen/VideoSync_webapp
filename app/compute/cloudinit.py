@@ -211,7 +211,7 @@ runcmd:
   # fontconfig is consulted once per process and cached -- measured: a font
   # installed halfway through a render changes nothing for that render --
   # so this has to happen here, at boot, and not when a job arrives.
-  - bash -c 'rsync -a -e "ssh -i /root/.ssh/vsw_pull -o StrictHostKeyChecking=no -o ConnectTimeout=20" root@{web_host}:/srv/vsw/shared/fonts/ /srv/vsw/shared/fonts/ || true'
+  - bash -c 'rsync -a -e "ssh -i /root/.ssh/vsw_pull -o StrictHostKeyChecking=no -o ConnectTimeout=20" root@{web_host}:/srv/vsw/shared/fonts/ /srv/vsw/shared/fonts/ && echo fonts-pull-ok > /srv/vsw/shared/fonts.state || echo fonts-pull-FAILED > /srv/vsw/shared/fonts.state'
   - bash -c 'install -d /usr/local/share/fonts/vsw; for f in /srv/vsw/shared/fonts/smufl/*.ttf /srv/vsw/shared/fonts/smufl/*.otf; do [ -f "$f" ] && install -m 644 "$f" /usr/local/share/fonts/vsw/; done; fc-cache -f >/dev/null 2>&1 || true'
   - [ chown, -R, 'vsw:vsw', /srv/vsw/current ]
   - bash -c 'ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env'
