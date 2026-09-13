@@ -25,7 +25,10 @@ whatever it managed.
 CONTROLS. `p` stops it taking anything new, `r` resumes, `q` stops after
 the job in hand. Ctrl-C during a render hands that job straight back to
 the queue, so a rented machine picks it up in seconds rather than after
-its lease expires.
+its lease expires. While it is paused, and for a few minutes after it
+declines a job, it stops saying `alive`, so a paid machine is rented for
+the work it will not take instead of the visitor waiting on a laptop that
+has already said no.
 
 AND IT REFUSES WHAT IT CANNOT FINISH. Total RAM is the wrong number: this
 desktop has 64 GB and perhaps 15 free while it is being used, and the
@@ -37,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import pathlib
 import socket
 import sys
@@ -45,7 +49,8 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from app import scorestore, storage             # noqa: E402
+from app import render as rnd                   # noqa: E402
+from app import scorestore, storage, store      # noqa: E402
 from app import svg as appsvg                   # noqa: E402
 from app.queue import webside, worker           # noqa: E402
 from app.queue.messages import Event            # noqa: E402
@@ -58,6 +63,8 @@ logger = logging.getLogger("volunteer")
 # machine gets created, so being slow to speak costs real money, and being
 # slow to go quiet costs a visitor their wait.
 BEAT_SECONDS = 45.0
+# How often a silent volunteer looks again at whether it may speak.
+QUIET_POLL = 5.0
 
 # Set while a render is in flight, so the library warmer gets out of the way
 # -- the visitor's own upload is coming down the same connection.
@@ -102,8 +109,19 @@ def _preflight() -> list[str]:
 
 
 def _beat(bus, stop: threading.Event) -> None:
-    """Say we are here, until told to stop."""
+    """Say we are here, until told to stop -- and only while it is true.
+
+    SILENT WHILE UNWILLING. Paused, or having just handed a job back, this
+    machine is not going to take the next thing the broker offers; saying
+    `alive` then would keep the scaler from renting and leave a visitor
+    waiting on a laptop that has already said no. So the word stops, the
+    scaler notices within `VOLUNTEER_WINDOW`, and a paid machine takes the
+    work. It resumes the moment this machine is willing again.
+    """
     while not stop.is_set():
+        if _paused.is_set() or time.time() < _quiet_until:
+            stop.wait(QUIET_POLL)
+            continue
         try:
             bus.publish_event(Event(job_id="", type="alive",
                                     worker=worker.name()))
@@ -151,6 +169,19 @@ def _warm(stop: threading.Event) -> None:
 # a rented machine picks it up in seconds instead of the visitor waiting out
 # a lease on a laptop that is about to be shut.
 _paused = threading.Event()
+
+# Until when this machine keeps quiet after handing a job back. A decline
+# means the job at the head of the queue is one this machine will not take,
+# and with one message delivered at a time nothing behind it can be reached
+# either -- so the only way forward is a rented machine, and one is only
+# rented while no volunteer is heard. Two windows: one for the scaler to
+# notice the silence, one for the node to boot and take the job.
+_quiet_until = 0.0
+
+
+def _go_quiet() -> None:
+    global _quiet_until
+    _quiet_until = time.time() + 2 * store.VOLUNTEER_WINDOW
 
 
 def free_memory_bytes() -> int:
@@ -204,9 +235,25 @@ def _needed_bytes(minutes: float) -> float:
 
 
 def _accept(task) -> bool:
-    """Whether this machine should take this particular job."""
+    """Whether this machine should take this particular job.
+
+    Every refusal comes with a silence (`_go_quiet`): a job declined once is
+    offered again every two seconds until somebody else takes it, and nobody
+    else is rented while this machine keeps saying it is here.
+    """
     if _paused.is_set():
         logger.info("paused; job %s goes back to the queue", task.job_id)
+        return False
+
+    # THE RECORDING HAS TO BE REACHABLE. A task carries the web box's own
+    # path and, when it was staged, the bucket key; this machine can see the
+    # bucket and nothing else. Without the key the job belongs to a worker
+    # on that box, and taking it here would fail at the first byte.
+    if not task.input_key and not pathlib.Path(task.upload or "").is_file():
+        logger.warning("declining job %s: its recording is not in the bucket "
+                       "and %s is not on this disk. A machine that can see "
+                       "it will take it.", task.job_id, task.upload)
+        _go_quiet()
         return False
 
     minutes = (task.duration or 0) / 60.0
@@ -219,6 +266,7 @@ def _accept(task) -> bool:
             "declining job %s: %.0f min needs about %.1f GB and only %.1f GB "
             "is free. A rented machine will take it.",
             task.job_id, minutes, need / 1e9, free / 1e9)
+        _go_quiet()
         return False
     return True
 
@@ -325,7 +373,17 @@ def main() -> int:
     try:
         bus.consume_tasks(_handle, accept=_accept)
     except KeyboardInterrupt:
-        print("\n  stopping: no new jobs will be taken.")
+        # The transport handed the job back before this was raised. What is
+        # left is the tool it was running: the render sits on a daemon
+        # thread and ffmpeg is a child of this process, and on Windows a
+        # child outlives a parent that merely exits. Kill it, and leave
+        # without giving the render thread a chance to report a `failed`
+        # that would contradict the hand-back.
+        killed = rnd.abort_children()
+        print(f"\n  stopping: the job went back to the queue"
+              f"{f', {killed} tool(s) stopped' if killed else ''}.")
+        stop.set()
+        os._exit(0)
     finally:
         stop.set()
     return 0

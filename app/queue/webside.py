@@ -146,20 +146,22 @@ def _ensure_input_in_bucket(row) -> str:
     """Put the recording in the bucket so a compute node can fetch it, and
     return the key. Empty when there is nothing to do.
 
-    Only when compute could actually take the job: with `COMPUTE_ENABLED`
-    off, the only consumer is the local worker on this box, which reads the
-    upload straight off the shared disk, so uploading it to the bucket would
-    be bandwidth for nobody. With compute on, the input MUST be in the bucket
-    before a node picks the task up — a node cannot see this disk — so this
-    is the wire that makes the selected workflow (render on a throwaway host)
-    actually run rather than fail looking for a file it cannot reach.
+    WHENEVER THERE IS A BUCKET. This was gated on `COMPUTE_ENABLED`, on the
+    argument that with compute off the only consumer is the local worker,
+    which reads the upload straight off the shared disk. That stopped being
+    true the day a volunteer machine could consume: it cannot see this disk
+    either, and with compute off it was handed tasks whose recording it had
+    no way to reach. The upload is kept in any case, so this is not
+    bandwidth for nobody -- it is the copy that outlives this box. The
+    input MUST be in the bucket before another host picks the task up, so
+    this is the wire that makes any render off this box run at all.
 
     Idempotent: a re-offer by the sweep finds the object already there by its
     size and does not upload it again. A storage failure is swallowed and the
     key comes back empty — the job still renders on the local worker, which
     is the safe degradation while the reason is fixed.
     """
-    if not (settings.compute_enabled and storage.available()):
+    if not storage.available():
         return ""
     local = pathlib.Path(row["upload"])
     if not local.is_file():
@@ -182,8 +184,12 @@ def _apply(event) -> None:
     # start a paid one. Handled before the ledger because the ledger is
     # about jobs and this event has no job to be about.
     if getattr(event, "type", "") == "alive":
-        store.volunteer_seen(getattr(event, "worker", ""),
-                             getattr(event, "at", None))
+        # STAMPED HERE, with this box's clock. The event carries the
+        # volunteer's own `at`, and a laptop three minutes slow would never
+        # have been heard at all -- or, three minutes fast, would have held
+        # the queue for that long after it was closed. Every other clock in
+        # the decision is this machine's, so this one is too.
+        store.volunteer_seen(getattr(event, "worker", ""))
         return
     ledger.apply(event)
 

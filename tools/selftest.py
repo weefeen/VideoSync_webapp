@@ -2369,8 +2369,9 @@ def check_the_input_reaches_a_compute_node() -> str:
     bucket: stage on one side, fetch on a host where the upload path does not
     exist, and the bytes match.
 
-    Also asserts the no-op: with compute OFF, nothing is staged — the render
-    path stays exactly what it is on the single box today.
+    Also asserts that no bucket means nothing staged, and that compute OFF
+    is not a reason to skip it: a volunteer machine cannot see this disk
+    either, and gating on COMPUTE_ENABLED handed it tasks it could not fetch.
     """
     import dataclasses
     import importlib
@@ -2407,12 +2408,19 @@ def check_the_input_reaches_a_compute_node() -> str:
         storage.put, storage.head, storage.get = fput, fhead, fget
         storage.available = lambda: True
 
-        # Compute OFF: nothing staged, today's behaviour unchanged.
+        # No bucket: nothing to stage into.
         webside.settings = dataclasses.replace(settings, compute_enabled=False)
+        storage.available = lambda: False
         if webside._ensure_input_in_bucket(row) != "":
-            raise Failed("with compute off, the input was staged to the "
-                         "bucket — that is bandwidth for nobody and a change "
-                         "to the single-box render path that should be a no-op")
+            raise Failed("with no bucket configured the input was staged -- "
+                         "into what?")
+        # Compute OFF with a bucket: STILL staged. A volunteer machine cannot
+        # see this disk any more than a node can.
+        storage.available = lambda: True
+        if not webside._ensure_input_in_bucket(row):
+            raise Failed("with compute off the input was not staged, so a "
+                         "volunteer machine -- which cannot see this disk "
+                         "either -- would be handed a task it cannot fetch")
 
         # Compute ON: staged, keyed, and fetchable where the disk is absent.
         webside.settings = dataclasses.replace(settings, compute_enabled=True)
@@ -2789,10 +2797,102 @@ def check_a_volunteer_machine_stops_the_paid_one() -> str:
         raise Failed("Ctrl-C during a render does not hand the job back, so "
                      "closing a laptop costs a visitor the whole lease")
 
+    # A MACHINE MID-RENDER IS NOT DESTROYED BECAUSE A LAPTOP SAID HELLO. The
+    # waiver used to zero `busy` outright, which dropped the running count:
+    # at the hour boundary the machine looked idle and would have been torn
+    # down under the render. Only what the VOLUNTEER itself holds is waived.
+    now2 = _t.time()
+    store.settings = dataclasses.replace(settings, compute_mode="auto")
+    _queued("volunteer-mid", state=store.RUNNING)
+    try:
+        with store.write() as conn:
+            conn.execute("UPDATE jobs SET worker = ? WHERE id = ?",
+                         ("vsw-compute-node", "volunteer-mid"))
+            conn.execute("UPDATE compute SET state='wanted', machine_id=42,"
+                         " since=?, idle_since=NULL, updated=? WHERE singleton=1",
+                         (now2 - 3590.0, now2))
+        store.volunteer_seen("laptop", now2)
+        held = store.compute_tick(0.0, live=False)
+        if held.get("state") != "wanted" or held.get("busy", 0) < 1:
+            raise Failed("a volunteer's hello let the scaler release a machine "
+                         "that is rendering somebody's video")
+        # The same job held by the VOLUNTEER does not hold the machine: at
+        # the boundary it is released, or an hour is bought for nothing.
+        with store.write() as conn:
+            conn.execute("UPDATE jobs SET worker = ? WHERE id = ?",
+                         ("laptop", "volunteer-mid"))
+            conn.execute("UPDATE compute SET state='wanted', machine_id=42,"
+                         " since=?, idle_since=?, updated=? WHERE singleton=1",
+                         (now2 - 3590.0, now2 - 60.0, now2))
+        freed = store.compute_tick(0.0, live=False)
+        if freed.get("busy", 1) != 0:
+            raise Failed("a job the volunteer itself is rendering kept a paid "
+                         "machine alive -- an hour bought for nothing")
+    finally:
+        store.set_meta_always("volunteer", "")
+        with store.write() as conn:
+            conn.execute("DELETE FROM jobs WHERE id = ?", ("volunteer-mid",))
+            conn.execute("UPDATE compute SET state='none', idle_since=NULL,"
+                         " machine_id=NULL, updated=NULL WHERE singleton = 1")
+        store.settings = was
+
+    # SILENT WHILE UNWILLING. A paused volunteer, or one that has just
+    # declined, must stop saying `alive`: while it is heard nothing is
+    # rented, and it has already said it will not take the job at the head
+    # of the queue -- so the visitor would wait on a laptop that said no.
+    import threading as _th
+
+    class _Bus:
+        def __init__(self):
+            self.said = 0
+
+        def publish_event(self, event):
+            self.said += 1
+
+    vol.BEAT_SECONDS, vol.QUIET_POLL = 0.02, 0.02
+    bus, halt = _Bus(), _th.Event()
+    vol._paused.set()                                          # noqa: SLF001
+    _th.Thread(target=vol._beat, args=(bus, halt), daemon=True).start()  # noqa: SLF001
+    _t.sleep(0.25)
+    if bus.said:
+        raise Failed("a PAUSED volunteer still says alive, so no machine is "
+                     "rented while it declines everything")
+    vol._paused.clear()                                        # noqa: SLF001
+    _t.sleep(0.25)
+    if not bus.said:
+        raise Failed("a resumed volunteer never says alive again")
+    said = bus.said
+    vol._go_quiet()                                            # noqa: SLF001
+    _t.sleep(0.25)
+    if bus.said > said + 1:
+        raise Failed("a volunteer that just declined keeps saying alive; the "
+                     "scaler will not rent and the job waits on it")
+    halt.set()
+    vol._quiet_until = 0.0                                     # noqa: SLF001
+
+    # And what it declines: a recording it cannot reach, going quiet as it does.
+    class _Task:
+        job_id = "t1"
+        upload = str(ROOT / "no-such-recording.mp4")
+        input_key = ""
+        duration = 60.0
+
+    vol.free_memory_bytes = lambda: 64 * 1024 ** 3
+    if vol._accept(_Task()):                                   # noqa: SLF001
+        raise Failed("a volunteer accepted a task whose recording is neither "
+                     "in the bucket nor on its disk")
+    if vol._quiet_until <= _t.time():                          # noqa: SLF001
+        raise Failed("declining did not silence the heartbeat")
+    vol._quiet_until = 0.0                                     # noqa: SLF001
+    _Task.input_key = "jobs/t1/input.mp4"
+    if not vol._accept(_Task()):                               # noqa: SLF001
+        raise Failed("a volunteer refused a task it could fetch")
+
     return (f"auto rents alone and stands aside for a volunteer; cloud "
             f"always rents; manual never does; the offer expires after "
             f"{store.VOLUNTEER_WINDOW:.0f}s; a consumer may decline and the "
-            f"job is requeued, not discarded")
+            f"job is requeued, not discarded; a machine mid-render survives "
+            f"a hello; a paused or declining volunteer falls silent")
 
 def check_a_node_may_read_what_it_is_told_to_pull() -> str:
     """Everything cloud-init pulls at boot must be permitted by the wrapper.
@@ -3914,6 +4014,128 @@ def check_a_plate_that_cannot_be_measured_is_still_served() -> str:
     return "rasteriser failure -> the whole plate, logged, not raised"
 
 
+def check_a_render_cannot_hang_forever() -> str:
+    """A tool that stalls is killed, and a hand-back kills the tool.
+
+    The worker heartbeats while ffmpeg runs, so an encode that hung renewed
+    its own lease for ever and held a paid machine with it -- the one
+    failure the lease could not catch, because the process holding it was
+    perfectly alive. And a volunteer's Ctrl-C handed the job back while the
+    ffmpeg it had started carried on, because a child outlives a parent that
+    merely exits.
+    """
+    import re as _re
+    import sys as _sys
+    import threading as _th
+    import time as _t
+    from app import render as rnd
+
+    sleeper = [_sys.executable, "-c", "import time; time.sleep(30)"]
+    began = _t.time()
+    try:
+        rnd._run(sleeper, "a stalled tool", timeout=0.5)       # noqa: SLF001
+    except rnd.ToolFailed as exc:
+        if "gave up" not in str(exc):
+            raise Failed(f"the deadline raised, but not as a deadline: {exc}")
+    else:
+        raise Failed("a tool that never returns was waited for")
+    if _t.time() - began > 10:
+        raise Failed("the deadline fired late; the tool was not killed")
+    if rnd._children:                                           # noqa: SLF001
+        raise Failed("a finished tool is still listed as running")
+
+    outcome: dict = {}
+
+    def run() -> None:
+        try:
+            rnd._run(sleeper, "a render in flight")             # noqa: SLF001
+        except rnd.ToolFailed as exc:
+            outcome["failed"] = str(exc)
+
+    thread = _th.Thread(target=run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if rnd._children:                                       # noqa: SLF001
+            break
+        _t.sleep(0.05)
+    else:
+        raise Failed("the running tool was never registered, so a hand-back "
+                     "could not have killed it")
+    killed = rnd.abort_children()
+    thread.join(10)
+    if thread.is_alive() or killed != 1:
+        raise Failed(f"abort_children stopped {killed} tool(s) and the render "
+                     f"thread {'is still running' if thread.is_alive() else 'ended'}")
+
+    # And both real invocations are bounded.
+    src = (ROOT / "app" / "render.py").read_text(encoding="utf-8")
+    calls = [m.start() for m in _re.finditer(r"\n\s+_run\(", src)]
+    unbounded = [src[i:i + 60].strip().splitlines()[0]
+                 for i in calls if "timeout=" not in src[i:i + 600]]
+    if len(calls) < 2 or unbounded:
+        raise Failed(f"ffmpeg is run without a deadline at: {unbounded}")
+    return (f"a stalled tool is killed at its deadline, a hand-back kills the "
+            f"tool in flight, and all {len(calls)} ffmpeg runs are bounded")
+
+
+def check_a_video_counts_wherever_it_was_made() -> str:
+    """The tally counts deliveries, not the machines that made them.
+
+    The number on the page is "videos this install has made", and a render
+    now happens on whichever machine took the job -- the web box, a rented
+    node, or a laptop lent to the queue. If the count were made where the
+    WORK happened it would land in that machine's own `var/stats.json`: a
+    node's dies with the node, and a laptop's sits on the laptop, so every
+    render off the web box would be invisible on the page and the number
+    would quietly under-report the busier the system got.
+
+    It is counted where the RESULT IS APPLIED instead -- the ledger, which
+    runs only in the web box's applier thread, once per `done` event. So
+    this asserts two things that must stay true together: the worker never
+    counts, and the ledger does.
+    """
+    import re as _re
+    from app import stats, store
+    from app.queue import ledger
+    from app.queue.messages import Event
+
+    worker_src = (ROOT / "app" / "queue" / "worker.py").read_text(encoding="utf-8")
+    if _re.search(r"\bstats\b", worker_src):
+        raise Failed("the worker touches the tally. It runs on whichever "
+                     "machine took the job, so the count would land on a "
+                     "node that is about to be destroyed, or on a laptop")
+
+    ledger_src = (ROOT / "app" / "queue" / "ledger.py").read_text(encoding="utf-8")
+    if "stats.record_video()" not in ledger_src:
+        raise Failed("nothing in the ledger counts a delivered video, so the "
+                     "page's tally never moves")
+
+    # A render that happened somewhere else entirely: the job row names a
+    # worker that is not this machine, and the result is a path this box
+    # has never had. Only the `done` event came back.
+    job_id = "tally-elsewhere"
+    _queued(job_id, state=store.RUNNING)
+    before = stats.videos()
+    try:
+        store.update_job(job_id, worker="somebody-elses-laptop")
+        ledger.apply(Event(job_id=job_id, type="done",
+                           worker="somebody-elses-laptop",
+                           result="/not/on/this/disk/video.mp4",
+                           object_key=f"jobs/{job_id}/video.mp4",
+                           output_bytes=1234, elapsed=1.0))
+        after = stats.videos()
+    finally:
+        with store.write() as conn:
+            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    if after - before != 1:
+        raise Failed(f"a video rendered on another machine moved the tally by "
+                     f"{after - before}; a render off the web box must count "
+                     f"exactly once, where the result is applied")
+    return ("counted in the ledger, on the web box, once per delivery -- a "
+            "render on a node or a lent laptop counts the same")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -3969,6 +4191,8 @@ def main() -> int:
         check_a_node_may_read_what_it_is_told_to_pull,
         check_music_glyphs_survive_the_rasteriser,
         check_a_plate_that_cannot_be_measured_is_still_served,
+        check_a_render_cannot_hang_forever,
+        check_a_video_counts_wherever_it_was_made,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,

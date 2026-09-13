@@ -191,8 +191,11 @@ class Scaler:
                                     live=self.enabled)
         wanted = shadow["state"] == "wanted"
 
-        # There is actual work, right now.
-        busy = (shadow["ready"] + shadow["unacked"]) > 0
+        # There is actual work, right now -- as the store JUDGES it, once
+        # the mode and any volunteer have had their say. Summing the raw
+        # counts here let `manual`, which must never rent, create a machine
+        # whenever the state happened to read `wanted` with a job queued.
+        busy = int(shadow.get("busy", shadow["ready"] + shadow["unacked"])) > 0
 
         acted = ""
         if wanted and not live and busy:

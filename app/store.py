@@ -916,7 +916,19 @@ def compute_tick(grace_seconds: float,
     mode = (settings.compute_mode or "auto").lower()
     helper = volunteer(now)
     if mode == "manual" or (mode != "cloud" and helper is not None):
-        busy = 0
+        # ONLY THE QUEUE IS WAIVED, NEVER A RENDER IN FLIGHT. `busy = 0`
+        # here threw away `unacked`, so a paid machine in the middle of
+        # somebody's video looked idle the moment a laptop said hello -- and
+        # at its hour boundary the rule below would have destroyed it under
+        # the render. A job some worker holds right now still holds the
+        # machine it is on. A job the VOLUNTEER holds does not: that one is
+        # not on the machine, and keeping the machine for it buys an hour
+        # for nothing. Nothing is ever CREATED for what merely waits, which
+        # is why this counts only while a machine exists.
+        helping = (helper or {}).get("name") or ""
+        held = one("SELECT COUNT(*) AS n FROM jobs WHERE state = ? AND "
+                   "(worker IS NULL OR worker != ?)", (RUNNING, helping))
+        busy = int(held["n"]) if (held and row["machine_id"]) else 0
 
     event = None
     if busy > 0:
@@ -997,6 +1009,10 @@ def compute_tick(grace_seconds: float,
     began = row["since"] or now
     paid_until = began + math.ceil(max(now - began, 1) / 3600.0) * 3600
     result = {"state": state, "ready": ready, "unacked": unacked,
+              # What the decision was made FROM, after the mode and any
+              # volunteer had their say. The scaler creates on this, never
+              # on the raw counts above.
+              "busy": busy,
               "paid_left": max(0.0, paid_until - now) if state == "wanted" else 0.0,
               "idle_seconds": 0.0 if idle_since is None else now - idle_since,
               "would_run": would_run, "creates": creates,

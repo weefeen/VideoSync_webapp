@@ -26,6 +26,7 @@ then that strip is composited with the performance and the background.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -36,6 +37,7 @@ import shlex
 import logging
 import subprocess
 import tempfile
+import threading
 import uuid
 from typing import Callable
 
@@ -753,14 +755,49 @@ class ToolFailed(RenderError):
         super().__init__(f"{what} failed:\n" + "\n".join(tail))
 
 
-def _run(cmd: list[str], what: str) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
+# Every tool this process has running. Two things need the list: a hand-back
+# (a volunteer's Ctrl-C) has to kill the ffmpeg the render thread started,
+# because a child outlives a parent that merely exits; and a render that
+# stalls has to be bounded -- the worker heartbeats while ffmpeg runs, so a
+# stuck encode renewed its own lease for ever and held a paid machine with it.
+_children: set[subprocess.Popen] = set()
+_children_lock = threading.Lock()
+
+
+def _run(cmd: list[str], what: str, timeout: float | None = None) -> None:
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    with _children_lock:
+        _children.add(proc)
+    try:
+        try:
+            _, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _, stderr = proc.communicate()
+            logger.error("%s gave up after %.0f s\n  %s\n%s", what, timeout,
+                         shlex.join(cmd), (stderr or "").strip()[-4000:])
+            raise ToolFailed(f"{what} (gave up after {timeout:.0f} s)", cmd,
+                             -1, stderr or "")
+    finally:
+        with _children_lock:
+            _children.discard(proc)
+    if proc.returncode != 0:
         # Logged as well as carried: what a visitor is shown must not
         # contain a command line, and an operator needs exactly that.
-        logger.error("%s failed (exit %s)\n  %s\n%s", what, result.returncode,
-                     shlex.join(cmd), (result.stderr or "").strip()[-4000:])
-        raise ToolFailed(what, cmd, result.returncode, result.stderr or "")
+        logger.error("%s failed (exit %s)\n  %s\n%s", what, proc.returncode,
+                     shlex.join(cmd), (stderr or "").strip()[-4000:])
+        raise ToolFailed(what, cmd, proc.returncode, stderr or "")
+
+
+def abort_children() -> int:
+    """Kill every tool this process has running. Returns how many."""
+    with _children_lock:
+        running = list(_children)
+    for proc in running:
+        with contextlib.suppress(Exception):
+            proc.kill()
+    return len(running)
 
 
 # The mark, as the design screen places it:
@@ -1013,7 +1050,9 @@ def _band_strip(pkg: ScorePackage, images: dict[int, pathlib.Path],
     _run([settings.ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
           "-vf", f"scale={size[0]}:{size[1]},format={pixfmt}",
           "-r", str(round(fps))] + codec + [str(strip)],
-         "Building the score band")
+         "Building the score band",
+         # Bounded: a strip is a few hundred stills, seconds of work.
+         timeout=max(600.0, 4.0 * float(duration)))
     return strip
 
 
@@ -1240,7 +1279,13 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
                               f"{layout.band.h} {style.band_position}"
                               f"{' · panel' if layout.panel else ''}"
                               f" · bg {style.background}")
-        _run(cmd, "Rendering the video")
+        # BOUNDED. Measured at about 1.3 s of encode per second of video on
+        # two shared cores; eight times that, with a floor for short clips,
+        # is generous for any host and still finite. An ffmpeg that stalls
+        # otherwise holds a paid machine for as long as the worker keeps
+        # renewing the lease, which is for ever.
+        _run(cmd, "Rendering the video",
+             timeout=max(1800.0, 8.0 * float(info["duration"])))
     except BaseException:
         # A failed render must not leave its partial behind. The name is now
         # unique per render, so unlike the old fixed `.part.mp4` it is not
