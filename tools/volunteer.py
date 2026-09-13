@@ -396,38 +396,22 @@ def _longest_now() -> float:
 
 
 def _watch_mode(panel, stop: threading.Event) -> None:
-    """Keep the web box's setting fresh, off the request path.
+    """Keep an eye on the server, and hold it where it rents nothing.
 
     Read on a timer rather than when the page asks: it is an ssh round trip
     to another machine, and a page that waits on one feels broken.
 
-    THE FIRST READ IS ALSO ADOPTED. Starting up meant "this machine takes
-    jobs", whatever the server had been told -- so a server set to rent a
-    machine for every video got a laptop competing with it for the same
-    queue, two renderers for one job, and a page showing a pair of settings
-    none of its own choices described. The server was told what to do last
-    and it is the half that spends money, so it wins: if it is renting for
-    everything, this machine stands back until somebody says otherwise.
+    Never allowed to raise. This thread is the only thing keeping the
+    server's state on the page, and without a handler one bad read ended it
+    for good -- the panel then showed a stale answer for ever, with nothing
+    anywhere saying it had stopped looking.
     """
-    first = True
     while not stop.is_set():
         try:
-            panel.refresh_mode()
+            panel.refresh()
         except Exception:                              # noqa: BLE001
-            # This thread is the only thing that keeps the server's
-            # settings on the page. Without this, one bad read ended it
-            # and the panel showed a stale answer for ever, with nothing
-            # anywhere saying it had stopped looking.
             logger.warning("could not read the server's settings",
                            exc_info=True)
-            stop.wait(30.0)
-            continue
-        if first:
-            first = False
-            if panel.mode().get("name") == "cloud" and not _paused.is_set():
-                _paused.set()
-                logger.info("the server rents a machine for every video, so "
-                            "this one stands back. Change it on the panel.")
         stop.wait(30.0)
 
 

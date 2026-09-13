@@ -4310,21 +4310,19 @@ def check_a_fetched_score_lands_where_it_was_told() -> str:
 
 
 def check_the_lending_panel_is_local_and_narrow() -> str:
-    """The page that lends this machine may be reached from nowhere else.
+    """One switch, reachable from nowhere else, that never rents a machine.
 
-    It pauses a renderer mid-job and rewrites COMPUTE_MODE on the
-    production server -- which is the difference between renting a machine
-    for every upload and renting none -- and it has NO LOGIN. That is the
-    right trade only while it cannot be reached from off this machine, so
-    the binding is the whole of its security and is asserted here rather
-    than left to a default.
+    It pauses a renderer mid-job and writes the production server's
+    configuration, and it has NO LOGIN. That is the right trade only while
+    it cannot be reached from off this machine, so the binding is the whole
+    of its security and is asserted rather than left to a default.
 
-    The rest is about the page being answerable. It asks two questions --
-    does this computer render, and what happens to anything it is not
-    taking -- and they are about different machines, so every combination
-    of the two has to be reachable and has to be named. Three versions of
-    this page failed that in different ways, each of them legible only
-    once somebody tried to use it.
+    The rest is about it staying simple. Four versions of this page were
+    rejected for offering the settings the program has instead of the
+    decision a person makes; what survived is one switch, with the server
+    held where it creates nothing. A second control would be the fifth
+    version of the same mistake, so the shape is pinned here: exactly one
+    switch, and exactly one mode ever written -- the one that rents nothing.
     """
     import json as _json
     import urllib.error
@@ -4335,114 +4333,78 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
     src = (ROOT / "tools" / "lend_panel.py").read_text(encoding="utf-8")
     if '"0.0.0.0"' in src or "'0.0.0.0'" in src:
         raise Failed("the panel binds 0.0.0.0. It can pause a render and "
-                     "change what the server spends, and it has no login")
+                     "write the server's configuration, and it has no login")
     if '("127.0.0.1", port)' not in src:
         raise Failed("the panel does not bind 127.0.0.1 explicitly")
 
-    # EVERY ANSWER DESCRIBES ITS OWN SETTING, in both directions, or the
-    # page can show a state none of its options match and offer no way out.
-    for name, spec in lend_panel.THIS_COMPUTER.items():
-        if lend_panel.computer_now(spec["taking"]) != name:
-            raise Failed(f"'this computer' answer {name!r} does not describe "
-                         f"its own setting")
-    for name, spec in lend_panel.OTHERWISE.items():
-        if lend_panel.otherwise_now(spec["mode"]) != name:
-            raise Failed(f"'otherwise' answer {name!r} does not describe its "
-                         f"own setting")
-    if len(lend_panel.THIS_COMPUTER) != 2 or len(lend_panel.OTHERWISE) != 2:
-        raise Failed("each question must have both answers; a question with "
-                     "one is a statement wearing a radio button")
-
-    # `cloud` -- rent for every video even while this machine renders -- is
-    # two machines racing for one queue, so it is not offered. It is still
-    # reachable, because the server is configured elsewhere too, so it must
-    # be RECOGNISED and escapable.
-    if lend_panel.otherwise_now("cloud"):
-        raise Failed("renting for every video is offered as an answer; it is "
-                     "two machines racing for one queue")
-    vsrc = (ROOT / "tools" / "volunteer.py").read_text(encoding="utf-8")
-    if '"cloud"' not in vsrc or "stands back" not in vsrc:
-        raise Failed("the volunteer does not stand back when the server is "
-                     "set to rent for every video, so both would render")
-    if "server_overrides" not in lend_panel.PAGE:
-        raise Failed("the page never says when the server is renting for "
-                     "everything, so it would show nothing selected")
+    # IT NEVER RENTS. `manual` is the only mode it writes and `_write_mode`
+    # refuses anything else outright, so no path through this page and no
+    # value arriving on it can leave the server creating machines.
+    if lend_panel.HELD_AT != "manual":
+        raise Failed(f"the panel holds the server at {lend_panel.HELD_AT!r}, "
+                     f"which is not the mode that rents nothing")
 
     state = {"taking": True, "paused": False, "quiet_for": 0.0, "job": None,
-             "free_gb": 8.0, "longest_min": 10.0, "hourly_cost": 0.288,
+             "free_gb": 8.0, "longest_min": 10.0,
              "scores_here": 1, "scores_total": 2}
     rang = []
     panel = lend_panel.Panel(lambda: state, lambda: rang.append("pause"),
                              lambda: rang.append("resume"),
                              lambda: rang.append("stop"))
-    panel._set_mode("manual", "")                            # noqa: SLF001
+    panel._set("manual", "")                                 # noqa: SLF001
 
-    # Nothing that is not an answer reaches ssh. Without the whitelist this
-    # is shell, on the production box, as root.
-    for bogus in ("manual; rm -rf /", "$(id)", "../auto", "", "AUTO ", "x"):
-        if panel.set_mode(bogus) == "":
-            raise Failed(f"the panel accepted {bogus!r} as a mode; it is "
-                         f"interpolated into a root command on the server")
-        if panel.set_otherwise(bogus) == "":
-            raise Failed(f"the panel accepted {bogus!r} as an answer")
-        if panel.set_computer(bogus) == "":
-            raise Failed(f"the panel accepted {bogus!r} for this computer")
+    for bogus in ("auto", "cloud", "manual; rm -rf /", "$(id)", ""):
+        if panel._write_mode(bogus) == "":                   # noqa: SLF001
+            raise Failed(f"the panel wrote {bogus!r} to the server; it is "
+                         f"interpolated into a root command, and anything "
+                         f"but 'manual' means it can rent machines")
 
-    # This computer's answer takes effect here and touches nothing remote.
-    if panel.set_computer("none") or rang != ["pause"]:
-        raise Failed(f"'takes nothing' did not stop this machine: {rang}")
-    if panel.set_computer("make") or rang != ["pause", "resume"]:
-        raise Failed(f"'makes the videos' did not start it again: {rang}")
+    # The switch reaches the volunteer, both ways.
+    panel.set_working(False)
+    panel.set_working(True)
+    if rang != ["pause", "resume"]:
+        raise Failed(f"the switch does not start and stop this machine: {rang}")
 
     url = lend_panel.serve(panel, port=5098)
     if not url:
         raise Failed("the panel would not start")
 
     page = urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
-    for needed in ("This computer", "can&rsquo;t take a video"):
+    switches = page.count('role="switch"')
+    if switches != 1:
+        raise Failed(f"{switches} switches on a page whose whole point is "
+                     f"that there is one")
+    for gone in ("Rent a machine", "rent one", "per video"):
+        if gone in page:
+            raise Failed(f"the page still offers renting ({gone!r}); it is "
+                         f"not a decision this page makes")
+    for needed in ("On hold", "Taking videos", "What this computer can take"):
         if needed not in page:
-            raise Failed(f"the panel never asks {needed!r}")
-    # IT SAYS WHY A MACHINE WOULD EVER BE RENTED. Without both reasons the
-    # second question reads as a contradiction of the first -- "if this
-    # computer makes the videos, what is there to rent?" -- which is the
-    # question an earlier heading actually provoked.
-    for reason in ("window is closed", "free memory allows"):
-        if reason not in lend_panel.PAGE:
-            raise Failed(f"the page never says {reason!r}, so renting looks "
-                         f"like it contradicts making them here")
-    # And the price describes the SERVER's plan, not this machine's .env.
-    if "compute_hourly_cost" in (ROOT / "tools" / "volunteer.py").read_text(
-            encoding="utf-8"):
-        raise Failed("the panel's price comes from this machine's settings; "
-                     "it quotes a figure for a computer it is not describing")
-    if "COMPUTE_(MODE|PLAN)" not in src:
-        raise Failed("the panel does not read the server's plan, so it "
-                     "cannot price a machine the server would rent")
-    for group, answers in (("computer", lend_panel.THIS_COMPUTER),
-                           ("otherwise", lend_panel.OTHERWISE)):
-        for name in answers:
-            if f'value="{name}" data-group="{group}"' not in page:
-                raise Failed(f"{group}/{name} cannot be picked on the page")
+            raise Failed(f"the panel never shows {needed!r}")
 
     got = _json.loads(urllib.request.urlopen(url + "state", timeout=5).read())
-    missing = {"taking", "job", "free_gb", "longest_min", "mode",
-               "computer", "otherwise", "server_overrides"} - set(got)
+    missing = {"taking", "job", "free_gb", "longest_min", "server"} - set(got)
     if missing:
         raise Failed(f"the page is not told {sorted(missing)}")
 
-    # An answer that is not an answer says so over HTTP rather than 500ing.
-    for path, field in (("computer", "answer"), ("otherwise", "answer")):
-        try:
-            urllib.request.urlopen(urllib.request.Request(
-                url + path, method="POST",
-                data=_json.dumps({field: "whatever"}).encode()), timeout=10)
-        except urllib.error.HTTPError as exc:
-            if exc.code != 400:
-                raise Failed(f"a bogus {path} answered {exc.code}, not 400")
-        else:
-            raise Failed(f"a bogus {path} was accepted over HTTP")
+    # The switch over HTTP, and a request that names no state refused: a
+    # malformed call must not silently stop the machine.
+    rang.clear()
+    urllib.request.urlopen(urllib.request.Request(
+        url + "working", method="POST",
+        data=_json.dumps({"on": False}).encode()), timeout=5)
+    if rang != ["pause"]:
+        raise Failed(f"switching off did not reach the volunteer: {rang}")
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            url + "working", method="POST", data=b"{}"), timeout=5)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            raise Failed(f"a switch with no state answered {exc.code}")
+    else:
+        raise Failed("a switch request naming no state was accepted, so a "
+                     "malformed call silently stops the machine")
 
-    # Finishing the job in hand is an action, not an answer.
     rang.clear()
     urllib.request.urlopen(urllib.request.Request(
         url + "stop", method="POST", data=b"{}"), timeout=5)
@@ -4450,9 +4412,8 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
         raise Failed(f"'finish this one, then stop' did not reach the "
                      f"volunteer: {rang}")
 
-    return ("loopback only, no login; every mode is a whitelist before it is "
-            "ever a command; two questions, two answers each, and renting "
-            "for everything is recognised but never offered")
+    return ("loopback only, no login; one switch and no second control; "
+            "'manual' is the only mode it can write, so it never rents")
 
 
 def main() -> int:

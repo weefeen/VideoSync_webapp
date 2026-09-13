@@ -1,40 +1,37 @@
-"""The page that says what this machine is doing, and lets you change it.
+"""The page that says what this computer is doing, and one switch.
 
-WHY A PAGE. Lending a machine to the queue was two controls on two
+WHY A PAGE. Lending this machine to the queue was two controls on two
 machines: whether `tools/volunteer.py` was running here, and what
-`COMPUTE_MODE` said in a .env file on the web box. Neither is visible from
-the other, one of them is a keystroke in a scrolling terminal, and the only
-way to answer "what is happening right now" was to read a log.
+`COMPUTE_MODE` said in a .env file on the web box. Neither was visible from
+the other, one was a keystroke in a scrolling terminal, and the only way to
+answer "what is happening right now" was to read a log.
 
-AND WHY IT ASKS WHAT IT ASKS. Three earlier versions failed, each in a way
-only visible once somebody tried to use it. The first exposed the two
-settings faithfully and made the reader combine them. The second offered
-the four outcomes that combination produces, which read as a maze: the
-answers were not alternatives to each other, they were two axes. The third
-demoted "this computer renders" to a statement -- true most of the time and
-not always, because the processor may be wanted for something else.
+AND WHY THERE IS ONE SWITCH. Four versions of this page were built and each
+was rejected for the same underlying reason: they offered the settings the
+PROGRAM has rather than the decision a PERSON makes. The settings are two
+-- does this computer render, and does the server rent one when it does
+not. Exposed faithfully they must be combined by the reader. Folded into
+four outcomes they read as a maze. Split into two questions they still
+dragged in a second machine, its price, and the gap between what the site
+accepts and what this computer can manage -- a gap in which a video is
+refused here, never rented there, and waits for ever.
 
-So: two questions, two answers each, about different machines.
+The decision is one thing: IS THIS COMPUTER WORKING, OR IS EVERYTHING ON
+HOLD. Renting is no part of it and is not offered, so the server is held at
+`manual`, where it creates nothing, and the switch here is the only thing
+that moves.
 
-    THIS COMPUTER         makes the videos, or takes nothing for now
-    IF IT CANNOT TAKE ONE rent a machine, or let it wait
+    ON      every upload is rendered on this computer
+    OFF     nothing is rendered anywhere; uploads wait in the queue
 
-The second heading names the CONSEQUENCE rather than a cause, because the
-first draft of it ("anything it is not taking") provoked exactly the right
-question -- if this computer makes the videos, why would anything be
-rented? Two things: the window is closed, or the performance is longer
-than this machine's free memory allows. The page says both, and says the
-length as a live figure rather than a generality.
+Two states, one control, nothing to combine. What is left above it is the
+answer to "what is happening right now", which is what the page is opened
+to find out.
 
-Everything above the questions is the answer to "what is happening right
-now", which is what you open it to find out. It is deliberately not drawn
-as a card: with the same border and fill as the answer rows, a page with
-two questions read as three lists of the same thing.
-
-LOOPBACK ONLY, and that is not a detail. This page can pause a renderer and
-change what the production server does with its money, and it has no login
-because it is not reachable from anywhere that would need one. Bound to
-127.0.0.1, refused otherwise.
+LOOPBACK ONLY, and that is not a detail. This page can pause a renderer
+mid-job and write to the production server's configuration, and it has no
+login because it is not reachable from anywhere that would need one. Bound
+to 127.0.0.1, refused otherwise.
 
 No dependency: `http.server` from the standard library, and a page with no
 build step. The machine this runs on is somebody's desktop, and a control
@@ -42,7 +39,6 @@ panel that needs an install is a control panel nobody opens.
 """
 from __future__ import annotations
 
-import html
 import json
 import logging
 import pathlib
@@ -53,85 +49,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Its own, rather than relying on whoever imported it having done this.
 # `volunteer.py` does it before importing this; a person opening this
-# module from `tools/` does not, and the difference showed up only as a
-# price that never appeared.
+# module from `tools/` does not.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 logger = logging.getLogger("volunteer.panel")
 
-# The web box, for the one question this page asks about the other machine.
-# ssh, not an API: this laptop already holds a key to that box, and the
-# alternative is an authenticated admin endpoint on a public site -- a
-# login to build and protect so that a page on loopback can read one word.
+# The web box. ssh, not an API: this machine already holds a key to that
+# box, and the alternative is an authenticated admin endpoint on a public
+# site -- a login to build and protect so a loopback page can read a word.
 SERVER = "root@172.104.237.127"
 ENV_PATH = "/srv/vsw/shared/.env"
 
-# The mode may only ever be one of these. A WHITELIST, because the value is
-# interpolated into a command that runs as root on the production server.
-MODES = ("manual", "auto", "cloud")
-
-# TWO QUESTIONS, TWO ANSWERS EACH, and they are independent -- which is
-# exactly why an earlier version that folded them into one list of outcomes
-# read as a maze. They are about different machines and different money.
-#
-#   THIS_COMPUTER   does this machine render, right now. Having the window
-#                   open usually means yes, but not always: the processor
-#                   may be wanted for something else, and "leave it alone
-#                   for a bit" must not require closing anything.
-#
-#   OTHERWISE       what the server does with an upload this machine is not
-#                   taking -- window shut, or set to take nothing. The only
-#                   answer here that costs money.
-#
-# The server's `cloud` -- rent for every video even while this one renders
-# -- is deliberately NOT offered: it is two machines racing for one queue.
-# It is still recognised, because the server can be configured elsewhere.
-THIS_COMPUTER = {
-    "make": {
-        "taking": True,
-        "title": "Makes the videos",
-        "cost": "free",
-        "detail": "Every upload it can handle is rendered here, using this "
-                  "processor. Nothing is rented while it is doing that.",
-    },
-    "none": {
-        "taking": False,
-        "title": "Takes nothing for now",
-        "cost": "",
-        "detail": "This machine is left alone. What happens to an upload is "
-                  "then whatever is chosen below.",
-    },
-}
-
-OTHERWISE = {
-    "rent": {
-        "mode": "auto",
-        "title": "Rent a machine",
-        "cost": "per video",
-        "detail": "Nobody waits. One is created for that video and destroyed "
-                  "when it is done.",
-    },
-    "wait": {
-        "mode": "manual",
-        "title": "Let it wait",
-        "cost": "free",
-        "detail": "Nothing is rented and nothing is charged. It sits in the "
-                  "queue until this computer can take it.",
-    },
-}
-
-
-def computer_now(taking: bool) -> str:
-    """Which answer this machine is set to."""
-    return "make" if taking else "none"
-
-
-def otherwise_now(mode: str) -> str:
-    """Which answer the server is set to, or '' if it is neither."""
-    for name, spec in OTHERWISE.items():
-        if spec["mode"] == mode:
-            return name
-    return ""
+# The only mode this page ever sets, and the only one it writes. Renting is
+# not on offer here, so the server is held where it creates nothing and
+# work waits for this computer. A literal, never anything typed, because it
+# is interpolated into a command that runs as root on the production box.
+HELD_AT = "manual"
 
 
 class Panel:
@@ -142,87 +75,62 @@ class Panel:
         self.pause = pause
         self.resume = resume
         self.stop_after = stop_after
-        # `asked` False means the first ssh has not come back yet, which is
-        # not a problem and must not be drawn as one.
-        self._mode = {"name": "", "problem": "", "plan": "",
-                      "hourly_cost": None, "asked": False}
-        self._mode_lock = threading.Lock()
+        # `asked` False means the first look at the server has not come
+        # back yet, which is not a problem and must not be drawn as one.
+        self._server = {"mode": "", "problem": "", "asked": False}
+        self._lock = threading.Lock()
 
     def full(self) -> dict:
         """Everything the page draws."""
-        state = self.state()
-        mode = self.mode()
-        return {**state, "mode": mode,
-                "computer": computer_now(state.get("taking", False)),
-                "otherwise": otherwise_now(mode.get("name", "")),
-                # The server set to rent for EVERY video, which this page
-                # does not offer and which makes this computer stand back.
-                "server_overrides": mode.get("name", "") == "cloud"}
+        return {**self.state(), "server": self.server()}
 
-    # -- the other machine ----------------------------------------------
-    def mode(self) -> dict:
-        with self._mode_lock:
-            return dict(self._mode)
+    def server(self) -> dict:
+        with self._lock:
+            return dict(self._server)
 
-    def refresh_mode(self) -> None:
-        """Read the server's own settings. Never raises.
+    def refresh(self) -> None:
+        """Look at the server, and hold it where it rents nothing.
 
-        THE PLAN COMES FROM THE SERVER TOO, and it has to. The price beside
-        "rent a machine" was read from `settings.compute_hourly_cost` on
-        THIS machine -- a laptop whose .env is a development file -- and so
-        the page quoted 11 cents for a machine the server rents at 29. A
-        figure that describes another computer has to be read from that
-        computer; the alternative is a number that is confidently wrong.
-
-        Only the plan NAME travels. What it costs is looked up in
-        `PLAN_HOURLY_USD` here, which is the same table on both machines
-        because it is the same repository -- so there is still exactly one
-        place a price is written down.
+        Read AND corrected. This page offers no way to rent, so it must not
+        leave a server quietly renting -- and it can be set elsewhere,
+        because it is a file on another machine. If it has drifted, the
+        next look puts it back and says so in the log.
         """
+        mode = self._read_mode()
+        if mode is None:
+            return
+        if mode != HELD_AT:
+            logger.info("the server was set to %r, which rents machines; "
+                        "holding it at %r", mode, HELD_AT)
+            problem = self._write_mode(HELD_AT)
+            if problem:
+                self._set(mode, problem)
+                return
+            mode = self._read_mode() or HELD_AT
+        self._set(mode, "")
+
+    def _read_mode(self) -> str | None:
         try:
             done = subprocess.run(
                 ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                 SERVER,
-                 f"grep -E '^COMPUTE_(MODE|PLAN)=' {ENV_PATH} || true"],
+                 SERVER, f"grep -E '^COMPUTE_MODE=' {ENV_PATH} || true"],
                 capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as exc:
-            self._set_mode("", f"could not reach the web box: {exc}")
-            return
+            self._set("", f"could not reach the server: {exc}")
+            return None
         if done.returncode != 0:
-            self._set_mode("", (done.stderr or "").strip()[-200:]
-                           or "the web box refused the connection")
-            return
-        name, plan = "", ""
+            self._set("", (done.stderr or "").strip()[-200:]
+                      or "the server refused the connection")
+            return None
         for line in done.stdout.splitlines():
             if line.startswith("COMPUTE_MODE="):
-                name = line.split("=", 1)[1].strip().lower()
-            elif line.startswith("COMPUTE_PLAN="):
-                plan = line.split("=", 1)[1].strip()
+                return line.split("=", 1)[1].strip().lower()
         # Unset means `auto`, which is what app/store.py falls back to.
-        self._set_mode(name or "auto", "", plan)
+        return "auto"
 
-    def set_computer(self, name: str) -> str:
-        """Whether this machine renders. Returns '' or a reason."""
-        spec = THIS_COMPUTER.get(name)
-        if spec is None:
-            return f"{name!r} is not one of the answers"
-        (self.resume if spec["taking"] else self.pause)()
-        return ""
-
-    def set_otherwise(self, name: str) -> str:
-        """What the server does with what this machine is not taking."""
-        spec = OTHERWISE.get(name)
-        if spec is None:
-            return f"{name!r} is not one of the answers"
-        return self.set_mode(spec["mode"])
-
-    def set_mode(self, name: str) -> str:
-        """Change it on the web box. Returns '' or a reason."""
-        if name not in MODES:
-            return f"{name!r} is not a mode"
-        # The scaler reads this at start-up, so it is restarted; vsw-web
-        # holds the same settings object and answers the page that tells a
-        # visitor what to expect.
+    def _write_mode(self, name: str) -> str:
+        if name != HELD_AT:                    # nothing else is ever written
+            return f"{name!r} is not a mode this page sets"
         command = (
             f"grep -q '^COMPUTE_MODE=' {ENV_PATH}"
             f" && sed -i 's/^COMPUTE_MODE=.*/COMPUTE_MODE={name}/' {ENV_PATH}"
@@ -231,40 +139,21 @@ class Panel:
         try:
             done = subprocess.run(
                 ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                 SERVER, command],
-                capture_output=True, text=True, timeout=120)
+                 SERVER, command], capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.TimeoutExpired) as exc:
-            return f"could not reach the web box: {exc}"
+            return f"could not reach the server: {exc}"
         if done.returncode != 0:
             return (done.stderr or "").strip()[-200:] or "the change was refused"
-        self.refresh_mode()
-        logger.info("compute mode set to %s on the web box", name)
         return ""
 
-    def _set_mode(self, name: str, problem: str, plan: str = "") -> None:
-        with self._mode_lock:
-            cost = self._mode.get("hourly_cost")
-            if plan:
-                # NEVER FATAL. This runs inside the thread that keeps the
-                # server's settings fresh, and that thread has no handler:
-                # an exception here stopped it for good, so the page froze
-                # on whatever it last knew and said nothing about why.
-                # A missing price is a missing price, not a dead panel.
-                try:
-                    from app.settings import DEFAULT_PLAN, plan_hourly_usd
-                    cost = (plan_hourly_usd(plan)
-                            or plan_hourly_usd(DEFAULT_PLAN))
-                except Exception:                      # noqa: BLE001
-                    logger.warning("could not price the plan %r", plan,
-                                   exc_info=True)
-            self._mode = {"name": name, "problem": problem,
-                          "plan": plan or self._mode.get("plan", ""),
-                          "hourly_cost": cost,
-                          # "we have not asked yet" is not "it is broken".
-                          # The placeholder was rendered as a failure, so
-                          # the page opened accusing the server of being
-                          # unreachable before the first ssh had returned.
-                          "asked": True}
+    def set_working(self, on: bool) -> str:
+        """The one control. Returns '' or a reason."""
+        (self.resume if on else self.pause)()
+        return ""
+
+    def _set(self, mode: str, problem: str) -> None:
+        with self._lock:
+            self._server = {"mode": mode, "problem": problem, "asked": True}
 
 
 def serve(panel: Panel, port: int = 5055) -> str:
@@ -278,7 +167,6 @@ def serve(panel: Panel, port: int = 5055) -> str:
             self.send_response(code)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(body)))
-            # Nothing here is for anyone else to frame or cache.
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Frame-Options", "DENY")
             self.end_headers()
@@ -306,13 +194,11 @@ def serve(panel: Panel, port: int = 5055) -> str:
             except (ValueError, TypeError):
                 body = {}
 
-            if path == "/computer":
-                problem = panel.set_computer(str(body.get("answer") or ""))
-                if problem:
-                    self._json({"problem": problem}, code=400)
+            if path == "/working":
+                if "on" not in body:
+                    self._json({"problem": "no state given"}, code=400)
                     return
-            elif path == "/otherwise":
-                problem = panel.set_otherwise(str(body.get("answer") or ""))
+                problem = panel.set_working(bool(body.get("on")))
                 if problem:
                     self._json({"problem": problem}, code=400)
                     return
@@ -324,7 +210,8 @@ def serve(panel: Panel, port: int = 5055) -> str:
             self._json(panel.full())
 
     try:
-        # 127.0.0.1, never 0.0.0.0: this pauses a renderer and spends money.
+        # 127.0.0.1, never 0.0.0.0: this pauses a renderer and writes to
+        # the production server's configuration.
         server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except OSError as exc:
         logger.warning("could not open the panel on port %d: %s", port, exc)
@@ -338,24 +225,6 @@ def serve(panel: Panel, port: int = 5055) -> str:
 # --------------------------------------------------------------------------
 # the page
 # --------------------------------------------------------------------------
-def _rows(group: str, answers: dict) -> str:
-    out = []
-    for name, c in answers.items():
-        cost = (f'<em class="cost" data-cost="{name}">{html.escape(c["cost"])}'
-                f'</em>' if c["cost"] else "")
-        out.append(
-            f'<label class="choice"><input type="radio" name="{group}" '
-            f'value="{name}" data-group="{group}">'
-            f'<span class="tick" aria-hidden="true"></span>'
-            f'<span class="body"><span class="ct">{html.escape(c["title"])}'
-            f'{cost}</span>'
-            f'<span class="cd">{html.escape(c["detail"])}</span></span></label>')
-    return "".join(out)
-
-
-_COMPUTER_ROWS = _rows("computer", THIS_COMPUTER)
-_OTHERWISE_ROWS = _rows("otherwise", OTHERWISE)
-
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -369,9 +238,7 @@ PAGE = """<!doctype html>
    below is lighter than 5.4:1 against the surface it sits on. */
 :root{
   --paper:#f4efe6; --surface:#fffdfa; --raise:#fbf7f0;
-  --ink:#191320;        /* 16.1:1 on paper */
-  --soft:#4a4356;       /*  7.9:1 */
-  --quiet:#655d73;      /*  5.4:1 -- the lightest thing allowed */
+  --ink:#191320; --soft:#4a4356; --quiet:#655d73;
   --line:rgba(25,19,32,.16); --line-2:rgba(25,19,32,.09);
   --b1:#3d1e5c; --b2:#5c2f86; --mag:#b81e6e; --good:#1d6b4a;
   --serif:Fraunces,Georgia,serif;
@@ -389,25 +256,21 @@ PAGE = """<!doctype html>
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
   font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
-.wrap{max-width:620px;margin:0 auto;padding:34px 20px 64px}
-header{display:flex;align-items:baseline;gap:10px;margin-bottom:26px;
+.wrap{max-width:560px;margin:0 auto;padding:38px 20px 60px}
+header{display:flex;align-items:baseline;gap:10px;margin-bottom:30px;
   color:var(--quiet);font-size:13px}
 .wordmark{font-family:var(--serif);font-weight:600;font-size:16px;
   color:var(--ink)}
 
-/* NOT A CARD. It had the same border, radius and fill as the answer rows
-   below it, so a page with two questions read as three lists of the same
-   thing. A status is reported, not chosen, and it should not look like
-   something you can pick. */
-.status{border-left:3px solid var(--good);padding:2px 0 2px 16px;
-  margin-bottom:6px}
+/* Reported, not chosen -- so it must not look like something to pick. */
+.status{border-left:3px solid var(--good);padding:2px 0 2px 16px}
 .status.busy{border-left-color:var(--mag)}
-.status.idle{border-left-color:var(--quiet)}
-.status .now{font-family:var(--serif);font-size:23px;font-weight:600;
+.status.off{border-left-color:var(--quiet)}
+.now{font-family:var(--serif);font-size:24px;font-weight:600;
   letter-spacing:-.015em;line-height:1.25;margin:0;text-wrap:balance}
-.status .sub{color:var(--soft);margin:5px 0 0;font-size:14.5px}
+.sub{color:var(--soft);margin:5px 0 0;font-size:14.5px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;
-  margin-right:9px;vertical-align:middle;background:var(--quiet)}
+  margin-right:10px;vertical-align:middle;background:var(--quiet)}
 .dot.live{background:var(--mag);animation:pulse 1.6s ease-in-out infinite}
 .dot.on{background:var(--good)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -422,54 +285,41 @@ header{display:flex;align-items:baseline;gap:10px;margin-bottom:26px;
   text-align:center}
 .stg.now span{color:var(--mag);font-weight:600}
 .detail{margin:13px 0 0;color:var(--soft);font-size:14px}
-.after{margin-top:15px}
 
-/* The statement. Not a control, because owning the machine IS the intent:
-   the window is open because you want it to take work. */
-.given{display:flex;gap:11px;align-items:flex-start;margin:26px 0 0;
-  padding:14px 16px;border-left:3px solid var(--b2);background:var(--raise);
-  border-radius:0 5px 5px 0}
-.given p{margin:0;font-size:14.5px;color:var(--soft)}
-.given b{color:var(--ink);font-weight:600}
+/* THE ONE CONTROL. */
+.control{display:flex;align-items:center;gap:18px;margin:30px 0 0;
+  background:var(--surface);border:1.5px solid var(--line);border-radius:8px;
+  padding:20px 22px;transition:border-color .18s}
+.control.on{border-color:var(--b1)}
+.knob{flex:0 0 auto;width:62px;height:34px;border-radius:99px;padding:0;
+  border:0;background:var(--quiet);position:relative;cursor:pointer;
+  transition:background .18s}
+.knob::after{content:"";position:absolute;top:4px;left:4px;width:26px;
+  height:26px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.35);transition:transform .18s}
+.knob[aria-checked="true"]{background:var(--b1)}
+.knob[aria-checked="true"]::after{transform:translateX(28px)}
+.knob:focus-visible{outline:3px solid var(--mag);outline-offset:3px}
+.knob[disabled]{opacity:.45;cursor:default}
+@media (prefers-reduced-motion:reduce){.knob,.knob::after{transition:none}}
+.label{flex:1}
+.label b{display:block;font-size:17px;font-weight:600}
+.label span{display:block;color:var(--soft);font-size:14px;margin-top:2px}
 
-h2{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:-.01em;
-  margin:32px 0 4px}
-.hint{color:var(--soft);font-size:14px;margin:0 0 14px}
+.after{margin-top:16px}
+button.plain{font:inherit;font-size:13.5px;font-weight:600;border-radius:5px;
+  cursor:pointer;padding:10px 18px;border:1.5px solid var(--line);
+  background:var(--raise);color:var(--ink)}
+button.plain:hover{border-color:var(--ink)}
+button.plain:focus-visible{outline:3px solid var(--mag);outline-offset:2px}
 
-.choice{display:flex;gap:13px;align-items:flex-start;background:var(--surface);
-  border:1.5px solid var(--line);border-radius:6px;padding:14px 16px;
-  margin-bottom:9px;cursor:pointer;transition:border-color .15s,background .15s}
-.choice:hover{border-color:var(--quiet);background:var(--raise)}
-.choice input{position:absolute;opacity:0;width:0;height:0}
-.tick{flex:0 0 auto;width:18px;height:18px;border-radius:50%;margin-top:3px;
-  border:2px solid var(--quiet);transition:border-color .15s}
-.choice:has(input:checked){border-color:var(--b1);background:var(--raise)}
-.choice:has(input:checked) .tick{border-color:var(--b1);
-  box-shadow:inset 0 0 0 4px var(--b1)}
-.choice:has(input:focus-visible){outline:3px solid var(--mag);outline-offset:2px}
-.body{flex:1}
-.ct{display:flex;flex-wrap:wrap;align-items:baseline;gap:9px;
-  font-weight:600;font-size:15.5px}
-.choice:has(input:checked) .ct{color:var(--b1)}
-.cost{font-style:normal;font-size:12px;font-weight:500;color:var(--soft);
-  background:var(--line-2);padding:2px 8px;border-radius:99px;white-space:nowrap}
-.cd{display:block;color:var(--soft);font-size:14px;margin-top:3px}
-
-.facts{display:flex;flex-wrap:wrap;gap:22px;padding:15px 17px;
-  background:var(--surface);border:1px solid var(--line);border-radius:6px}
+h2{font-family:var(--serif);font-size:17px;font-weight:600;margin:34px 0 12px}
+.facts{display:flex;flex-wrap:wrap;gap:24px;padding:16px 18px;
+  background:var(--surface);border:1px solid var(--line);border-radius:8px}
 .fact .n{font-family:var(--serif);font-size:20px;font-weight:600;
   font-variant-numeric:tabular-nums;line-height:1.2}
 .fact .k{font-size:12.5px;color:var(--soft)}
-
-button{font:inherit;font-size:13px;font-weight:600;border-radius:4px;
-  cursor:pointer;padding:10px 18px;border:1.5px solid var(--line);
-  background:var(--raise);color:var(--ink);transition:border-color .15s}
-button:hover:not([disabled]){border-color:var(--ink)}
-button:focus-visible{outline:3px solid var(--mag);outline-offset:2px}
-button[disabled]{opacity:.4;cursor:default}
-.warn{background:var(--raise);border:1.5px solid var(--mag);border-radius:6px;
-  padding:14px 16px;margin-top:14px;font-size:14.5px;color:var(--ink)}
-.problem{color:var(--mag);font-size:14px;margin:12px 0 0;min-height:1.3em;
+.problem{color:var(--mag);font-size:14px;margin:14px 0 0;min-height:1.3em;
   font-weight:500}
 footer{margin-top:34px;color:var(--soft);font-size:13.5px;line-height:1.6}
 footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
@@ -483,14 +333,12 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
   <div id="extra"></div>
 </div>
 
-<h2>This computer</h2>
-<p class="hint">Whether this machine renders, right now.</p>
-<div>__COMPUTER__</div>
-
-<h2>If this computer can&rsquo;t take a video</h2>
-<p class="hint" id="whynot">…</p>
-<div>__OTHERWISE__</div>
-<div id="override"></div>
+<div class="control" id="control">
+  <button class="knob" id="knob" role="switch" aria-checked="false"
+          aria-labelledby="knoblabel"></button>
+  <span class="label" id="knoblabel"><b id="knobtitle">…</b>
+    <span id="knobsub"></span></span>
+</div>
 <p class="problem" id="problem"></p>
 
 <h2>What this computer can take</h2>
@@ -498,7 +346,8 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 
 <footer>This page is on this computer only — <code>127.0.0.1:__PORT__</code>.
   Closing it changes nothing. Closing the black <code>lend.bat</code> window
-  is what stops this computer taking videos.</footer>
+  stops this computer taking videos, exactly like the switch above.
+  No machine is ever rented.</footer>
 </div>
 
 <script>
@@ -529,16 +378,16 @@ function clock(s){
 }
 
 function paint(s){
-  const job = s.job, dot = document.getElementById('dot');
+  const job = s.job, on = s.taking;
   const box = document.getElementById('status');
+  const dot = document.getElementById('dot');
   const text = document.getElementById('nowtext');
   const sub = document.getElementById('sub');
   const extra = document.getElementById('extra');
 
   if(job){
-    box.className = 'status busy';
-    dot.className = 'dot live';
-    text.textContent = 'Making a video on this computer';
+    box.className = 'status busy'; dot.className = 'dot live';
+    text.textContent = 'Making a video';
     sub.textContent = job.piece + ' · running ' + clock(job.running_for) +
       (job.minutes ? ' · ' + job.minutes.toFixed(1) + ' min of music' : '');
     const at = STAGES.findIndex(([k]) => k === job.stage);
@@ -546,84 +395,52 @@ function paint(s){
       '<div class="stg ' + (i < at ? 'done' : i === at ? 'now' : '') +
       '"><i></i><span>' + l + '</span></div>').join('') + '</div>' +
       (job.detail ? '<p class="detail">' + job.detail + '</p>' : '') +
-      '<div class="after"><button id="stop">Finish this one, then stop</button></div>';
+      '<div class="after"><button class="plain" id="stop">Finish this one, ' +
+      'then stop</button></div>';
     document.getElementById('stop').onclick = () => send('/stop');
-  }else if(s.taking){
-    box.className = 'status';
-    dot.className = 'dot on';
-    text.textContent = 'Ready — nothing to render';
-    // Deliberately NOT "the next upload is made here": that is the answer
-    // to the first question below, and saying it twice made the page read
-    // as three lists of the same thing.
-    sub.textContent = 'Waiting for someone to upload a performance.';
+  }else if(on){
+    box.className = 'status'; dot.className = 'dot on';
+    text.textContent = 'Ready';
+    sub.textContent = s.quiet_for > 0
+      ? 'Standing aside for ' + clock(s.quiet_for) + ' after handing one back.'
+      : 'Waiting for someone to upload a performance.';
     extra.innerHTML = '';
   }else{
-    box.className = 'status idle';
-    dot.className = 'dot';
-    text.textContent = 'This computer is not taking videos';
-    sub.textContent = s.server_overrides
-      ? 'The server is set to rent a machine for every video, so this one '
-        + 'stands back.'
-      : s.quiet_for > 0
-        ? 'It just handed a job back; standing aside for ' + clock(s.quiet_for) + '.'
-        : (s.otherwise === 'rent'
-            ? 'Uploads go to a rented machine.'
-            : 'Uploads wait in the queue.');
+    box.className = 'status off'; dot.className = 'dot';
+    text.textContent = 'Everything is on hold';
+    sub.textContent = 'Uploads wait in the queue until you switch this on.';
     extra.innerHTML = '';
   }
 
-  // Both questions. Each reflects one machine; neither depends on the other.
-  document.querySelectorAll('.choice input').forEach(i => {
-    const g = i.dataset.group;
-    i.checked = (i.value === (g === 'computer' ? s.computer : s.otherwise));
-    i.disabled = busy || (g === 'otherwise' && !(s.mode && s.mode.name));
-  });
+  const knob = document.getElementById('knob');
+  knob.setAttribute('aria-checked', on ? 'true' : 'false');
+  knob.disabled = busy;
+  document.getElementById('control').className = 'control' + (on ? ' on' : '');
+  document.getElementById('knobtitle').textContent =
+    on ? 'Taking videos' : 'On hold';
+  document.getElementById('knobsub').textContent = on
+    ? 'Every upload is made on this computer.'
+    : 'Nothing is made anywhere. Nothing is rented.';
 
-  document.getElementById('override').innerHTML = s.server_overrides
-    ? '<div class="warn">The server is currently set to <b>rent a machine ' +
-      'for every video</b>, even while this computer is running — so this ' +
-      'one is standing back. Pick either answer above to change it.</div>'
-    : '';
-
-  // "Not asked yet" is not "broken". The placeholder used to be drawn as a
+  // "Not asked yet" is not "broken": the placeholder used to be drawn as a
   // failure, so the page opened accusing the server of being unreachable
-  // before the first ssh had returned.
+  // before the first look had returned.
   document.getElementById('problem').textContent =
-    (s.mode && s.mode.asked && s.mode.problem)
-      ? 'The server could not be reached: ' + s.mode.problem : '';
-
-  // WHY a machine would ever be rented, which is the question the old
-  // heading provoked and did not answer. Exactly two reasons, and the
-  // second one is a live number, not a generality.
-  const cap = s.longest_min == null ? null : Math.floor(s.longest_min);
-  document.getElementById('whynot').textContent =
-    'Two things stop it: the black window is closed, or the performance is '
-    + 'longer than its free memory allows'
-    + (cap == null ? '' : ' (over ' + cap + ' minutes right now)')
-    + '. This is what happens then — the only answer that costs money.';
-
-  // The price, read from the SERVER's plan. Taken from this machine's own
-  // settings it quoted the wrong figure for somebody else's computer.
-  const cost = s.mode && s.mode.hourly_cost;
-  if(cost){
-    document.querySelectorAll('[data-cost="rent"]').forEach(e =>
-      e.textContent = '~$' + cost.toFixed(2) + ' a video');
-  }
+    (s.server && s.server.asked && s.server.problem)
+      ? 'The server could not be reached: ' + s.server.problem : '';
 
   document.getElementById('facts').innerHTML = [
     [s.free_gb == null ? '—' : s.free_gb.toFixed(1) + ' GB', 'memory free now'],
     [s.longest_min == null ? '—' : Math.floor(s.longest_min) + ' min',
-     'longest video it will accept'],
-    [s.scores_here + ' of ' + s.scores_total, 'scores already downloaded'],
+     'longest video it can take'],
+    [s.scores_here + ' of ' + s.scores_total, 'scores downloaded'],
   ].map(([n,k]) => '<div class="fact"><div class="n">' + n +
                    '</div><div class="k">' + k + '</div></div>').join('');
 }
 
-document.querySelectorAll('.choice input').forEach(i => {
-  i.onchange = () => {
-    if(i.checked) send('/' + i.dataset.group, {answer: i.value});
-  };
-});
+document.getElementById('knob').onclick = function(){
+  send('/working', {on: this.getAttribute('aria-checked') !== 'true'});
+};
 
 async function tick(){
   if(!busy){ try{ paint(await (await fetch('/state')).json()); }catch(e){} }
@@ -631,5 +448,4 @@ async function tick(){
 }
 tick();
 </script></body></html>
-""".replace("__COMPUTER__", _COMPUTER_ROWS).replace("__OTHERWISE__",
-                                                   _OTHERWISE_ROWS)
+"""
