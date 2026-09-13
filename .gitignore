@@ -22,3 +22,9 @@ design/mockup/assets/
 # they are rebuilt in a minute and would otherwise put megabytes of PNG in
 # every commit that touched a layout.
 preview/
+
+# A one-off: copies the broker password and bucket keys from the web box
+# into this machine.env so it can lend itself to the queue. Never committed.
+lend-setup.py
+.env.before-lending
+*.bak-*
