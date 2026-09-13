@@ -536,6 +536,7 @@ function applyAnswer(a){
 const baseSubmit = $('#submit').onclick;
 
 $('#submit').onclick = async function(){
+  let alreadyProved = false;
   const address = $('#email').value.trim();
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)){
     emailNote('That address does not look right yet.', true);
@@ -580,6 +581,7 @@ $('#submit').onclick = async function(){
     });
     const data = await r.json();
     if(!r.ok) throw new Error(data.error || `render refused (${r.status})`);
+    alreadyProved = !!data.address_confirmed;
   }catch(err){
     emailNote(err.message || 'That did not go through.', true);
     return;
@@ -587,7 +589,11 @@ $('#submit').onclick = async function(){
   emailNote();
   S.email = address;
 
-  if(SERVER.can_email){
+  // "Check your inbox for the link" only when a link was actually sent. An
+  // address confirmed weeks ago gets the "we are making it" mail instead,
+  // and being sent to look for a confirmation that does not exist is worse
+  // than no screen at all -- it reads as something having gone wrong.
+  if(SERVER.can_email && !alreadyProved){
     baseSubmit();        // the screens, the address memory, the recap
   }else{
     // No mail can be sent, so the "check your inbox" screen would be a

@@ -1136,7 +1136,18 @@ def api_render(job_id: str):
     job.email = address
     jobs.registry.start(job, package.name, mode, style,
                         _panel_meta(body.get("meta")))
-    return jsonify({"job": job.public()})
+    # WHETHER A CONFIRMATION WAS ACTUALLY ASKED FOR. The page used to show
+    # "open the email we just sent and click the link" to everyone whose
+    # install can send mail at all -- including people whose address was
+    # confirmed weeks ago, for whom no such email exists. They sat waiting
+    # for a link that was never going to arrive while their video rendered.
+    #
+    # `store.may_mail` is the same question `_say_it_is_queued` asks before
+    # choosing which message to send, so the page and the mailer cannot
+    # disagree about which one went out.
+    return jsonify({"job": job.public(),
+                    "address_confirmed": bool(address)
+                                         and store.may_mail(address)})
 
 
 @bp.get("/api/jobs/<job_id>/status")

@@ -2627,6 +2627,55 @@ def check_one_person_cannot_hold_billions_of_buckets() -> str:
     return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
 
 
+def check_no_confirmation_screen_without_a_confirmation() -> str:
+    """"Open the email we just sent" only when one was actually sent.
+
+    The page showed the identity-check screen to everyone whose install can
+    send mail AT ALL -- `if(SERVER.can_email)` -- and never asked whether
+    THIS address needed proving. An address confirmed weeks earlier gets the
+    "we are making your score video" mail instead, and its owner was sent
+    hunting for a confirmation link that does not exist, while their video
+    rendered behind the screen telling them nothing was rendering.
+
+    It also claimed "Nothing is rendered until you click." That was never
+    true of any address. `jobs.registry.start` queues and publishes the job
+    before mail is considered at all, and `_say_it_is_queued` says so in as
+    many words: the render is not held up, the visitor watches the page.
+
+    So the server now answers the same question the mailer asks -- and it
+    must be the same one, or the page and the mailbox disagree about which
+    message went out.
+    """
+    routes = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8", errors="ignore")
+    page = (ROOT / "app" / "static" / "svs" / "index.html").read_text(
+        encoding="utf-8", errors="ignore")
+
+    if "address_confirmed" not in routes:
+        raise Failed("the render response does not say whether the address "
+                     "was already proved, so the page cannot know which "
+                     "mail was sent")
+    if "store.may_mail(address)" not in routes:
+        raise Failed("the page's answer is not derived from may_mail, the "
+                     "same question the mailer asks; the two can disagree "
+                     "about which message went out")
+
+    if "SERVER.can_email && !alreadyProved" not in wire:
+        raise Failed("the confirmation screen is still shown whenever the "
+                     "install can send mail, rather than when a "
+                     "confirmation was actually sent")
+    if "data.address_confirmed" not in wire:
+        raise Failed("the page never reads the server's answer")
+
+    if "Nothing is rendered until you click" in page:
+        raise Failed("the page still claims the render waits for the click. "
+                     "It does not: jobs.registry.start queues and publishes "
+                     "before any mail is considered.")
+
+    return ("the confirm screen needs a confirmation, and the page no "
+            "longer claims the render waits for it")
+
 def check_a_refusal_is_not_a_failed_recognition() -> str:
     """A video the server turned away must not read as unrecognised music.
 
@@ -3388,6 +3437,7 @@ def main() -> int:
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
         check_the_edition_is_credited,
+        check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
