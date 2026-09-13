@@ -142,14 +142,47 @@ reused, deliberately:
 | | VSS | here |
 |---|---|---|
 | band source | `.jpg` only, via `cv2.imread` | `.svg`, rasterised to the band rectangle |
-| compositing | `cv2.VideoCapture` frame loop in Python | one ffmpeg `-filter_complex` chain |
+| band assembly | concat demuxer, one image per segment with a duration | a generated strip, seeked per band |
 | presentation | fixed layout | aspect, band position, three panel modes, paper/ink colours, transparency, portrait offset, mark, edition credit |
 
 It contains no `svg` and no `cairo`, so it could not have prevented the glyph
 bug — and `scan_start_measures` accepts `.jpg` and nothing else, so adopting
 it would reintroduce the soft-band-quality problem that vector bands fixed.
-On a node billed by the hour, a Python frame loop over ~18,000 frames is not
-a detail.
+
+**A correction, recorded because the wrong version of it was believed for an
+hour:** VSS is *not* a Python frame loop. It builds a band-only MP4 with the
+concat demuxer and then does a single-pass ffmpeg overlay; `cv2` appears only
+to read the frame rate. The reasons not to adopt it stand, but performance is
+not one of them.
+
+### What reading VSS's code was worth
+
+Its commit messages are not a knowledge base — "fixed rabbitmq for big files"
+touches a Dropbox token, and six commits called "fix ffprobe issue" are about
+labels in a comparison report. The code is.
+
+| what VSS does | us |
+|---|---|
+| `setpts=PTS-STARTPTS` on every input — a source whose first frame has a non-zero timestamp would drift against the band | already done |
+| band video forced to the source frame rate | already done, and clamped to 23–60, which VSS does not do |
+| `-t duration` hard cap from the probe | `shortest=1` on the band overlay |
+| reads a stream's `rotate` tag | **was missing — see below** |
+| — | reads `sample_aspect_ratio`, so anamorphic sources are not squeezed; VSS does not |
+
+**The rotation one was a real bug.** A phone held upright records landscape
+and says "turn me": the frames are stored 1920x1080 and the container carries
+a display matrix. ffprobe reports the STORED size; ffmpeg applies the matrix
+when it decodes. Measured on a 640x360 clip with a 90-degree matrix:
+
+    our probe said   640x360, aspect 1.778  -> landscape
+    ffmpeg decoded   360x640                -> portrait
+
+So the layout was computed for one shape and the filter graph handed the
+other, for the most ordinary upload there is. `render.quarter_turned()` now
+reads `side_data_list` with the legacy tag as a fallback, and the pixel
+aspect turns with the frame. Only a QUARTER turn changes the shape — 180
+degrees is the same rectangle, and swapping its sides would be the same bug
+mirrored.
 
 **What we do share is the alignment**, which is the hard musical part:
 `VSS_ROOT` feeds `--vss-root` to the sync runner in `app/sync.py`. That
