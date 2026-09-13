@@ -177,6 +177,14 @@ def _ensure_input_in_bucket(row) -> str:
 
 
 def _apply(event) -> None:
+    # `alive` belongs to no job. It is a worker saying it is there and
+    # willing, which is how a volunteer machine tells the scaler not to
+    # start a paid one. Handled before the ledger because the ledger is
+    # about jobs and this event has no job to be about.
+    if getattr(event, "type", "") == "alive":
+        store.volunteer_seen(getattr(event, "worker", ""),
+                             getattr(event, "at", None))
+        return
     ledger.apply(event)
 
 

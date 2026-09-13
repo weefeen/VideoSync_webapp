@@ -904,6 +904,20 @@ def compute_tick(grace_seconds: float,
     if state == "wanted" and updated:
         would_run += max(0.0, min(now - updated, 3600.0))
 
+    # WHO IS EXPECTED TO RENDER. `cloud` rents whenever there is work, as it
+    # always did. `manual` never rents: a machine of ours is doing it, and
+    # if none is, the work waits -- the operator asked for that and the
+    # consequence is theirs. `auto` rents unless a volunteer is currently
+    # consuming, which is the only setting that cannot strand a visitor.
+    #
+    # This only ever decides whether to CREATE. A machine already running
+    # has its hour bought and finishes it either way; handing it back early
+    # refunds nothing.
+    mode = (settings.compute_mode or "auto").lower()
+    helper = volunteer(now)
+    if mode == "manual" or (mode != "cloud" and helper is not None):
+        busy = 0
+
     event = None
     if busy > 0:
         idle_since = None
@@ -1104,6 +1118,52 @@ def set_meta(key: str, value: str) -> None:
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
             "made=excluded.made WHERE meta.value = ''",
             (key, value, time.time()))
+
+
+
+# How long a volunteer's word is good for. Three missed beats: long enough
+# that a slow network does not hand the work to a paid machine, short enough
+# that a closed laptop is noticed before a visitor gives up waiting.
+VOLUNTEER_WINDOW = 180.0
+
+
+def volunteer_seen(name: str, at: float | None = None) -> None:
+    """Record that a volunteer worker is consuming right now."""
+    set_meta_always("volunteer", json.dumps(
+        {"at": at or time.time(), "name": (name or "")[:80]}))
+
+
+def volunteer(now: float | None = None) -> dict | None:
+    """The volunteer currently offering to work, or None.
+
+    None the moment its last heartbeat is older than VOLUNTEER_WINDOW, so a
+    machine that was shut without saying goodbye stops holding the queue.
+    """
+    raw = get_meta("volunteer")
+    if not raw:
+        return None
+    try:
+        got = json.loads(raw)
+        at = float(got.get("at") or 0)
+    except (ValueError, TypeError):
+        return None
+    if (now or time.time()) - at > VOLUNTEER_WINDOW:
+        return None
+    return {"at": at, "name": str(got.get("name") or "")}
+
+
+def set_meta_always(key: str, value: str) -> None:
+    """Store a value, replacing whatever was there.
+
+    `set_meta` deliberately keeps an existing value -- it exists for a
+    signing key that must never change under a running process. A heartbeat
+    is the opposite: the newest one is the only one that means anything.
+    """
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO meta (key, value, made) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "made=excluded.made", (key, value, time.time()))
 
 
 def saw_address(address: str, now: float | None = None) -> None:

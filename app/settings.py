@@ -233,6 +233,22 @@ class Settings:
     # submission renews it, so somebody who uses the site is never asked
     # twice. 0 disables the expiry.
     confirm_ttl_days: float = 180.0
+    # WHO RENDERS, as a deliberate choice rather than a guess.
+    #   cloud   always rent a machine when there is work (what it always did)
+    #   manual  never rent -- a machine of ours is doing it, and if none is,
+    #           the work waits for one. The risk is visible and the
+    #           operator's.
+    #   auto    rent unless a volunteer is currently consuming
+    #
+    # `auto` is the default because it is the only one that cannot strand a
+    # visitor: a laptop closed without warning goes quiet within three
+    # missed heartbeats and the next tick rents a machine.
+    #
+    # NONE OF THEM CHANGES THE MAIL. Confirmation and delivery are sent by
+    # the web box from the events a worker publishes, whoever that worker
+    # is; a video rendered on somebody's desk is announced exactly as one
+    # rendered on a rented node.
+    compute_mode: str = "auto"
     compute_plan: str = DEFAULT_PLAN
     # A ceiling, because a loop that creates machines is not a bug that
     # costs an afternoon. Refused beyond this many in an hour, whatever the
@@ -554,6 +570,8 @@ def load() -> Settings:
         compute_region=os.getenv("COMPUTE_REGION", "eu-central").strip(),
         compute_image=os.getenv("COMPUTE_IMAGE", "").strip(),
         confirm_ttl_days=_number("CONFIRM_TTL_DAYS", 180.0),
+        compute_mode=(os.getenv("COMPUTE_MODE", "auto").strip().lower()
+                      or "auto"),
         compute_plan=os.getenv("COMPUTE_PLAN", DEFAULT_PLAN).strip(),
         compute_max_creates_per_hour=int(
             _number("COMPUTE_MAX_CREATES_PER_HOUR", 4)),

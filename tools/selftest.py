@@ -2655,6 +2655,94 @@ def check_one_person_cannot_hold_billions_of_buckets() -> str:
     return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
 
 
+def check_a_volunteer_machine_stops_the_paid_one() -> str:
+    """While a machine is lending itself, no machine is rented.
+
+    A render costs about 29 cents on a rented node, because Linode rounds a
+    partial hour up and a video takes ten minutes. A desktop that is already
+    paid for can consume the same queue -- the worker is portable, which is
+    the whole reason a compute node works at all -- but the scaler decides
+    from the JOB TABLE alone: `queued + running > 0` means "want a machine",
+    whoever happens to be consuming. So a volunteer would have taken the job
+    AND a node would have booted beside it, and the bill would have been
+    unchanged.
+
+    A volunteer now says `alive` on the queue the worker already reports on,
+    and that word is good for three missed beats. Fresh, and nothing is
+    wanted; stale, and the next tick wants a machine again -- so a laptop
+    that is closed without warning costs a visitor a few minutes, not their
+    video.
+    """
+    import time as _t
+
+    from app import store
+
+    import dataclasses
+
+    from app.settings import settings
+
+    def idle() -> None:
+        """Nothing running, so each case decides whether to CREATE."""
+        with store.write() as conn:
+            conn.execute("UPDATE compute SET state='none', idle_since=NULL,"
+                         " updated=NULL WHERE singleton = 1")
+
+    store.set_meta_always("volunteer", "")
+    now = _t.time()
+    was = store.settings
+    _queued("volunteer-check", state=store.QUEUED)
+    try:
+        store.settings = dataclasses.replace(settings, compute_mode="auto")
+        idle()
+        alone = store.compute_tick(0.0, live=False)
+        if alone.get("state") != "wanted":
+            raise Failed(f"with work queued and no volunteer the scaler is "
+                         f"{alone.get('state')!r}; it must want a machine")
+
+        store.volunteer_seen("selftest-desktop", now)
+        if store.volunteer(now) is None:
+            raise Failed("a heartbeat just recorded does not read back")
+        idle()
+        lent = store.compute_tick(0.0, live=False)
+        if lent.get("state") == "wanted":
+            raise Failed("a machine is wanted while a volunteer is "
+                         "consuming; the job would be rendered twice over "
+                         "and the rented one paid for")
+
+        # `cloud` ignores the volunteer, for the days a desktop is not to be
+        # trusted with somebody's video.
+        store.settings = dataclasses.replace(settings, compute_mode="cloud")
+        idle()
+        if store.compute_tick(0.0, live=False).get("state") != "wanted":
+            raise Failed("COMPUTE_MODE=cloud did not rent a machine even "
+                         "with work queued; that mode exists to be certain")
+
+        # `manual` never rents, volunteer or not. The operator asked.
+        store.settings = dataclasses.replace(settings, compute_mode="manual")
+        store.set_meta_always("volunteer", "")
+        idle()
+        if store.compute_tick(0.0, live=False).get("state") == "wanted":
+            raise Failed("COMPUTE_MODE=manual rented a machine; the whole "
+                         "point of it is that nothing is rented")
+        store.settings = was
+
+        # And the word expires, or a closed laptop holds the queue for ever.
+        if store.volunteer(now + store.VOLUNTEER_WINDOW + 1) is not None:
+            raise Failed(f"a volunteer is still trusted "
+                         f"{store.VOLUNTEER_WINDOW:.0f}s after its last "
+                         f"heartbeat; a closed laptop would strand the queue")
+    finally:
+        store.settings = was
+        store.set_meta_always("volunteer", "")
+        with store.write() as conn:
+            conn.execute("DELETE FROM jobs WHERE id = ?", ("volunteer-check",))
+            conn.execute("UPDATE compute SET state='none', idle_since=NULL,"
+                         " updated=NULL WHERE singleton = 1")
+
+    return (f"auto rents alone and stands aside for a volunteer; cloud "
+            f"always rents; manual never does; the offer expires after "
+            f"{store.VOLUNTEER_WINDOW:.0f}s")
+
 def check_a_node_may_read_what_it_is_told_to_pull() -> str:
     """Everything cloud-init pulls at boot must be permitted by the wrapper.
 
@@ -3788,6 +3876,7 @@ def main() -> int:
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
         check_the_edition_is_credited,
+        check_a_volunteer_machine_stops_the_paid_one,
         check_a_node_may_read_what_it_is_told_to_pull,
         check_music_glyphs_survive_the_rasteriser,
         check_a_confirmation_is_bound_and_expires,
