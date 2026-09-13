@@ -201,6 +201,18 @@ runcmd:
   # copy still works -- but it is recorded, because a node aligning with an
   # older engine than the operator believes is exactly what this prevents.
   - bash -c 'rsync -a --delete --exclude .git -e "ssh -i /root/.ssh/vsw_pull -o StrictHostKeyChecking=no -o ConnectTimeout=20" root@{web_host}:/srv/vsw/VideoScoreSync/ /srv/vsw/VideoScoreSync/ && echo vss-pull-ok > /srv/vsw/shared/vss.state || echo vss-pull-FAILED > /srv/vsw/shared/vss.state'
+  # THE MUSIC FONTS, pulled and installed BEFORE the worker unit starts.
+  # Verovio writes a tempo's metronome note as live text in the Leipzig
+  # font; cairosvg resolves only fonts fontconfig knows, so without this a
+  # tempo marking renders as a tofu box in the finished video. They came
+  # from the image before, which meant a font unpacked from a score
+  # installed after the image was captured never reached a node.
+  #
+  # fontconfig is consulted once per process and cached -- measured: a font
+  # installed halfway through a render changes nothing for that render --
+  # so this has to happen here, at boot, and not when a job arrives.
+  - bash -c 'rsync -a -e "ssh -i /root/.ssh/vsw_pull -o StrictHostKeyChecking=no -o ConnectTimeout=20" root@{web_host}:/srv/vsw/shared/fonts/ /srv/vsw/shared/fonts/ || true'
+  - bash -c 'install -d /usr/local/share/fonts/vsw; for f in /srv/vsw/shared/fonts/smufl/*.ttf /srv/vsw/shared/fonts/smufl/*.otf; do [ -f "$f" ] && install -m 644 "$f" /usr/local/share/fonts/vsw/; done; fc-cache -f >/dev/null 2>&1 || true'
   - [ chown, -R, 'vsw:vsw', /srv/vsw/current ]
   - bash -c 'ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env'
   - [ chown, -h, 'vsw:vsw', /srv/vsw/current/.env ]

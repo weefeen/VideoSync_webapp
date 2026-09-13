@@ -34,3 +34,8 @@ boto3>=1.34
 # ffmpeg and ffprobe are external binaries, not Python packages.
 # Windows: https://www.gyan.dev/ffmpeg/builds/
 # Debian/Ubuntu: sudo apt install ffmpeg
+
+# Unpacks the music font a score embeds in its SVG so the render host can
+# actually draw a tempo's metronome note; see app/smufl.py. The [woff]
+# extra brings brotli, without which a woff2 cannot be opened.
+fonttools[woff]>=4.50

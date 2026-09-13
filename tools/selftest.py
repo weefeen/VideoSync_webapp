@@ -2627,6 +2627,124 @@ def check_one_person_cannot_hold_billions_of_buckets() -> str:
     return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
 
 
+def check_music_glyphs_survive_the_rasteriser() -> str:
+    """A tempo's metronome note must not come out as a tofu box.
+
+    Verovio draws almost everything as `<path>`, which needs no font. A few
+    marks it emits as LIVE TEXT in a music font instead:
+
+        <tspan font-family="Leipzig" font-size="503px">&#xECA7;</tspan>
+
+    U+ECA7 is SMuFL metNote8thUp. Verovio embeds the Leipzig font in the SVG
+    as an @font-face data URI, which is why the file looks right in any
+    browser -- and cairosvg does not honour @font-face at all. It reads
+    fontconfig and nothing else, so with no Leipzig installed the character
+    fell back to a font with nothing at that codepoint: "Allegro. (&#x25A1; = 108)"
+    in somebody's finished video.
+
+    The fix is not a substitution table. music_line_extractor has one, and
+    it is right for a desktop app that must not touch a stranger's operating
+    system -- it covers eight metronome glyphs. This font carries 642, and a
+    dynamic or an ornament emitted as text would each need another row. The
+    font is taken out of the score that needs it and installed, which covers
+    every glyph at once.
+
+    Bytes come from the package, never from us, so nothing here redistributes
+    a font.
+    """
+    import io
+
+    from app import smufl
+    from app.settings import settings
+
+    if not smufl.available():
+        raise Failed(smufl.why_unavailable())
+
+    # A real band from a real package -- this is about somebody else's output.
+    band = None
+    for root in settings.score_roots:
+        if not root.exists:
+            continue
+        for lines in sorted(root.path.glob("*/score/lines")):
+            found = sorted(lines.glob("*.svg"))
+            if found:
+                band = found[0]
+                break
+        if band:
+            break
+    if band is None:
+        raise Failed("no vector band installed to read a font out of")
+
+    text = band.read_text(encoding="utf-8", errors="replace")
+    faces = smufl.faces(text)
+    if not faces:
+        raise Failed(f"{band.name} embeds no font. If Verovio stopped "
+                     f"embedding one, the glyphs it writes as text can no "
+                     f"longer be drawn at all and this needs rethinking.")
+
+    from fontTools.ttLib import TTFont
+    total_pua = 0
+    for name, raw in faces.items():
+        font = TTFont(io.BytesIO(raw))
+        cmap = set(font.getBestCmap())
+        pua = {c for c in cmap if 0xE000 <= c <= 0xF8FF}
+        total_pua += len(pua)
+        # The metronome set, which is what a tempo marking uses and what was
+        # actually broken. Whole, half, quarter, 8th, 16th, 32nd.
+        need = {0xECA0: "whole", 0xECA2: "half", 0xECA5: "quarter",
+                0xECA7: "8th", 0xECA9: "16th", 0xECAB: "32nd"}
+        missing = {hex(c): why for c, why in need.items() if c not in cmap}
+        if missing:
+            raise Failed(f"the {name} font in {band.name} has no glyph for "
+                         f"{missing}; a tempo marking using one would render "
+                         f"as a box")
+
+    # Whatever the SCORE actually uses must be in the font it carries.
+    used = {ord(ch) for ch in text if 0xE000 <= ord(ch) <= 0xF8FF}
+    covered = set()
+    for raw in faces.values():
+        covered |= set(TTFont(io.BytesIO(raw)).getBestCmap())
+    unmet = sorted(used - covered)
+    if unmet:
+        raise Failed(f"{band.name} uses {[hex(c) for c in unmet]}, which the "
+                     f"font it embeds cannot draw")
+
+    # And the two places that put it where fontconfig will find it.
+    store_src = (ROOT / "app" / "scorestore.py").read_text(encoding="utf-8")
+    if "smufl.install_from_package" not in store_src:
+        raise Failed("installing a score does not unpack the font it needs, "
+                     "so the render host has nothing to draw with")
+    cloud = (ROOT / "app" / "compute" / "cloudinit.py").read_text(
+        encoding="utf-8")
+    if "fc-cache" not in cloud:
+        raise Failed("a compute node never runs fc-cache, so a font copied "
+                     "to it is invisible to the rasteriser")
+    # fontconfig is read once per process and cached -- measured: a font
+    # installed mid-render changes nothing for that render. It has to be in
+    # place before the worker starts, so the ORDER of the boot steps is the
+    # thing to assert, read from the cloud-config itself rather than from
+    # where a string happens to appear in the source.
+    import yaml
+    from app.compute import cloudinit as ci
+
+    steps = yaml.safe_load(ci.user_data("X=1", "k", "10.0.0.2"))["runcmd"]
+    fonts_at = next((i for i, c in enumerate(steps) if "fc-cache" in str(c)), -1)
+    worker_at = next((i for i, c in enumerate(steps)
+                      if "vsw-worker" in str(c) and "systemctl" in str(c)), -1)
+    if fonts_at < 0:
+        raise Failed("a compute node never installs the fonts at boot")
+    if worker_at < 0:
+        raise Failed("the cloud-config never starts the worker; this check "
+                     "can no longer tell whether fonts come first")
+    if fonts_at > worker_at:
+        raise Failed(f"fonts are installed at boot step {fonts_at} and the "
+                     f"worker starts at {worker_at}; fontconfig is cached at "
+                     f"process start, so that worker would still draw boxes")
+
+    return (f"{len(faces)} embedded face(s), {total_pua} music codepoints, "
+            f"every glyph this score uses is covered, unpacked at install "
+            f"and installed before the worker starts")
+
 def check_a_confirmation_is_bound_and_expires() -> str:
     """Knowing an address must not be enough to have us write to its owner.
 
@@ -3544,6 +3662,7 @@ def main() -> int:
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
         check_the_edition_is_credited,
+        check_music_glyphs_survive_the_rasteriser,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,

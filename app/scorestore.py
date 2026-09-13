@@ -197,9 +197,21 @@ def publish(folder: pathlib.Path) -> int:
     # this existed it carried all of it -- 134 MB for two scores, and 26 GB
     # for the 375 that are coming.
     from . import package as pkgmod
+    from . import fonts as fontdir
+    from . import smufl
     loaded = pkgmod.load(folder)
     _put_catalogue_entry(describe(loaded))
     _put_preview(folder)
+    # THE FONT THE SCORE WAS DRAWN WITH. Verovio emits a few marks -- the
+    # metronome note in a tempo, and anything else it writes as `<rend>` --
+    # as live text in a music font, and embeds that font in the SVG. cairosvg
+    # ignores embedded fonts and reads only what fontconfig knows, so those
+    # marks came out as tofu boxes. Unpacked here, at install time, because
+    # fontconfig is cached at process start: a font installed while a render
+    # is running does not reach it.
+    made = smufl.install_from_package(folder, fontdir.font_dir() / "smufl")
+    if made:
+        logger.info("installed font(s) %s from %s", ", ".join(made), name)
     _cache.clear()
     return stored
 
