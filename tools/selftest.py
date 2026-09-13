@@ -4309,11 +4309,6 @@ def check_a_fetched_score_lands_where_it_was_told() -> str:
     return "digital root first, operator's order respected, missing roots skipped"
 
 
-def page_hint(mod) -> str:
-    """The page's own script, for asserting what it tells a reader."""
-    return mod.PAGE
-
-
 def check_the_lending_panel_is_local_and_narrow() -> str:
     """The page that lends this machine may be reached from nowhere else.
 
@@ -4324,9 +4319,12 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
     the binding is the whole of its security and is asserted here rather
     than left to a default.
 
-    The mode is the other half. It is interpolated into a command that runs
-    as root over ssh, so what may be interpolated is a fixed list, and
-    anything else is refused before it reaches a shell.
+    The rest is about the page being answerable. It asks two questions --
+    does this computer render, and what happens to anything it is not
+    taking -- and they are about different machines, so every combination
+    of the two has to be reachable and has to be named. Three versions of
+    this page failed that in different ways, each of them legible only
+    once somebody tried to use it.
     """
     import json as _json
     import urllib.error
@@ -4341,8 +4339,37 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
     if '("127.0.0.1", port)' not in src:
         raise Failed("the panel does not bind 127.0.0.1 explicitly")
 
+    # EVERY ANSWER DESCRIBES ITS OWN SETTING, in both directions, or the
+    # page can show a state none of its options match and offer no way out.
+    for name, spec in lend_panel.THIS_COMPUTER.items():
+        if lend_panel.computer_now(spec["taking"]) != name:
+            raise Failed(f"'this computer' answer {name!r} does not describe "
+                         f"its own setting")
+    for name, spec in lend_panel.OTHERWISE.items():
+        if lend_panel.otherwise_now(spec["mode"]) != name:
+            raise Failed(f"'otherwise' answer {name!r} does not describe its "
+                         f"own setting")
+    if len(lend_panel.THIS_COMPUTER) != 2 or len(lend_panel.OTHERWISE) != 2:
+        raise Failed("each question must have both answers; a question with "
+                     "one is a statement wearing a radio button")
+
+    # `cloud` -- rent for every video even while this machine renders -- is
+    # two machines racing for one queue, so it is not offered. It is still
+    # reachable, because the server is configured elsewhere too, so it must
+    # be RECOGNISED and escapable.
+    if lend_panel.otherwise_now("cloud"):
+        raise Failed("renting for every video is offered as an answer; it is "
+                     "two machines racing for one queue")
+    vsrc = (ROOT / "tools" / "volunteer.py").read_text(encoding="utf-8")
+    if '"cloud"' not in vsrc or "stands back" not in vsrc:
+        raise Failed("the volunteer does not stand back when the server is "
+                     "set to rent for every video, so both would render")
+    if "server_overrides" not in lend_panel.PAGE:
+        raise Failed("the page never says when the server is renting for "
+                     "everything, so it would show nothing selected")
+
     state = {"taking": True, "paused": False, "quiet_for": 0.0, "job": None,
-             "free_gb": 8.0, "longest_min": 10.0,
+             "free_gb": 8.0, "longest_min": 10.0, "hourly_cost": 0.288,
              "scores_here": 1, "scores_total": 2}
     rang = []
     panel = lend_panel.Panel(lambda: state, lambda: rang.append("pause"),
@@ -4350,88 +4377,66 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
                              lambda: rang.append("stop"))
     panel._set_mode("manual", "")                            # noqa: SLF001
 
-    # A mode that is not a mode never reaches ssh. If the whitelist were
-    # gone this would be shell, on the production box, as root.
+    # Nothing that is not an answer reaches ssh. Without the whitelist this
+    # is shell, on the production box, as root.
     for bogus in ("manual; rm -rf /", "$(id)", "../auto", "", "AUTO ", "x"):
         if panel.set_mode(bogus) == "":
             raise Failed(f"the panel accepted {bogus!r} as a mode; it is "
                          f"interpolated into a root command on the server")
-        if panel.choose(bogus) == "":
-            raise Failed(f"the panel accepted {bogus!r} as a choice")
+        if panel.set_otherwise(bogus) == "":
+            raise Failed(f"the panel accepted {bogus!r} as an answer")
+        if panel.set_computer(bogus) == "":
+            raise Failed(f"the panel accepted {bogus!r} for this computer")
+
+    # This computer's answer takes effect here and touches nothing remote.
+    if panel.set_computer("none") or rang != ["pause"]:
+        raise Failed(f"'takes nothing' did not stop this machine: {rang}")
+    if panel.set_computer("make") or rang != ["pause", "resume"]:
+        raise Failed(f"'makes the videos' did not start it again: {rang}")
 
     url = lend_panel.serve(panel, port=5098)
     if not url:
         raise Failed("the panel would not start")
 
-    # EVERY CHOICE DESCRIBES ITS OWN SETTINGS. The page's premise is that a
-    # reader picks an outcome instead of combining two settings in their
-    # head, so the mapping has to be a round trip in both directions.
-    for name, spec in lend_panel.CHOICES.items():
-        if lend_panel.choice_now(spec["taking"], spec["mode"]) != name:
-            raise Failed(f"the choice {name!r} does not describe its own "
-                         f"settings")
-    # Every mode is reachable from the page, or it cannot be got back out of.
-    offered = {spec["mode"] for spec in lend_panel.CHOICES.values()}
-    if offered != set(lend_panel.MODES):
-        raise Failed(f"the page can set {sorted(offered)} but the server "
-                     f"accepts {sorted(lend_panel.MODES)}; a mode it cannot "
-                     f"set is a state it cannot leave")
-
-    # ONE PAIR IS NOT A CHOICE AND MUST NOT PRETEND TO BE: this machine
-    # taking jobs while the server rents one for every video is two
-    # renderers racing for the same queue. It is reachable -- the server is
-    # configured elsewhere -- so the page has to say so rather than show
-    # nothing selected. The volunteer also stands back on startup when it
-    # reads that, so the state is left rather than lived in.
-    if lend_panel.choice_now(True, "cloud"):
-        raise Failed("taking jobs while the server rents for every video is "
-                     "offered as a choice; it is two machines racing")
-    vsrc = (ROOT / "tools" / "volunteer.py").read_text(encoding="utf-8")
-    if '"cloud"' not in vsrc or "stands back" not in vsrc:
-        raise Failed("the volunteer does not stand back when the server is "
-                     "set to rent for every video, so both would render")
-
     page = urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
-    if "not one of these" not in page_hint(lend_panel):
-        raise Failed("the page never says when the two machines disagree, so "
-                     "it would show nothing selected and no reason why")
-    for needed in ("Where should videos be made",
-                   "What this computer can take"):
+    for needed in ("This computer", "Anything it is not taking"):
         if needed not in page:
-            raise Failed(f"the panel never shows {needed!r}")
-    for name, spec in lend_panel.CHOICES.items():
-        if f'value="{name}"' not in page:
-            raise Failed(f"the choice {name!r} cannot be picked on the page")
-        if spec["title"].split(" —")[0][:18] not in page:
-            raise Failed(f"the choice {name!r} is not named on the page")
+            raise Failed(f"the panel never asks {needed!r}")
+    for group, answers in (("computer", lend_panel.THIS_COMPUTER),
+                           ("otherwise", lend_panel.OTHERWISE)):
+        for name in answers:
+            if f'value="{name}" data-group="{group}"' not in page:
+                raise Failed(f"{group}/{name} cannot be picked on the page")
 
     got = _json.loads(urllib.request.urlopen(url + "state", timeout=5).read())
-    missing = {"taking", "paused", "job", "free_gb", "longest_min",
-               "mode", "choice"} - set(got)
+    missing = {"taking", "job", "free_gb", "longest_min", "mode",
+               "computer", "otherwise", "server_overrides"} - set(got)
     if missing:
         raise Failed(f"the page is not told {sorted(missing)}")
 
-    # An unknown choice never reaches ssh, and says so over HTTP.
-    try:
-        urllib.request.urlopen(urllib.request.Request(
-            url + "choose", method="POST",
-            data=_json.dumps({"choice": "whatever"}).encode()), timeout=10)
-    except urllib.error.HTTPError as exc:
-        if exc.code != 400:
-            raise Failed(f"a bogus choice answered {exc.code}, not 400")
-    else:
-        raise Failed("a bogus choice was accepted over HTTP")
+    # An answer that is not an answer says so over HTTP rather than 500ing.
+    for path, field in (("computer", "answer"), ("otherwise", "answer")):
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                url + path, method="POST",
+                data=_json.dumps({field: "whatever"}).encode()), timeout=10)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise Failed(f"a bogus {path} answered {exc.code}, not 400")
+        else:
+            raise Failed(f"a bogus {path} was accepted over HTTP")
 
-    # Finishing the job in hand is its own action, not a mode.
+    # Finishing the job in hand is an action, not an answer.
+    rang.clear()
     urllib.request.urlopen(urllib.request.Request(
         url + "stop", method="POST", data=b"{}"), timeout=5)
     if rang != ["stop"]:
         raise Failed(f"'finish this one, then stop' did not reach the "
                      f"volunteer: {rang}")
 
-    return ("loopback only, no login; the mode is a whitelist before it is "
-            f"ever a command; {len(lend_panel.CHOICES)} outcomes, and every "
-            f"pair of settings has a name")
+    return ("loopback only, no login; every mode is a whitelist before it is "
+            "ever a command; two questions, two answers each, and renting "
+            "for everything is recognised but never offered")
 
 
 def main() -> int:

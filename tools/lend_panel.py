@@ -6,21 +6,25 @@ machines: whether `tools/volunteer.py` was running here, and what
 the other, one of them is a keystroke in a scrolling terminal, and the only
 way to answer "what is happening right now" was to read a log.
 
-AND WHY IT IS SHAPED LIKE THIS. The first version exposed those two
-controls faithfully -- a switch for this machine, a mode for that one --
-and it was not usable. You cannot answer "what happens to the next upload"
-by looking at either; you have to hold both in your head and combine them,
-and combining them is the entire job. A control surface that models the
-implementation makes its reader do the work the program should have done.
+AND WHY IT ASKS ONLY ONE THING. Two earlier versions of this page failed
+the same way, each less badly. The first exposed the two settings
+faithfully and made the reader combine them. The second offered the four
+outcomes that combination produces -- better, but still three of the four
+were about whether this computer takes work, and that is not a decision
+anybody makes: the window is open because you want it to take work. Owning
+the machine IS the intent.
 
-So the page asks ONE question -- where should videos be made -- and offers
-the four answers that exist. Each answer sets both machines. What is left
-is a status line that says what is happening right now, and the facts
-about this computer that decide what it can accept.
+So there is one question, and it is about the only thing genuinely in
+doubt:
 
-    where should videos be made?   four outcomes, one choice, both machines
-    what is happening now?         the render, its stage, how long it has run
-    what can this computer take?   memory, and the length that follows from it
+    WHILE THIS WINDOW IS OPEN     videos are made here. A statement, not
+                                  an option.
+    WHEN IT IS CLOSED             rent a machine, or let them wait. Two
+                                  answers, and the real decision -- it is
+                                  the one that costs money.
+
+Everything else on the page is the answer to "what is happening right
+now", which is what you open it to find out.
 
 LOOPBACK ONLY, and that is not a detail. This page can pause a renderer and
 change what the production server does with its money, and it has no login
@@ -53,51 +57,66 @@ ENV_PATH = "/srv/vsw/shared/.env"
 # interpolated into a command that runs as root on the production server.
 MODES = ("manual", "auto", "cloud")
 
-# THE FOUR ANSWERS, and what each one means on the two machines. This is the
-# whole of the page's logic: a reader chooses an outcome, and the two
-# settings that produce it are ours to work out, not theirs.
+# TWO QUESTIONS, TWO ANSWERS EACH, and they are independent -- which is
+# exactly why an earlier version that folded them into one list of outcomes
+# read as a maze. They are about different machines and different money.
 #
-#   taking  whether THIS machine consumes the queue
-#   mode    what the WEB BOX does when this machine is not heard
+#   THIS_COMPUTER   does this machine render, right now. Having the window
+#                   open usually means yes, but not always: the processor
+#                   may be wanted for something else, and "leave it alone
+#                   for a bit" must not require closing anything.
 #
-# `rent` and `wait` both stop this machine consuming, because a choice that
-# says "rent one" while this one quietly keeps taking work is a lie.
-CHOICES = {
-    "here": {
-        "taking": True, "mode": "manual",
-        "title": "On this computer",
+#   OTHERWISE       what the server does with an upload this machine is not
+#                   taking -- window shut, or set to take nothing. The only
+#                   answer here that costs money.
+#
+# The server's `cloud` -- rent for every video even while this one renders
+# -- is deliberately NOT offered: it is two machines racing for one queue.
+# It is still recognised, because the server can be configured elsewhere.
+THIS_COMPUTER = {
+    "make": {
+        "taking": True,
+        "title": "Makes the videos",
         "cost": "free",
-        "detail": "Only while this window is open. If it is closed, videos "
-                  "wait in the queue until you open it again.",
+        "detail": "Every upload it can handle is rendered here, using this "
+                  "processor. Nothing is rented while it is doing that.",
     },
-    "here_or_rent": {
-        "taking": True, "mode": "auto",
-        "title": "On this computer, or rent one when it is off",
-        "cost": "free while this is open",
-        "detail": "This computer takes everything it can. When it is closed "
-                  "or busy, a machine is rented so nobody waits.",
+    "none": {
+        "taking": False,
+        "title": "Takes nothing for now",
+        "cost": "",
+        "detail": "This machine is left alone. What happens to an upload is "
+                  "then whatever is chosen below.",
     },
+}
+
+OTHERWISE = {
     "rent": {
-        "taking": False, "mode": "cloud",
-        "title": "Always rent a machine",
+        "mode": "auto",
+        "title": "Rent a machine",
         "cost": "per video",
-        "detail": "This computer takes nothing, even while it is running. "
-                  "Every video is made on a rented machine.",
+        "detail": "Nobody waits. One is created for the video and destroyed "
+                  "afterwards, and only while this computer is not taking it.",
     },
     "wait": {
-        "taking": False, "mode": "manual",
-        "title": "Nowhere yet — let them wait",
+        "mode": "manual",
+        "title": "Let them wait",
         "cost": "free",
-        "detail": "Nothing is rendered and nothing is rented. Uploads queue "
-                  "up until you choose one of the above.",
+        "detail": "Nothing is rented and nothing is charged. Uploads sit in "
+                  "the queue until this computer takes them.",
     },
 }
 
 
-def choice_now(taking: bool, mode: str) -> str:
-    """Which of the four the two machines are currently set to, or ''."""
-    for name, spec in CHOICES.items():
-        if spec["taking"] == bool(taking) and spec["mode"] == mode:
+def computer_now(taking: bool) -> str:
+    """Which answer this machine is set to."""
+    return "make" if taking else "none"
+
+
+def otherwise_now(mode: str) -> str:
+    """Which answer the server is set to, or '' if it is neither."""
+    for name, spec in OTHERWISE.items():
+        if spec["mode"] == mode:
             return name
     return ""
 
@@ -114,12 +133,15 @@ class Panel:
         self._mode_lock = threading.Lock()
 
     def full(self) -> dict:
-        """Everything the page draws, with the chosen outcome worked out."""
+        """Everything the page draws."""
         state = self.state()
         mode = self.mode()
         return {**state, "mode": mode,
-                "choice": choice_now(state.get("taking", False),
-                                     mode.get("name", ""))}
+                "computer": computer_now(state.get("taking", False)),
+                "otherwise": otherwise_now(mode.get("name", "")),
+                # The server set to rent for EVERY video, which this page
+                # does not offer and which makes this computer stand back.
+                "server_overrides": mode.get("name", "") == "cloud"}
 
     # -- the other machine ----------------------------------------------
     def mode(self) -> dict:
@@ -147,22 +169,20 @@ class Panel:
         # Unset means `auto`, which is what app/store.py falls back to.
         self._set_mode(name or "auto", "")
 
-    def choose(self, name: str) -> str:
-        """Apply one of the four. Returns '' or a reason.
-
-        THE WEB BOX FIRST. If it cannot be reached, nothing has changed
-        anywhere -- where doing this machine first would leave the two
-        halves disagreeing, which is the state the page exists to make
-        impossible.
-        """
-        spec = CHOICES.get(name)
+    def set_computer(self, name: str) -> str:
+        """Whether this machine renders. Returns '' or a reason."""
+        spec = THIS_COMPUTER.get(name)
         if spec is None:
-            return f"{name!r} is not one of the choices"
-        problem = self.set_mode(spec["mode"])
-        if problem:
-            return problem
+            return f"{name!r} is not one of the answers"
         (self.resume if spec["taking"] else self.pause)()
         return ""
+
+    def set_otherwise(self, name: str) -> str:
+        """What the server does with what this machine is not taking."""
+        spec = OTHERWISE.get(name)
+        if spec is None:
+            return f"{name!r} is not one of the answers"
+        return self.set_mode(spec["mode"])
 
     def set_mode(self, name: str) -> str:
         """Change it on the web box. Returns '' or a reason."""
@@ -233,8 +253,13 @@ def serve(panel: Panel, port: int = 5055) -> str:
             except (ValueError, TypeError):
                 body = {}
 
-            if path == "/choose":
-                problem = panel.choose(str(body.get("choice") or ""))
+            if path == "/computer":
+                problem = panel.set_computer(str(body.get("answer") or ""))
+                if problem:
+                    self._json({"problem": problem}, code=400)
+                    return
+            elif path == "/otherwise":
+                problem = panel.set_otherwise(str(body.get("answer") or ""))
                 if problem:
                     self._json({"problem": problem}, code=400)
                     return
@@ -260,31 +285,39 @@ def serve(panel: Panel, port: int = 5055) -> str:
 # --------------------------------------------------------------------------
 # the page
 # --------------------------------------------------------------------------
-_CHOICE_ROWS = "".join(
-    f'<label class="choice" data-choice="{name}">'
-    f'<input type="radio" name="choice" value="{name}">'
-    f'<span class="tick" aria-hidden="true"></span>'
-    f'<span class="body"><span class="ct">{html.escape(c["title"])}'
-    f'<em class="cost" data-cost="{name}">{html.escape(c["cost"])}</em></span>'
-    f'<span class="cd">{html.escape(c["detail"])}</span></span></label>'
-    for name, c in CHOICES.items())
+def _rows(group: str, answers: dict) -> str:
+    out = []
+    for name, c in answers.items():
+        cost = (f'<em class="cost" data-cost="{name}">{html.escape(c["cost"])}'
+                f'</em>' if c["cost"] else "")
+        out.append(
+            f'<label class="choice"><input type="radio" name="{group}" '
+            f'value="{name}" data-group="{group}">'
+            f'<span class="tick" aria-hidden="true"></span>'
+            f'<span class="body"><span class="ct">{html.escape(c["title"])}'
+            f'{cost}</span>'
+            f'<span class="cd">{html.escape(c["detail"])}</span></span></label>')
+    return "".join(out)
+
+
+_COMPUTER_ROWS = _rows("computer", THIS_COMPUTER)
+_OTHERWISE_ROWS = _rows("otherwise", OTHERWISE)
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Where videos are made</title>
+<title>This computer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap">
 <style>
-/* Contrast is a requirement, not a taste. Every colour below was picked to
-   clear 4.5:1 against the surface it sits on -- the previous palette used a
-   9.5px uppercase label at #9a92a6 on #f6f1e8, which is 3.1:1 and could not
-   be read. Nothing here is lighter than --soft, and --soft is 7:1. */
+/* Contrast is a requirement, not a taste. An earlier version set 9.5px
+   uppercase labels in #9a92a6 on #f6f1e8 -- 3.1:1, and unreadable. Nothing
+   below is lighter than 5.4:1 against the surface it sits on. */
 :root{
   --paper:#f4efe6; --surface:#fffdfa; --raise:#fbf7f0;
   --ink:#191320;        /* 16.1:1 on paper */
-  --soft:#4a4356;       /*  7.9:1 -- body text that is not the point */
+  --soft:#4a4356;       /*  7.9:1 */
   --quiet:#655d73;      /*  5.4:1 -- the lightest thing allowed */
   --line:rgba(25,19,32,.16); --line-2:rgba(25,19,32,.09);
   --b1:#3d1e5c; --b2:#5c2f86; --mag:#b81e6e; --good:#1d6b4a;
@@ -303,13 +336,12 @@ PAGE = """<!doctype html>
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
   font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
-.wrap{max-width:640px;margin:0 auto;padding:34px 20px 64px}
-header{display:flex;align-items:baseline;gap:10px;margin-bottom:30px;
+.wrap{max-width:620px;margin:0 auto;padding:34px 20px 64px}
+header{display:flex;align-items:baseline;gap:10px;margin-bottom:26px;
   color:var(--quiet);font-size:13px}
 .wordmark{font-family:var(--serif);font-weight:600;font-size:16px;
   color:var(--ink)}
 
-/* WHAT IS HAPPENING, first, because it is what you came to find out. */
 .status{background:var(--surface);border:1px solid var(--line);
   border-radius:6px;padding:18px 20px}
 .status .now{font-family:var(--serif);font-size:23px;font-weight:600;
@@ -333,12 +365,18 @@ header{display:flex;align-items:baseline;gap:10px;margin-bottom:30px;
 .detail{margin:13px 0 0;color:var(--soft);font-size:14px}
 .after{margin-top:15px}
 
+/* The statement. Not a control, because owning the machine IS the intent:
+   the window is open because you want it to take work. */
+.given{display:flex;gap:11px;align-items:flex-start;margin:26px 0 0;
+  padding:14px 16px;border-left:3px solid var(--b2);background:var(--raise);
+  border-radius:0 5px 5px 0}
+.given p{margin:0;font-size:14.5px;color:var(--soft)}
+.given b{color:var(--ink);font-weight:600}
+
 h2{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:-.01em;
-  margin:36px 0 4px}
+  margin:32px 0 4px}
 .hint{color:var(--soft);font-size:14px;margin:0 0 14px}
 
-/* ONE QUESTION, FOUR ANSWERS. Each sets both machines; the reader never
-   has to combine two settings to know what happens next. */
 .choice{display:flex;gap:13px;align-items:flex-start;background:var(--surface);
   border:1.5px solid var(--line);border-radius:6px;padding:14px 16px;
   margin-bottom:9px;cursor:pointer;transition:border-color .15s,background .15s}
@@ -370,24 +408,32 @@ button{font:inherit;font-size:13px;font-weight:600;border-radius:4px;
 button:hover:not([disabled]){border-color:var(--ink)}
 button:focus-visible{outline:3px solid var(--mag);outline-offset:2px}
 button[disabled]{opacity:.4;cursor:default}
+.warn{background:var(--raise);border:1.5px solid var(--mag);border-radius:6px;
+  padding:14px 16px;margin-top:14px;font-size:14.5px;color:var(--ink)}
 .problem{color:var(--mag);font-size:14px;margin:12px 0 0;min-height:1.3em;
   font-weight:500}
-footer{margin-top:36px;color:var(--soft);font-size:13.5px;line-height:1.6}
+footer{margin-top:34px;color:var(--soft);font-size:13.5px;line-height:1.6}
 footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 </style></head><body>
 <div class="wrap">
 <header><span class="wordmark">weefeen</span><span>this computer</span></header>
 
 <div class="status">
-  <p class="now" id="now"><span class="dot" id="dot"></span><span id="nowtext">…</span></p>
+  <p class="now"><span class="dot" id="dot"></span><span id="nowtext">…</span></p>
   <p class="sub" id="sub"></p>
   <div id="extra"></div>
 </div>
 
-<h2>Where should videos be made?</h2>
-<p class="hint">This sets both this computer and the server. Whatever you
-  pick is what happens to the next upload.</p>
-<div id="choices">__CHOICES__</div>
+<h2>This computer</h2>
+<p class="hint">Whether this machine renders, right now. It stops taking
+  new work the moment you close the black window, whatever is set here.</p>
+<div>__COMPUTER__</div>
+
+<h2>Anything it is not taking</h2>
+<p class="hint">What the server does with an upload while this computer is
+  closed, or set to take nothing. The only answer that costs money.</p>
+<div>__OTHERWISE__</div>
+<div id="override"></div>
 <p class="problem" id="problem"></p>
 
 <h2>What this computer can take</h2>
@@ -395,7 +441,7 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 
 <footer>This page is on this computer only — <code>127.0.0.1:__PORT__</code>.
   Closing it changes nothing. Closing the black <code>lend.bat</code> window
-  is what stops this computer taking work.</footer>
+  is what stops this computer taking videos.</footer>
 </div>
 
 <script>
@@ -431,7 +477,6 @@ function paint(s){
   const sub = document.getElementById('sub');
   const extra = document.getElementById('extra');
 
-  // WHAT IS HAPPENING, in one sentence, before any control.
   if(job){
     dot.className = 'dot live';
     text.textContent = 'Making a video on this computer';
@@ -444,40 +489,46 @@ function paint(s){
       (job.detail ? '<p class="detail">' + job.detail + '</p>' : '') +
       '<div class="after"><button id="stop">Finish this one, then stop</button></div>';
     document.getElementById('stop').onclick = () => send('/stop');
+  }else if(s.taking){
+    dot.className = 'dot on';
+    text.textContent = 'Ready — nothing to do yet';
+    sub.textContent = 'The next upload is made on this computer.';
+    extra.innerHTML = '';
   }else{
-    const taking = s.taking;
-    dot.className = 'dot ' + (taking ? 'on' : '');
-    text.textContent = taking ? 'Ready — nothing to do yet'
-                              : 'This computer is not taking videos';
-    sub.textContent = taking
-      ? 'The next upload will be made here.'
-      : (s.choice === 'rent' ? 'The next upload will be made on a rented machine.'
-        : s.quiet_for > 0
-          ? 'It just handed a job back; standing aside for ' + clock(s.quiet_for) + '.'
-          : 'The next upload will wait in the queue.');
+    dot.className = 'dot';
+    text.textContent = 'This computer is not taking videos';
+    sub.textContent = s.server_overrides
+      ? 'The server is set to rent a machine for every video, so this one '
+        + 'stands back.'
+      : s.quiet_for > 0
+        ? 'It just handed a job back; standing aside for ' + clock(s.quiet_for) + '.'
+        : (s.otherwise === 'rent'
+            ? 'Uploads go to a rented machine.'
+            : 'Uploads wait in the queue.');
     extra.innerHTML = '';
   }
 
-  // The one question.
+  // Both questions. Each reflects one machine; neither depends on the other.
   document.querySelectorAll('.choice input').forEach(i => {
-    i.checked = (i.value === s.choice);
-    i.disabled = busy || !(s.mode && s.mode.name);
+    const g = i.dataset.group;
+    i.checked = (i.value === (g === 'computer' ? s.computer : s.otherwise));
+    i.disabled = busy || (g === 'otherwise' && !(s.mode && s.mode.name));
   });
+
+  document.getElementById('override').innerHTML = s.server_overrides
+    ? '<div class="warn">The server is currently set to <b>rent a machine ' +
+      'for every video</b>, even while this computer is running — so this ' +
+      'one is standing back. Pick either answer above to change it.</div>'
+    : '';
+
   if(s.mode && s.mode.problem)
     document.getElementById('problem').textContent =
       'The server could not be reached: ' + s.mode.problem;
-  else if(!s.choice && s.mode && s.mode.name)
-    document.getElementById('problem').textContent =
-      'The two machines are set to a combination that is not one of these ' +
-      '(server: ' + s.mode.name + '). Pick one to line them up.';
 
   // The price, from the server's own plan rather than typed in here.
   if(s.hourly_cost){
-    const each = '~$' + s.hourly_cost.toFixed(2) + ' a video';
     document.querySelectorAll('[data-cost="rent"]').forEach(e =>
-      e.textContent = each);
-    document.querySelectorAll('[data-cost="here_or_rent"]').forEach(e =>
-      e.textContent = each + ' only when off');
+      e.textContent = '~$' + s.hourly_cost.toFixed(2) + ' a video');
   }
 
   document.getElementById('facts').innerHTML = [
@@ -490,7 +541,9 @@ function paint(s){
 }
 
 document.querySelectorAll('.choice input').forEach(i => {
-  i.onchange = () => { if(i.checked) send('/choose', {choice: i.value}); };
+  i.onchange = () => {
+    if(i.checked) send('/' + i.dataset.group, {answer: i.value});
+  };
 });
 
 async function tick(){
@@ -499,4 +552,5 @@ async function tick(){
 }
 tick();
 </script></body></html>
-""".replace("__CHOICES__", _CHOICE_ROWS)
+""".replace("__COMPUTER__", _COMPUTER_ROWS).replace("__OTHERWISE__",
+                                                   _OTHERWISE_ROWS)
