@@ -36,7 +36,7 @@ from . import storage
 from . import store
 from . import sync as syncing
 from . import visitors
-from .settings import settings
+from .settings import max_upload_minutes, settings
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +80,16 @@ MIN_FREE_DISK_BYTES = int(MIN_FREE_DISK_GB * 1024 * 1024 * 1024)
 # silently reintroduced a one-request denial of service. 8 min ≈ 2.7 GB peak,
 # inside the box. Anything longer needs a bigger machine, not a bigger
 # number here — raise it only together with the RAM to back it.
-# 7, not 8: this is the fallback for a missing or mistyped env var, so it
-# has to survive the SMALLEST machine that could render -- an install with
-# no compute node, where the web box aligns on 3.9 GB and manages 7.5
-# minutes (settings.safe_duration_minutes). Production sets this
-# explicitly to what its compute plan can take.
-MAX_DURATION_MINUTES = float(os.getenv("MAX_DURATION_MINUTES", "7") or 7)
+# NOT A NUMBER KEPT HERE. `settings.max_upload_minutes()` derives it from
+# the machine that will align the recording -- the compute node when compute
+# is on, this box otherwise -- because that is the only thing the limit was
+# ever about. MAX_DURATION_MINUTES still overrides it for an operator who
+# knows better.
+#
+# It was a literal, and it was 8 for the web box's 3.9 GB. Rendering moved to
+# a 32 GB node that can take 21 minutes and the literal stayed, so the site
+# refused ten-minute recordings for weeks with nothing to explain why.
+MAX_DURATION_MINUTES = max_upload_minutes()
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 

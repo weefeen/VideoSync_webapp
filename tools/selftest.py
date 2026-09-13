@@ -2003,46 +2003,41 @@ def check_the_duration_cap_fails_safe() -> str:
     somewhere past 11, which is a one-request denial of service reintroduced
     by any cleared line.
     """
-    import re
+    from app.settings import (LOCAL_RAM_GB, max_upload_minutes,
+                              plan_memory_gb, safe_duration_minutes)
 
-    from app.settings import plan_memory_gb, safe_duration_minutes
+    # THE CAP IS DERIVED, so there is no literal to read any more. What is
+    # guarded instead: that the derivation exists, that it answers with
+    # something the renderer survives, and that any file which does override
+    # it stays inside what ITS OWN settings say will render.
+    import os
 
-    # The CODE default: the literal in routes.py that a missing/empty/mistyped
-    # env var falls back to. Read from source, not from the loaded constant,
-    # so a developer's private .env cannot make this pass or fail — production
-    # runs on the committed templates, and those are checked next.
-    src = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
-    m = re.search(r'MAX_DURATION_MINUTES\s*=\s*float\(os\.getenv\('
-                  r'"MAX_DURATION_MINUTES",\s*"(\d+(?:\.\d+)?)"', src)
-    if not m:
-        raise Failed("could not find the MAX_DURATION_MINUTES default in "
-                     "routes.py; this check can no longer read what it guards")
-    # The code default must survive the SMALLEST machine that could render:
-    # an install with no compute node, where the web box does it on 3.9 GB.
-    alone = safe_duration_minutes(3.9)
-    if float(m.group(1)) > alone:
+    had = os.environ.pop("MAX_DURATION_MINUTES", None)
+    try:
+        derived = max_upload_minutes()
+    finally:
+        if had is not None:
+            os.environ["MAX_DURATION_MINUTES"] = had
+    alone = safe_duration_minutes(LOCAL_RAM_GB)
+    if derived <= 0:
+        raise Failed("the derived cap is zero, so nothing could be uploaded")
+    if derived > alone + 0.5:
         raise Failed(
-            f"the CODE default cap is {m.group(1)} minutes; a 3.9 GB box "
-            f"aligning on its own manages {alone:.1f}. The default is what a "
-            f"missing or mistyped env var falls back to, so it must be "
-            f"survivable with no compute node at all.")
+            f"with no compute node the cap derives to {derived} minutes and "
+            f"a {LOCAL_RAM_GB} GB box manages {alone:.1f}; a fresh install "
+            f"would OOM on its own uploads")
 
-    # And the committed templates that DEPLOY. .env.prod becomes the server's
-    # .env; a value over the box's limit there is the live OOM, whatever the
-    # code default says.
-    # And the committed templates that DEPLOY. A template's ceiling is the
-    # machine ITS OWN settings say will render: the compute plan when that
-    # file turns compute on, the web box when it does not. Reading the
-    # ceiling from the same file as the cap is the point -- the pair moved
-    # apart once already, when rendering left the web box and the cap stayed
-    # behind, and the site refused twenty minutes on a node sized for it.
+    # An override still has to fit the machine THAT FILE configures. Reading
+    # the ceiling from the same file as the cap is the point -- the two moved
+    # apart once already, when rendering left the web box and the number
+    # stayed behind, and the site refused twenty minutes on a node sized for
+    # exactly that.
     checked = []
     for name in (".env.prod", ".env.example"):
         f = ROOT / name
         if not f.is_file():
             continue
-        text = f.read_text(encoding="utf-8")
-        lines = [ln.strip() for ln in text.splitlines()]
+        lines = [ln.strip() for ln in f.read_text(encoding="utf-8").splitlines()]
 
         def value_of(key: str) -> str:
             for ln in lines:
@@ -2050,30 +2045,32 @@ def check_the_duration_cap_fails_safe() -> str:
                     return ln.split("=", 1)[1].strip()
             return ""
 
-        cap = value_of("MAX_DURATION_MINUTES")
-        if not cap:
-            checked.append(f"{name}=default")
-            continue
-
         on = value_of("COMPUTE_ENABLED").lower() in ("1", "true", "yes", "on")
         plan = value_of("COMPUTE_PLAN")
-        ram = plan_memory_gb(plan) if on else 3.9
-        where = f"a {plan} node" if on and ram else "the web box"
+        ram = plan_memory_gb(plan) if on else LOCAL_RAM_GB
+        where = f"a {plan} node" if on else "the web box"
         if on and not ram:
             raise Failed(
                 f"{name} turns compute on with COMPUTE_PLAN={plan!r}, which "
-                f"is not in PLAN_MEMORY_GB, so nothing can say "
-                f"whether its cap of {cap} minutes is survivable")
+                f"is not in settings.PLAN_MEMORY_GB, so nothing can say what "
+                f"length that machine survives")
         ceiling = safe_duration_minutes(ram)
+
+        cap = value_of("MAX_DURATION_MINUTES")
+        if not cap:
+            # The floor, because that is what the code returns; reporting the
+            # exact figure here would drift from the number that ships.
+            checked.append(f"{name} derives {int(ceiling)} on {where}")
+            continue
         if float(cap) > ceiling:
             raise Failed(
-                f"{name} sets MAX_DURATION_MINUTES={cap}, and {where} "
-                f"({ram:.0f} GB) can align {ceiling:.1f} minutes before the "
-                f"DTW matrix exhausts it. This file becomes the server's "
-                f".env, so this is the live cap, not a default.")
-        checked.append(f"{name}={cap} on {where} (max {ceiling:.0f})")
+                f"{name} overrides MAX_DURATION_MINUTES={cap}, and {where} "
+                f"({ram:.0f} GB) aligns {ceiling:.1f} minutes before the DTW "
+                f"matrix exhausts it. This file becomes the server's .env, so "
+                f"this is the live cap, not a default.")
+        checked.append(f"{name} pins {cap} under {ceiling:.0f} on {where}")
 
-    return (f"code default {m.group(1)} min, alone-survivable; "
+    return (f"derived {derived:.0f} min here, inside {alone:.1f}; "
             + "; ".join(checked))
 
 

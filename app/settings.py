@@ -60,6 +60,10 @@ DTW_MINUTES_AT = 7.1
 DTW_GB_AT = 2.43
 USABLE_RAM = 0.7
 
+# What the web box itself has, measured. Used when there is no compute
+# node, which is a development machine and the single-box deployment.
+LOCAL_RAM_GB = 3.9
+
 # Linode plan -> RAM in GB. A small table rather than a call to their API:
 # this is consulted by a test, and a test that needs the network is a test
 # that fails on a train.
@@ -545,3 +549,46 @@ def _one(var: str) -> pathlib.Path | None:
 
 
 settings = load()
+
+
+def renderer_memory_gb() -> float:
+    """RAM on the machine that will actually align a recording.
+
+    The compute node's, when compute is on; otherwise this box's own. 3.9 is
+    the measured figure for the web box rather than something read from
+    /proc, because this is also asked on a laptop and on CI, and a cap that
+    changes with whoever is running the tests is not a cap.
+    """
+    if settings.compute_enabled:
+        return plan_memory_gb(settings.compute_plan)
+    return LOCAL_RAM_GB
+
+
+def max_upload_minutes() -> float:
+    """The longest recording this install accepts, and why.
+
+    DERIVED, not remembered. MAX_DURATION_MINUTES is an override for an
+    operator who knows better; unset, the answer comes from the machine that
+    renders. That is the whole point: the number existed in four files that
+    could disagree -- the code default, .env.example, .env.prod and the
+    server's live .env -- and none of them knew what it was FOR. When
+    rendering moved from the web box's 3.9 GB to a 32 GB node, every one of
+    them kept saying 8 while the node could take 21, and the site refused a
+    ten-minute recording on the old box's behalf.
+
+    An override is still honoured, and still checked: the test compares it
+    against this same ceiling, so setting it above what the renderer
+    survives fails before it can OOM a node mid-align.
+    """
+    override = os.getenv("MAX_DURATION_MINUTES", "").strip()
+    if override:
+        try:
+            value = float(override)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    # FLOORED, never rounded. round() took a 3.9 GB box's 7.5 minutes up
+    # to 8 -- half a minute past what it survives, which is the wrong
+    # direction for a limit whose failure mode is an OOM mid-align.
+    return float(int(safe_duration_minutes(renderer_memory_gb())))
