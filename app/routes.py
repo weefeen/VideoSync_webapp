@@ -80,7 +80,12 @@ MIN_FREE_DISK_BYTES = int(MIN_FREE_DISK_GB * 1024 * 1024 * 1024)
 # silently reintroduced a one-request denial of service. 8 min ≈ 2.7 GB peak,
 # inside the box. Anything longer needs a bigger machine, not a bigger
 # number here — raise it only together with the RAM to back it.
-MAX_DURATION_MINUTES = float(os.getenv("MAX_DURATION_MINUTES", "8") or 8)
+# 7, not 8: this is the fallback for a missing or mistyped env var, so it
+# has to survive the SMALLEST machine that could render -- an install with
+# no compute node, where the web box aligns on 3.9 GB and manages 7.5
+# minutes (settings.safe_duration_minutes). Production sets this
+# explicitly to what its compute plan can take.
+MAX_DURATION_MINUTES = float(os.getenv("MAX_DURATION_MINUTES", "7") or 7)
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 

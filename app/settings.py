@@ -39,6 +39,50 @@ DIGITAL = "digital"
 RASTER = "raster"
 
 
+# ---------------------------------------------------------------------------
+# How long a recording may be, and why
+# ---------------------------------------------------------------------------
+# `librosa.sequence.dtw` allocates the full N-by-M matrix in float64, so the
+# memory an alignment needs grows with the SQUARE of the duration. One
+# measured point anchors the curve: 7.1 minutes took 2.43 GB.
+#
+# That is the whole reason there is a cap at all, and it means the cap is a
+# property of ONE machine -- whichever one runs the alignment. It was 8
+# minutes because the web box has 3.9 GB and the web box used to render.
+# Rendering moved to a compute node and the cap did not follow, so a
+# 32 GB node sat there able to align twenty minutes while the site refused
+# anything over eight.
+#
+# 0.7 rather than 1.0 of RAM: the matrix is the largest allocation but not
+# the only one, and a box that OOMs mid-align destroys the render and the
+# node with it.
+DTW_MINUTES_AT = 7.1
+DTW_GB_AT = 2.43
+USABLE_RAM = 0.7
+
+# Linode plan -> RAM in GB. A small table rather than a call to their API:
+# this is consulted by a test, and a test that needs the network is a test
+# that fails on a train.
+PLAN_MEMORY_GB = {
+    "g6-standard-1": 2, "g6-standard-2": 4, "g6-standard-4": 8,
+    "g6-standard-6": 16, "g6-standard-8": 32,
+    "g6-dedicated-2": 4, "g6-dedicated-4": 8, "g6-dedicated-8": 16,
+    "g6-dedicated-16": 32, "g6-dedicated-32": 64, "g6-dedicated-48": 96,
+}
+
+
+def safe_duration_minutes(ram_gb: float) -> float:
+    """The longest recording a machine with this much RAM can align."""
+    if ram_gb <= 0:
+        return 0.0
+    return DTW_MINUTES_AT * math.sqrt(ram_gb * USABLE_RAM / DTW_GB_AT)
+
+
+def plan_memory_gb(plan: str) -> float:
+    """RAM for a Linode plan, or 0 when the plan is not one we know."""
+    return float(PLAN_MEMORY_GB.get((plan or "").strip(), 0))
+
+
 @dataclasses.dataclass(frozen=True)
 class ScoreRoot:
     kind: str                 # DIGITAL | RASTER

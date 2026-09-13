@@ -406,6 +406,14 @@ async function uploadAndIdentify(name, blob){
   S.piece = null;
   S.manual = false;
   S.recog = 'listening';
+  S.refusal = '';
+  // THE MOCK'S DURATION MUST NOT STAND IN FOR A REAL ONE. `S.src` ships with
+  // the design mock's values -- 16:9, 7:04 -- and they are only replaced when
+  // the probe comes back. An upload refused at the door never gets a probe,
+  // so the file bar confidently reported a length nobody measured: a
+  // ten-minute recording was refused for being too long while the page said
+  // it was 7:04.
+  S.src.dur = '';
   startListening();
   draw();
   centerOn('#uploadstate', 240);
@@ -416,7 +424,7 @@ async function uploadAndIdentify(name, blob){
     // Resolves to '' instantly when Turnstile is not configured.
     let token = '';
     try{ token = await botToken(); }
-    catch(err){ return failed(err.message || 'Please complete the check and try again.'); }
+    catch(err){ return failed(err.message || 'Please complete the check and try again.', false); }
     data = await postUpload(name, blob, token);
     uploadDone = true;              // the file is there; now it is listening
     listenStarted = Date.now();
@@ -425,7 +433,7 @@ async function uploadAndIdentify(name, blob){
     // server that vanished mid-upload has not, and should not strand the
     // interface on a screen with no way forward.
     if(err instanceof TypeError) return localOnly(name, 'lost the server — local preview');
-    return failed(err.message || 'The upload did not go through.');
+    return failed(err.message || 'The upload did not go through.', false);
   }
 
   JOB = data.job.id;
@@ -452,20 +460,37 @@ function clock(seconds){
   return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 }
 
-function failed(message){
+/* Something stopped before there was a piece to confirm.
+ *
+ * NOT `S.recog = 'none'`, which is what this used to do. 'none' is the
+ * recogniser's own verdict -- it listened and could not place the music --
+ * and it draws "We couldn't place this recording. Is it a Chopin piece?".
+ * A refusal is a different fact, and stacking the true message on top of
+ * that copy told the visitor two things, of which the louder one was false:
+ * a recording refused for length was reported as unrecognised music, and
+ * the obvious next question became "is my Chopin really Chopin?".
+ *
+ * `canPick` separates the two kinds of stop. An upload the server refused
+ * leaves no recording at all, so offering a list of pieces to choose from
+ * would lead nowhere. Recognition that failed AFTER the file arrived does
+ * leave one, and picking the piece by hand is a real way forward.
+ */
+function failed(message, canPick){
   stopListening();
-  S.recog = 'none';
+  S.recog = 'refused';
+  S.refusal = message || 'That did not go through.';
+  S.refusalManual = !!canPick;
   draw();
-  const body = $('#recogbody');
-  if(body) body.insertAdjacentHTML('afterbegin',
-    `<p class="heard"><b class="alert">${esc(message)}</b></p>`);
+  centerOn('#pieceblock', 240);
 }
 
 /* Ask until it answers. The work is on a thread over there; this only
  * decides when to stop waiting. */
 async function poll(started){
   started = started || Date.now();
-  if(Date.now() - started > 5 * 60 * 1000) return failed('Listening timed out.');
+  if(Date.now() - started > 5 * 60 * 1000)
+    return failed('Listening timed out. The recording is here — you can pick '
+                  + 'the piece yourself.', true);
   let a;
   try{
     const r = await fetch(API.answer(JOB));
@@ -476,7 +501,7 @@ async function poll(started){
   if(a.state === 'running' || a.state === 'idle'){
     return setTimeout(()=>poll(started), 2000);
   }
-  if(a.state === 'error') return failed(a.error || 'Listening failed.');
+  if(a.state === 'error') return failed(a.error || 'Listening failed.', true);
   applyAnswer(a);
 }
 

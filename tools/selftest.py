@@ -2005,6 +2005,8 @@ def check_the_duration_cap_fails_safe() -> str:
     """
     import re
 
+    from app.settings import plan_memory_gb, safe_duration_minutes
+
     # The CODE default: the literal in routes.py that a missing/empty/mistyped
     # env var falls back to. Read from source, not from the loaded constant,
     # so a developer's private .env cannot make this pass or fail — production
@@ -2015,34 +2017,64 @@ def check_the_duration_cap_fails_safe() -> str:
     if not m:
         raise Failed("could not find the MAX_DURATION_MINUTES default in "
                      "routes.py; this check can no longer read what it guards")
-    if float(m.group(1)) > 10:
+    # The code default must survive the SMALLEST machine that could render:
+    # an install with no compute node, where the web box does it on 3.9 GB.
+    alone = safe_duration_minutes(3.9)
+    if float(m.group(1)) > alone:
         raise Failed(
-            f"the CODE default cap is {m.group(1)} minutes; the 3.9 GB box "
-            f"OOMs past ~11. The default is what a missing or mistyped env "
-            f"var falls back to, so it must be survivable on its own.")
+            f"the CODE default cap is {m.group(1)} minutes; a 3.9 GB box "
+            f"aligning on its own manages {alone:.1f}. The default is what a "
+            f"missing or mistyped env var falls back to, so it must be "
+            f"survivable with no compute node at all.")
 
     # And the committed templates that DEPLOY. .env.prod becomes the server's
     # .env; a value over the box's limit there is the live OOM, whatever the
     # code default says.
+    # And the committed templates that DEPLOY. A template's ceiling is the
+    # machine ITS OWN settings say will render: the compute plan when that
+    # file turns compute on, the web box when it does not. Reading the
+    # ceiling from the same file as the cap is the point -- the pair moved
+    # apart once already, when rendering left the web box and the cap stayed
+    # behind, and the site refused twenty minutes on a node sized for it.
     checked = []
     for name in (".env.prod", ".env.example"):
         f = ROOT / name
         if not f.is_file():
             continue
-        for line in f.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("MAX_DURATION_MINUTES="):
-                value = line.split("=", 1)[1].strip()
-                if value and float(value) > 10:
-                    raise Failed(
-                        f"{name} sets MAX_DURATION_MINUTES={value}, over the "
-                        f"~11-minute OOM threshold of the production box. This "
-                        f"file is copied to the server's .env, so this is the "
-                        f"live cap, not a default.")
-                checked.append(f"{name}={value or 'default'}")
+        text = f.read_text(encoding="utf-8")
+        lines = [ln.strip() for ln in text.splitlines()]
 
-    return (f"code default {m.group(1)} min; "
-            + ", ".join(checked) + "; all inside the box")
+        def value_of(key: str) -> str:
+            for ln in lines:
+                if ln.startswith(f"{key}="):
+                    return ln.split("=", 1)[1].strip()
+            return ""
+
+        cap = value_of("MAX_DURATION_MINUTES")
+        if not cap:
+            checked.append(f"{name}=default")
+            continue
+
+        on = value_of("COMPUTE_ENABLED").lower() in ("1", "true", "yes", "on")
+        plan = value_of("COMPUTE_PLAN")
+        ram = plan_memory_gb(plan) if on else 3.9
+        where = f"a {plan} node" if on and ram else "the web box"
+        if on and not ram:
+            raise Failed(
+                f"{name} turns compute on with COMPUTE_PLAN={plan!r}, which "
+                f"is not in PLAN_MEMORY_GB, so nothing can say "
+                f"whether its cap of {cap} minutes is survivable")
+        ceiling = safe_duration_minutes(ram)
+        if float(cap) > ceiling:
+            raise Failed(
+                f"{name} sets MAX_DURATION_MINUTES={cap}, and {where} "
+                f"({ram:.0f} GB) can align {ceiling:.1f} minutes before the "
+                f"DTW matrix exhausts it. This file becomes the server's "
+                f".env, so this is the live cap, not a default.")
+        checked.append(f"{name}={cap} on {where} (max {ceiling:.0f})")
+
+    return (f"code default {m.group(1)} min, alone-survivable; "
+            + "; ".join(checked))
 
 
 def check_the_interface_and_renderer_agree() -> str:
@@ -2597,6 +2629,69 @@ def check_one_person_cannot_hold_billions_of_buckets() -> str:
                      "worse than counting something odd")
     return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
 
+
+def check_a_refusal_is_not_a_failed_recognition() -> str:
+    """A video the server turned away must not read as unrecognised music.
+
+    `failed()` set `S.recog = 'none'` -- the RECOGNISER'S verdict, the one
+    that draws "We couldn't place this recording. Is it a Chopin piece? The
+    library is Chopin and nothing else" -- and then prepended the real
+    message above it. The visitor got two statements, and the louder one was
+    false: a ten-minute recording refused for length was presented as music
+    nobody could identify, so the natural next thought was "is my Chopin not
+    Chopin?" rather than "it was too long".
+
+    The file bar made it worse. `S.src` ships with the design mock's values,
+    and they are only replaced when the probe returns. A refused upload is
+    never probed, so the bar printed the mock's `7:04` beside the real
+    filename -- a length nobody had measured, contradicting the message
+    right below it, which said ten minutes.
+    """
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8", errors="ignore")
+    mini = (ROOT / "app" / "static" / "svs" / "svs-min.js").read_text(
+        encoding="utf-8", errors="ignore")
+
+    start = wire.find("function failed(")
+    if start < 0:
+        raise Failed("failed() is gone; this check needs rewriting")
+    end = wire.find("\nfunction ", start + 10)
+    body = wire[start:end if end > 0 else start + 900]
+
+    if "'none'" in body or '"none"' in body:
+        raise Failed("failed() still puts the page into the recogniser's "
+                     "'none' state, so a refused upload is drawn as music "
+                     "nobody could place")
+    if "S.recog = 'refused'" not in body:
+        raise Failed("failed() does not mark the stop as a refusal")
+    if "S.refusal" not in body:
+        raise Failed("failed() does not keep the server's message anywhere "
+                     "the page can draw it")
+
+    # The mock's duration must be cleared when a real file is chosen, or an
+    # unprobed upload shows 7:04 for a recording of any length.
+    if "S.src.dur = ''" not in wire:
+        raise Failed("the mock's duration is never cleared, so a refused "
+                     "upload reports a length nobody measured")
+
+    # And the page must actually have somewhere to draw it.
+    if "S.recog==='refused'" not in mini.replace(" ", ""):
+        raise Failed("svs-min.js has no branch for a refusal, so the state "
+                     "exists and nothing renders it")
+
+    # An upload the server never accepted leaves no recording, so offering a
+    # list of pieces to pick from leads nowhere; one that failed while
+    # LISTENING does leave a recording, and picking by hand is a real path.
+    if "failed(err.message || 'The upload did not go through.', false)" not in wire:
+        raise Failed("a refused upload still offers a manual piece list, "
+                     "which cannot render anything")
+    if "'Listening failed.', true)" not in wire:
+        raise Failed("recognition that failed after the file arrived does "
+                     "not offer the manual list, though the recording is here")
+
+    return ("a refusal is its own state, carries the server's words, clears "
+            "the mock duration, and only offers a manual pick when there is "
+            "a recording to render")
 
 def check_the_delivery_page_can_show_the_download() -> str:
     """`watchRender` must BIND the elements it writes into.
@@ -3296,6 +3391,7 @@ def main() -> int:
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
         check_the_edition_is_credited,
+        check_a_refusal_is_not_a_failed_recognition,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
     ]

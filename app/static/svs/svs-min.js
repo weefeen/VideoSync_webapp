@@ -43,7 +43,7 @@ const S = {
   src:{ aspect:'16/9', ratio:16/9, px:'1920 × 1080', label:'16:9', fps:'30 fps', dur:'7:04', codec:'H.264 · AAC', size:'412 mb' },
   bandPos:'bottom', bd:'colour', bdImage:null, bdPx:null, bdBad:null,
   logo:'weefeen', logoImage:null, logoSrc:null, logoBad:null,
-  posters:[], poster:0,
+  posters:[], poster:0, refusal:'', refusalManual:false,
   bandColor:'#f6f1e8', noteColor:'#1c1622', alpha:100, bdColor:'#241a33',
   panel:'off', text:Object.fromEntries(FIELDS.map(([k,,d])=>[k,d])),
   // Where the group sits in a portrait frame. See Style.portrait_offset:
@@ -169,13 +169,33 @@ function recognise(){
   $('#uploadstate').classList.toggle('hide', !!S.file);
   $('#filebar').classList.toggle('on', !!S.file);
   if(S.file){
-    $('#filebar').classList.toggle('found', S.recog!=='none');
+    $('#filebar').classList.toggle('found',
+      S.recog!=='none' && S.recog!=='refused');
     $('#fbName').textContent = S.file;
-    $('#fbMeta').innerHTML = S.recog==='none'
-      ? `${S.src.label} · ${S.src.dur} · <span class="alert">not recognised</span>`
-      : `${S.src.label} · ${S.src.dur} · <span class="ok">recognised</span>`;
+    // Built from the parts that are actually known. The duration is dropped
+    // when nothing measured it -- a refused upload is never probed, and the
+    // mock's 7:04 used to be printed as though it were this file's.
+    const bits = [S.src.label, S.src.dur].filter(Boolean);
+    bits.push(S.recog==='refused' ? '<span class="alert">not accepted</span>'
+            : S.recog==='none'    ? '<span class="alert">not recognised</span>'
+            :                       '<span class="ok">recognised</span>');
+    $('#fbMeta').innerHTML = bits.join(' · ');
   }
   if(!S.file) return;
+
+  if(S.recog==='refused'){
+    // What the server said, and nothing about recognition: it never ran.
+    lab.innerHTML = '<span class="alert">Not accepted</span>';
+    hint.textContent = '';
+    const esc = t => String(t).replace(/[&<>"]/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    body.innerHTML = `<p class="heard"><b class="alert">${esc(S.refusal||'')}</b></p>`
+      + (S.refusalManual
+         ? `<div class="manual"><span class="lab">Or find it yourself</span><div class="pieces" id="pieces"></div></div>`
+         : '');
+    if(S.refusalManual) manualList();
+    return;
+  }
 
   if(S.recog==='none'){
     lab.innerHTML = '<span class="alert">Not recognised</span>';
