@@ -4,19 +4,23 @@ WHY A PAGE. Lending a machine to the queue was two controls on two
 machines: whether `tools/volunteer.py` was running here, and what
 `COMPUTE_MODE` said in a .env file on the web box. Neither is visible from
 the other, one of them is a keystroke in a scrolling terminal, and the only
-way to answer "what is happening right now" was to read a log. That is a
-control surface you have to hold in your head, and holding it in your head
-is how a laptop sits there believing it is helping while a paid machine
-does the work.
+way to answer "what is happening right now" was to read a log.
 
-So: one page, on this machine, at 127.0.0.1. It answers three questions in
-the order they get asked --
+AND WHY IT IS SHAPED LIKE THIS. The first version exposed those two
+controls faithfully -- a switch for this machine, a mode for that one --
+and it was not usable. You cannot answer "what happens to the next upload"
+by looking at either; you have to hold both in your head and combine them,
+and combining them is the entire job. A control surface that models the
+implementation makes its reader do the work the program should have done.
 
-    am I taking jobs?          the heading, in words, not a status light
-    what is happening now?     the render, its stage, how long it has run
-    what if I close this?      the web box's mode, stated and changeable
+So the page asks ONE question -- where should videos be made -- and offers
+the four answers that exist. Each answer sets both machines. What is left
+is a status line that says what is happening right now, and the facts
+about this computer that decide what it can accept.
 
--- and every control is explicit. Nothing here decides anything on its own.
+    where should videos be made?   four outcomes, one choice, both machines
+    what is happening now?         the render, its stage, how long it has run
+    what can this computer take?   memory, and the length that follows from it
 
 LOOPBACK ONLY, and that is not a detail. This page can pause a renderer and
 change what the production server does with its money, and it has no login
@@ -45,20 +49,57 @@ logger = logging.getLogger("volunteer.panel")
 SERVER = "root@172.104.237.127"
 ENV_PATH = "/srv/vsw/shared/.env"
 
-# What the mode may be set to. A WHITELIST, because this value is
+# The mode may only ever be one of these. A WHITELIST, because the value is
 # interpolated into a command that runs as root on the production server.
-# Nothing typed reaches that line: a value not on this list is refused here.
-MODES = {
-    "manual": ("Nothing happens",
-               "The job waits in the queue until this machine comes back. "
-               "Nothing is ever rented, so nothing is ever charged."),
-    "auto": ("A machine is rented",
-             "Only while this one is not listening. It stands aside the "
-             "moment this machine says hello again."),
-    "cloud": ("A machine is always rented",
-              "Every job goes to a paid machine and this one is ignored, "
-              "even while it is running."),
+MODES = ("manual", "auto", "cloud")
+
+# THE FOUR ANSWERS, and what each one means on the two machines. This is the
+# whole of the page's logic: a reader chooses an outcome, and the two
+# settings that produce it are ours to work out, not theirs.
+#
+#   taking  whether THIS machine consumes the queue
+#   mode    what the WEB BOX does when this machine is not heard
+#
+# `rent` and `wait` both stop this machine consuming, because a choice that
+# says "rent one" while this one quietly keeps taking work is a lie.
+CHOICES = {
+    "here": {
+        "taking": True, "mode": "manual",
+        "title": "On this computer",
+        "cost": "free",
+        "detail": "Only while this window is open. If it is closed, videos "
+                  "wait in the queue until you open it again.",
+    },
+    "here_or_rent": {
+        "taking": True, "mode": "auto",
+        "title": "On this computer, or rent one when it is off",
+        "cost": "free while this is open",
+        "detail": "This computer takes everything it can. When it is closed "
+                  "or busy, a machine is rented so nobody waits.",
+    },
+    "rent": {
+        "taking": False, "mode": "cloud",
+        "title": "Always rent a machine",
+        "cost": "per video",
+        "detail": "This computer takes nothing, even while it is running. "
+                  "Every video is made on a rented machine.",
+    },
+    "wait": {
+        "taking": False, "mode": "manual",
+        "title": "Nowhere yet — let them wait",
+        "cost": "free",
+        "detail": "Nothing is rendered and nothing is rented. Uploads queue "
+                  "up until you choose one of the above.",
+    },
 }
+
+
+def choice_now(taking: bool, mode: str) -> str:
+    """Which of the four the two machines are currently set to, or ''."""
+    for name, spec in CHOICES.items():
+        if spec["taking"] == bool(taking) and spec["mode"] == mode:
+            return name
+    return ""
 
 
 class Panel:
@@ -71,6 +112,14 @@ class Panel:
         self.stop_after = stop_after
         self._mode = {"name": "", "problem": "reading…"}
         self._mode_lock = threading.Lock()
+
+    def full(self) -> dict:
+        """Everything the page draws, with the chosen outcome worked out."""
+        state = self.state()
+        mode = self.mode()
+        return {**state, "mode": mode,
+                "choice": choice_now(state.get("taking", False),
+                                     mode.get("name", ""))}
 
     # -- the other machine ----------------------------------------------
     def mode(self) -> dict:
@@ -97,6 +146,23 @@ class Panel:
                 name = line.split("=", 1)[1].strip().lower()
         # Unset means `auto`, which is what app/store.py falls back to.
         self._set_mode(name or "auto", "")
+
+    def choose(self, name: str) -> str:
+        """Apply one of the four. Returns '' or a reason.
+
+        THE WEB BOX FIRST. If it cannot be reached, nothing has changed
+        anywhere -- where doing this machine first would leave the two
+        halves disagreeing, which is the state the page exists to make
+        impossible.
+        """
+        spec = CHOICES.get(name)
+        if spec is None:
+            return f"{name!r} is not one of the choices"
+        problem = self.set_mode(spec["mode"])
+        if problem:
+            return problem
+        (self.resume if spec["taking"] else self.pause)()
+        return ""
 
     def set_mode(self, name: str) -> str:
         """Change it on the web box. Returns '' or a reason."""
@@ -150,11 +216,12 @@ def serve(panel: Panel, port: int = 5055) -> str:
                        "application/json; charset=utf-8")
 
         def do_GET(self) -> None:                     # noqa: N802
-            if self.path.split("?")[0] == "/":
+            path = self.path.split("?")[0]
+            if path == "/":
                 self._send(200, PAGE.replace("__PORT__", str(port))
                            .encode("utf-8"), "text/html; charset=utf-8")
-            elif self.path.split("?")[0] == "/state":
-                self._json({**panel.state(), "mode": panel.mode()})
+            elif path == "/state":
+                self._json(panel.full())
             else:
                 self._send(404, b"no", "text/plain")
 
@@ -166,21 +233,17 @@ def serve(panel: Panel, port: int = 5055) -> str:
             except (ValueError, TypeError):
                 body = {}
 
-            if path == "/take":
-                panel.resume()
-            elif path == "/hold":
-                panel.pause()
-            elif path == "/stop":
-                panel.stop_after()
-            elif path == "/mode":
-                problem = panel.set_mode(str(body.get("mode") or ""))
+            if path == "/choose":
+                problem = panel.choose(str(body.get("choice") or ""))
                 if problem:
                     self._json({"problem": problem}, code=400)
                     return
+            elif path == "/stop":
+                panel.stop_after()
             else:
                 self._send(404, b"no", "text/plain")
                 return
-            self._json({**panel.state(), "mode": panel.mode()})
+            self._json(panel.full())
 
     try:
         # 127.0.0.1, never 0.0.0.0: this pauses a renderer and spends money.
@@ -197,160 +260,142 @@ def serve(panel: Panel, port: int = 5055) -> str:
 # --------------------------------------------------------------------------
 # the page
 # --------------------------------------------------------------------------
-# Palette and type taken from the site itself (app/static/svs/index.html), so
-# the machine that makes the videos does not look like a different product
-# from the one that sells them. Fonts are linked but every one has a real
-# fallback: this is a local tool and it has to open on a train.
-_MODE_ROWS = "".join(
-    f'<label class="mode" data-mode="{name}">'
-    f'<input type="radio" name="mode" value="{name}">'
-    f'<span class="mt">{html.escape(title)}</span>'
-    f'<span class="md">{html.escape(detail)}</span></label>'
-    for name, (title, detail) in MODES.items())
+_CHOICE_ROWS = "".join(
+    f'<label class="choice" data-choice="{name}">'
+    f'<input type="radio" name="choice" value="{name}">'
+    f'<span class="tick" aria-hidden="true"></span>'
+    f'<span class="body"><span class="ct">{html.escape(c["title"])}'
+    f'<em class="cost" data-cost="{name}">{html.escape(c["cost"])}</em></span>'
+    f'<span class="cd">{html.escape(c["detail"])}</span></span></label>'
+    for name, c in CHOICES.items())
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Lending this machine</title>
+<title>Where videos are made</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap">
 <style>
+/* Contrast is a requirement, not a taste. Every colour below was picked to
+   clear 4.5:1 against the surface it sits on -- the previous palette used a
+   9.5px uppercase label at #9a92a6 on #f6f1e8, which is 3.1:1 and could not
+   be read. Nothing here is lighter than --soft, and --soft is 7:1. */
 :root{
-  --paper:#f6f1e8; --ink:#1c1622; --soft:#5a5266; --faint:#9a92a6;
-  --hair:rgba(28,22,34,.13); --hair-2:rgba(28,22,34,.07);
-  --b1:#381C53; --b3:#663893; --mag:#cc237e;
-  --surface:#fffdf9; --tint:#faf7f1;
-  --serif:Fraunces,Georgia,"Times New Roman",serif;
+  --paper:#f4efe6; --surface:#fffdfa; --raise:#fbf7f0;
+  --ink:#191320;        /* 16.1:1 on paper */
+  --soft:#4a4356;       /*  7.9:1 -- body text that is not the point */
+  --quiet:#655d73;      /*  5.4:1 -- the lightest thing allowed */
+  --line:rgba(25,19,32,.16); --line-2:rgba(25,19,32,.09);
+  --b1:#3d1e5c; --b2:#5c2f86; --mag:#b81e6e; --good:#1d6b4a;
+  --serif:Fraunces,Georgia,serif;
   --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#14111a; --surface:#1e1926; --raise:#251f2f;
+    --ink:#f4eefa; --soft:#c3bad0; --quiet:#a79db6;
+    --line:rgba(244,238,250,.20); --line-2:rgba(244,238,250,.10);
+    --b1:#c9aef0; --b2:#d8c4f5; --mag:#ff8ec4; --good:#6fd6a6;
+  }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
-  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
-.wrap{max-width:680px;margin:0 auto;padding:38px 22px 70px}
-.lab{font-family:var(--mono);font-size:9.5px;letter-spacing:.19em;
-  text-transform:uppercase;color:var(--faint)}
-header{display:flex;align-items:baseline;gap:12px;margin-bottom:40px}
-.wordmark{font-family:var(--serif);font-weight:400;font-size:15px}
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:640px;margin:0 auto;padding:34px 20px 64px}
+header{display:flex;align-items:baseline;gap:10px;margin-bottom:30px;
+  color:var(--quiet);font-size:13px}
+.wordmark{font-family:var(--serif);font-weight:600;font-size:16px;
+  color:var(--ink)}
 
-/* the answer to the first question, as a sentence */
-h1{font-family:var(--serif);font-weight:300;letter-spacing:-.03em;
-  font-size:clamp(30px,5vw,42px);line-height:1.08;margin:0 0 10px;
-  text-wrap:balance}
-h1 b{font-weight:400;color:var(--b1)}
-h1.off b{color:var(--faint)}
-.because{color:var(--soft);max-width:48ch;margin:0}
+/* WHAT IS HAPPENING, first, because it is what you came to find out. */
+.status{background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;padding:18px 20px}
+.status .now{font-family:var(--serif);font-size:23px;font-weight:600;
+  letter-spacing:-.015em;line-height:1.25;margin:0;text-wrap:balance}
+.status .sub{color:var(--soft);margin:5px 0 0;font-size:14.5px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;
+  margin-right:9px;vertical-align:middle;background:var(--quiet)}
+.dot.live{background:var(--mag);animation:pulse 1.6s ease-in-out infinite}
+.dot.on{background:var(--good)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot.live{animation:none}}
 
-.act{margin:26px 0 0;display:flex;flex-wrap:wrap;gap:10px}
-button{font:inherit;font-family:var(--mono);font-size:9.5px;letter-spacing:.19em;
-  text-transform:uppercase;border:0;border-radius:2px;padding:14px 24px;
-  cursor:pointer;transition:background .18s,opacity .18s}
-button:focus-visible{outline:2px solid var(--mag);outline-offset:2px}
-/* BOTH STATES, ALWAYS SHOWN. This was one button whose label was the
-   ACTION -- "Stop taking jobs" -- so the only way to learn that the other
-   state existed was to already be in it. What a control does and which
-   way it is set are different things, and a switch says both at once. */
-.switch{display:inline-flex;border:1px solid var(--hair);border-radius:3px;
-  overflow:hidden}
-.switch button{background:none;color:var(--soft);padding:13px 22px}
-.switch button+button{border-left:1px solid var(--hair)}
-.switch button:hover:not(.on){color:var(--ink);background:var(--hair-2)}
-.switch button.on{background:var(--b1);color:#fff}
-.switch button.on[data-want="hold"]{background:var(--soft)}
-.ghost{background:none;color:var(--soft);border:1px solid var(--hair);
-  padding:13px 23px}
-.ghost:hover{border-color:var(--ink);color:var(--ink)}
-button[disabled]{opacity:.32;cursor:default}
-
-section{margin-top:38px;padding-top:22px;border-top:1px solid var(--hair-2)}
-section>.lab{display:block;margin-bottom:14px}
-
-/* the render */
-.job{background:var(--surface);border:1px solid var(--hair);border-radius:4px;
-  padding:20px 22px}
-.job .piece{font-family:var(--serif);font-size:21px;font-weight:400;
-  letter-spacing:-.01em;margin:0 0 3px}
-.job .meta{font-family:var(--mono);font-size:10px;letter-spacing:.13em;
-  text-transform:uppercase;color:var(--faint);font-variant-numeric:tabular-nums}
-.stages{display:flex;gap:5px;margin-top:17px}
-.stg{flex:1;text-align:center}
-.stg i{display:block;height:3px;border-radius:2px;background:var(--hair);
-  transition:background .3s}
-.stg.done i{background:var(--b3)}
+.stages{display:flex;gap:4px;margin-top:16px}
+.stg{flex:1}
+.stg i{display:block;height:4px;border-radius:2px;background:var(--line-2)}
+.stg.done i{background:var(--b2)}
 .stg.now i{background:var(--mag)}
-.stg span{font-family:var(--mono);font-size:8px;letter-spacing:.13em;
-  text-transform:uppercase;color:var(--faint);margin-top:7px;display:block}
-.stg.now span{color:var(--mag)}
-.detail{margin:15px 0 0;color:var(--soft);font-size:14px;min-height:1.55em}
-.idle{color:var(--soft);margin:0}
+.stg span{font-size:11px;color:var(--quiet);margin-top:6px;display:block;
+  text-align:center}
+.stg.now span{color:var(--mag);font-weight:600}
+.detail{margin:13px 0 0;color:var(--soft);font-size:14px}
+.after{margin-top:15px}
 
-/* facts */
-.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
-  gap:1px;background:var(--hair-2);border:1px solid var(--hair-2)}
-.fact{background:var(--paper);padding:14px 16px}
-.fact .n{font-family:var(--serif);font-size:23px;font-weight:300;
-  font-variant-numeric:tabular-nums;line-height:1.1}
-.fact .k{font-family:var(--mono);font-size:8.5px;letter-spacing:.15em;
-  text-transform:uppercase;color:var(--faint);margin-top:4px}
+h2{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:-.01em;
+  margin:36px 0 4px}
+.hint{color:var(--soft);font-size:14px;margin:0 0 14px}
 
-/* the other machine */
-.mode{display:block;background:var(--surface);border:1px solid var(--hair);
-  border-radius:4px;padding:15px 17px;margin-bottom:9px;cursor:pointer;
-  transition:border-color .18s,background .18s}
-.mode:hover{border-color:var(--faint)}
-.mode:has(input:checked){border-color:var(--b1);background:var(--tint)}
-.mode input{position:absolute;opacity:0;pointer-events:none}
-.mode .mt{display:block;font-weight:500;font-size:14.5px}
-.mode:has(input:checked) .mt{color:var(--b1)}
-.mode .md{display:block;color:var(--soft);font-size:13.5px;margin-top:2px}
-.mode:has(input:focus-visible){outline:2px solid var(--mag);outline-offset:2px}
-.problem{color:var(--mag);font-size:13.5px;margin:10px 0 0;min-height:1.2em}
-footer{margin-top:44px;color:var(--faint);font-size:13px}
-footer code{font-family:var(--mono);font-size:12px}
-@media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]){
-    --paper:#17131d; --ink:#f2ecf7; --soft:#a79fb4; --faint:#6f6780;
-    --hair:rgba(242,236,247,.16); --hair-2:rgba(242,236,247,.08);
-    --surface:#1f1a27; --tint:#241d2e; --b1:#b79ae0; --b3:#c9b2ea;
-  }
-}
+/* ONE QUESTION, FOUR ANSWERS. Each sets both machines; the reader never
+   has to combine two settings to know what happens next. */
+.choice{display:flex;gap:13px;align-items:flex-start;background:var(--surface);
+  border:1.5px solid var(--line);border-radius:6px;padding:14px 16px;
+  margin-bottom:9px;cursor:pointer;transition:border-color .15s,background .15s}
+.choice:hover{border-color:var(--quiet);background:var(--raise)}
+.choice input{position:absolute;opacity:0;width:0;height:0}
+.tick{flex:0 0 auto;width:18px;height:18px;border-radius:50%;margin-top:3px;
+  border:2px solid var(--quiet);transition:border-color .15s}
+.choice:has(input:checked){border-color:var(--b1);background:var(--raise)}
+.choice:has(input:checked) .tick{border-color:var(--b1);
+  box-shadow:inset 0 0 0 4px var(--b1)}
+.choice:has(input:focus-visible){outline:3px solid var(--mag);outline-offset:2px}
+.body{flex:1}
+.ct{display:flex;flex-wrap:wrap;align-items:baseline;gap:9px;
+  font-weight:600;font-size:15.5px}
+.choice:has(input:checked) .ct{color:var(--b1)}
+.cost{font-style:normal;font-size:12px;font-weight:500;color:var(--soft);
+  background:var(--line-2);padding:2px 8px;border-radius:99px;white-space:nowrap}
+.cd{display:block;color:var(--soft);font-size:14px;margin-top:3px}
+
+.facts{display:flex;flex-wrap:wrap;gap:22px;padding:15px 17px;
+  background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.fact .n{font-family:var(--serif);font-size:20px;font-weight:600;
+  font-variant-numeric:tabular-nums;line-height:1.2}
+.fact .k{font-size:12.5px;color:var(--soft)}
+
+button{font:inherit;font-size:13px;font-weight:600;border-radius:4px;
+  cursor:pointer;padding:10px 18px;border:1.5px solid var(--line);
+  background:var(--raise);color:var(--ink);transition:border-color .15s}
+button:hover:not([disabled]){border-color:var(--ink)}
+button:focus-visible{outline:3px solid var(--mag);outline-offset:2px}
+button[disabled]{opacity:.4;cursor:default}
+.problem{color:var(--mag);font-size:14px;margin:12px 0 0;min-height:1.3em;
+  font-weight:500}
+footer{margin-top:36px;color:var(--soft);font-size:13.5px;line-height:1.6}
+footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 </style></head><body>
 <div class="wrap">
-<header><span class="wordmark">weefeen</span>
-  <span class="lab">lending this machine</span></header>
+<header><span class="wordmark">weefeen</span><span>this computer</span></header>
 
-<h1 id="head">…</h1>
-<p class="because" id="because"></p>
-
-<div class="act">
-  <div class="switch" id="switch" role="group" aria-label="Take jobs or not">
-    <button data-want="take">Take jobs</button>
-    <button data-want="hold">Don&rsquo;t take jobs</button>
-  </div>
-  <button class="ghost" id="stop">Stop after this job</button>
+<div class="status">
+  <p class="now" id="now"><span class="dot" id="dot"></span><span id="nowtext">…</span></p>
+  <p class="sub" id="sub"></p>
+  <div id="extra"></div>
 </div>
 
-<section>
-  <span class="lab">What is happening now</span>
-  <div id="now"><p class="idle">…</p></div>
-</section>
+<h2>Where should videos be made?</h2>
+<p class="hint">This sets both this computer and the server. Whatever you
+  pick is what happens to the next upload.</p>
+<div id="choices">__CHOICES__</div>
+<p class="problem" id="problem"></p>
 
-<section>
-  <span class="lab">What this machine can take</span>
-  <div class="facts" id="facts"></div>
-</section>
+<h2>What this computer can take</h2>
+<div class="facts" id="facts"></div>
 
-<section>
-  <span class="lab">If this machine is not listening</span>
-  <div id="modes">__MODES__</div>
-  <p class="problem" id="problem"></p>
-</section>
-
-<footer>This page is on this computer only —
-  <code>127.0.0.1:__PORT__</code>. Closing it changes nothing; closing the
-  terminal running <code>volunteer.py</code> is what stops the machine
-  taking work.</footer>
+<footer>This page is on this computer only — <code>127.0.0.1:__PORT__</code>.
+  Closing it changes nothing. Closing the black <code>lend.bat</code> window
+  is what stops this computer taking work.</footer>
 </div>
 
 <script>
@@ -360,115 +405,98 @@ let busy = false;
 
 async function send(path, body){
   busy = true;
+  document.getElementById('problem').textContent = '';
   try{
     const r = await fetch(path, {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(body || {})});
     const s = await r.json();
-    if(!r.ok){ document.getElementById('problem').textContent =
-                 s.problem || 'That did not go through.'; }
-    else { document.getElementById('problem').textContent = ''; paint(s); }
+    if(!r.ok) document.getElementById('problem').textContent =
+      s.problem || 'That did not go through.';
+    else paint(s);
   }catch(e){
     document.getElementById('problem').textContent = e.message;
   }finally{ busy = false; }
 }
 
-function minutes(s){
-  if(!s && s !== 0) return '—';
+function clock(s){
+  if(s == null) return '—';
   const m = Math.floor(s/60), r = Math.floor(s%60);
-  return m ? `${m}m ${String(r).padStart(2,'0')}s` : `${r}s`;
+  return m ? m + 'm ' + String(r).padStart(2,'0') + 's' : r + 's';
 }
 
 function paint(s){
-  const head = document.getElementById('head');
-  const taking = s.taking, job = s.job;
+  const job = s.job, dot = document.getElementById('dot');
+  const text = document.getElementById('nowtext');
+  const sub = document.getElementById('sub');
+  const extra = document.getElementById('extra');
 
-  // The heading answers the question in words, and says what it means.
-  head.className = taking ? '' : 'off';
+  // WHAT IS HAPPENING, in one sentence, before any control.
   if(job){
-    head.innerHTML = 'This machine is <b>making a video</b>.';
-    document.getElementById('because').textContent =
-      'It took the job from the queue. Nothing was rented.';
-  }else if(taking){
-    head.innerHTML = 'This machine is <b>taking jobs</b>.';
-    document.getElementById('because').textContent =
-      'Nothing is rendering right now. The next upload comes here.';
-  }else if(s.paused){
-    head.innerHTML = 'This machine is <b>not taking jobs</b>.';
-    document.getElementById('because').textContent =
-      'You paused it. Anything uploaded now waits for the setting below.';
-  }else{
-    head.innerHTML = 'This machine is <b>standing back</b>.';
-    document.getElementById('because').textContent =
-      'It just handed a job back, so it stays quiet for ' +
-      minutes(s.quiet_for) + ' to let another machine take it.';
-  }
-
-  // The switch shows which way it is set; the other half is the thing you
-  // can click. Never a label that changes under the pointer.
-  document.querySelectorAll('#switch button').forEach(b => {
-    const isOn = (b.dataset.want === 'take') === taking;
-    b.classList.toggle('on', isOn);
-    b.setAttribute('aria-pressed', isOn ? 'true' : 'false');
-    b.disabled = busy;
-  });
-  const stop = document.getElementById('stop');
-  stop.disabled = !job;
-  stop.textContent = job ? 'Stop after this job' : 'Nothing to finish';
-
-  // The render.
-  const now = document.getElementById('now');
-  if(!job){
-    now.innerHTML = '<p class="idle">Nothing is rendering. ' +
-      (taking ? 'Waiting for an upload.'
-              : 'This machine is not listening for one.') + '</p>';
-  }else{
+    dot.className = 'dot live';
+    text.textContent = 'Making a video on this computer';
+    sub.textContent = job.piece + ' · running ' + clock(job.running_for) +
+      (job.minutes ? ' · ' + job.minutes.toFixed(1) + ' min of music' : '');
     const at = STAGES.findIndex(([k]) => k === job.stage);
-    now.innerHTML =
-      '<div class="job"><p class="piece">' + job.piece + '</p>' +
-      '<p class="meta">' + (job.minutes ? job.minutes.toFixed(1) + ' min · ' : '') +
-      'running ' + minutes(job.running_for) + ' · job ' + job.id + '</p>' +
-      '<div class="stages">' + STAGES.map(([k,label],i) =>
-        '<div class="stg ' + (i < at ? 'done' : i === at ? 'now' : '') +
-        '"><i></i><span>' + label + '</span></div>').join('') + '</div>' +
-      '<p class="detail">' + (job.detail || '') + '</p></div>';
+    extra.innerHTML = '<div class="stages">' + STAGES.map(([k,l],i) =>
+      '<div class="stg ' + (i < at ? 'done' : i === at ? 'now' : '') +
+      '"><i></i><span>' + l + '</span></div>').join('') + '</div>' +
+      (job.detail ? '<p class="detail">' + job.detail + '</p>' : '') +
+      '<div class="after"><button id="stop">Finish this one, then stop</button></div>';
+    document.getElementById('stop').onclick = () => send('/stop');
+  }else{
+    const taking = s.taking;
+    dot.className = 'dot ' + (taking ? 'on' : '');
+    text.textContent = taking ? 'Ready — nothing to do yet'
+                              : 'This computer is not taking videos';
+    sub.textContent = taking
+      ? 'The next upload will be made here.'
+      : (s.choice === 'rent' ? 'The next upload will be made on a rented machine.'
+        : s.quiet_for > 0
+          ? 'It just handed a job back; standing aside for ' + clock(s.quiet_for) + '.'
+          : 'The next upload will wait in the queue.');
+    extra.innerHTML = '';
   }
 
-  // What it could accept, measured now.
+  // The one question.
+  document.querySelectorAll('.choice input').forEach(i => {
+    i.checked = (i.value === s.choice);
+    i.disabled = busy || !(s.mode && s.mode.name);
+  });
+  if(s.mode && s.mode.problem)
+    document.getElementById('problem').textContent =
+      'The server could not be reached: ' + s.mode.problem;
+  else if(!s.choice && s.mode && s.mode.name)
+    document.getElementById('problem').textContent =
+      'The two machines are set to a combination that is not one of these ' +
+      '(server: ' + s.mode.name + '). Pick one to line them up.';
+
+  // The price, from the server's own plan rather than typed in here.
+  if(s.hourly_cost){
+    const each = '~$' + s.hourly_cost.toFixed(2) + ' a video';
+    document.querySelectorAll('[data-cost="rent"]').forEach(e =>
+      e.textContent = each);
+    document.querySelectorAll('[data-cost="here_or_rent"]').forEach(e =>
+      e.textContent = each + ' only when off');
+  }
+
   document.getElementById('facts').innerHTML = [
-    [s.free_gb == null ? '—' : s.free_gb.toFixed(1) + ' GB', 'memory free'],
+    [s.free_gb == null ? '—' : s.free_gb.toFixed(1) + ' GB', 'memory free now'],
     [s.longest_min == null ? '—' : Math.floor(s.longest_min) + ' min',
-     'longest it will take'],
-    [s.scores_here + ' of ' + s.scores_total, 'scores already here'],
+     'longest video it will accept'],
+    [s.scores_here + ' of ' + s.scores_total, 'scores already downloaded'],
   ].map(([n,k]) => '<div class="fact"><div class="n">' + n +
                    '</div><div class="k">' + k + '</div></div>').join('');
-
-  // The other machine.
-  const mode = (s.mode && s.mode.name) || '';
-  document.querySelectorAll('.mode input').forEach(i => {
-    i.checked = (i.value === mode);
-    i.disabled = !mode;
-  });
-  if(s.mode && s.mode.problem){
-    document.getElementById('problem').textContent =
-      'The web box could not be read: ' + s.mode.problem;
-  }
 }
 
-document.querySelectorAll('#switch button').forEach(b => {
-  b.onclick = () => send(b.dataset.want === 'take' ? '/take' : '/hold');
-});
-document.getElementById('stop').onclick = () => send('/stop');
-document.querySelectorAll('.mode input').forEach(i => {
-  i.onchange = () => { if(i.checked) send('/mode', {mode: i.value}); };
+document.querySelectorAll('.choice input').forEach(i => {
+  i.onchange = () => { if(i.checked) send('/choose', {choice: i.value}); };
 });
 
 async function tick(){
-  if(!busy){
-    try{ paint(await (await fetch('/state')).json()); }catch(e){}
-  }
+  if(!busy){ try{ paint(await (await fetch('/state')).json()); }catch(e){} }
   setTimeout(tick, 1500);
 }
 tick();
 </script></body></html>
-""".replace("__MODES__", _MODE_ROWS)
+""".replace("__CHOICES__", _CHOICE_ROWS)

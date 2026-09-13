@@ -4309,6 +4309,11 @@ def check_a_fetched_score_lands_where_it_was_told() -> str:
     return "digital root first, operator's order respected, missing roots skipped"
 
 
+def page_hint(mod) -> str:
+    """The page's own script, for asserting what it tells a reader."""
+    return mod.PAGE
+
+
 def check_the_lending_panel_is_local_and_narrow() -> str:
     """The page that lends this machine may be reached from nowhere else.
 
@@ -4351,45 +4356,82 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
         if panel.set_mode(bogus) == "":
             raise Failed(f"the panel accepted {bogus!r} as a mode; it is "
                          f"interpolated into a root command on the server")
+        if panel.choose(bogus) == "":
+            raise Failed(f"the panel accepted {bogus!r} as a choice")
 
     url = lend_panel.serve(panel, port=5098)
     if not url:
         raise Failed("the panel would not start")
 
+    # EVERY CHOICE DESCRIBES ITS OWN SETTINGS. The page's premise is that a
+    # reader picks an outcome instead of combining two settings in their
+    # head, so the mapping has to be a round trip in both directions.
+    for name, spec in lend_panel.CHOICES.items():
+        if lend_panel.choice_now(spec["taking"], spec["mode"]) != name:
+            raise Failed(f"the choice {name!r} does not describe its own "
+                         f"settings")
+    # Every mode is reachable from the page, or it cannot be got back out of.
+    offered = {spec["mode"] for spec in lend_panel.CHOICES.values()}
+    if offered != set(lend_panel.MODES):
+        raise Failed(f"the page can set {sorted(offered)} but the server "
+                     f"accepts {sorted(lend_panel.MODES)}; a mode it cannot "
+                     f"set is a state it cannot leave")
+
+    # ONE PAIR IS NOT A CHOICE AND MUST NOT PRETEND TO BE: this machine
+    # taking jobs while the server rents one for every video is two
+    # renderers racing for the same queue. It is reachable -- the server is
+    # configured elsewhere -- so the page has to say so rather than show
+    # nothing selected. The volunteer also stands back on startup when it
+    # reads that, so the state is left rather than lived in.
+    if lend_panel.choice_now(True, "cloud"):
+        raise Failed("taking jobs while the server rents for every video is "
+                     "offered as a choice; it is two machines racing")
+    vsrc = (ROOT / "tools" / "volunteer.py").read_text(encoding="utf-8")
+    if '"cloud"' not in vsrc or "stands back" not in vsrc:
+        raise Failed("the volunteer does not stand back when the server is "
+                     "set to rent for every video, so both would render")
+
     page = urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
-    # Every question the page exists to answer has somewhere to appear.
-    for needed in ("Take jobs", "Stop after this job",
-                   "What is happening now", "What this machine can take",
-                   "If this machine is not listening"):
+    if "not one of these" not in page_hint(lend_panel):
+        raise Failed("the page never says when the two machines disagree, so "
+                     "it would show nothing selected and no reason why")
+    for needed in ("Where should videos be made",
+                   "What this computer can take"):
         if needed not in page:
             raise Failed(f"the panel never shows {needed!r}")
-    for name in lend_panel.MODES:
+    for name, spec in lend_panel.CHOICES.items():
         if f'value="{name}"' not in page:
-            raise Failed(f"the mode {name!r} cannot be chosen on the page")
+            raise Failed(f"the choice {name!r} cannot be picked on the page")
+        if spec["title"].split(" —")[0][:18] not in page:
+            raise Failed(f"the choice {name!r} is not named on the page")
 
     got = _json.loads(urllib.request.urlopen(url + "state", timeout=5).read())
     missing = {"taking", "paused", "job", "free_gb", "longest_min",
-               "mode"} - set(got)
+               "mode", "choice"} - set(got)
     if missing:
         raise Failed(f"the page is not told {sorted(missing)}")
 
-    # The controls reach the volunteer, and an unknown one is refused.
-    urllib.request.urlopen(urllib.request.Request(
-        url + "hold", method="POST", data=b"{}"), timeout=5)
-    if rang != ["pause"]:
-        raise Failed(f"holding did not pause the volunteer: {rang}")
+    # An unknown choice never reaches ssh, and says so over HTTP.
     try:
         urllib.request.urlopen(urllib.request.Request(
-            url + "mode", method="POST",
-            data=_json.dumps({"mode": "whatever"}).encode()), timeout=10)
+            url + "choose", method="POST",
+            data=_json.dumps({"choice": "whatever"}).encode()), timeout=10)
     except urllib.error.HTTPError as exc:
         if exc.code != 400:
-            raise Failed(f"a bogus mode answered {exc.code}, not 400")
+            raise Failed(f"a bogus choice answered {exc.code}, not 400")
     else:
-        raise Failed("a bogus mode was accepted over HTTP")
+        raise Failed("a bogus choice was accepted over HTTP")
+
+    # Finishing the job in hand is its own action, not a mode.
+    urllib.request.urlopen(urllib.request.Request(
+        url + "stop", method="POST", data=b"{}"), timeout=5)
+    if rang != ["stop"]:
+        raise Failed(f"'finish this one, then stop' did not reach the "
+                     f"volunteer: {rang}")
 
     return ("loopback only, no login; the mode is a whitelist before it is "
-            f"ever a command; {len(lend_panel.MODES)} modes offered")
+            f"ever a command; {len(lend_panel.CHOICES)} outcomes, and every "
+            f"pair of settings has a name")
 
 
 def main() -> int:

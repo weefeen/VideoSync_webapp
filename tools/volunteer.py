@@ -142,6 +142,13 @@ def _state() -> dict:
         "longest_min": _longest_now() if free else None,
         "scores_here": _scores["here"],
         "scores_total": _scores["total"],
+        # WHAT RENTING ONE COSTS, from the plan itself. The page says
+        # "~$0.29 a video" beside the choice that spends it, and a figure
+        # typed into a page is a figure that goes stale the day the plan
+        # changes -- which is the whole reason PLAN_HOURLY_USD exists.
+        # A partial hour is rounded up by the provider, so one video on an
+        # idle machine costs one hour whatever the render took.
+        "hourly_cost": settings.compute_hourly_cost,
     }
 
 
@@ -396,9 +403,24 @@ def _watch_mode(panel, stop: threading.Event) -> None:
 
     Read on a timer rather than when the page asks: it is an ssh round trip
     to another machine, and a page that waits on one feels broken.
+
+    THE FIRST READ IS ALSO ADOPTED. Starting up meant "this machine takes
+    jobs", whatever the server had been told -- so a server set to rent a
+    machine for every video got a laptop competing with it for the same
+    queue, two renderers for one job, and a page showing a pair of settings
+    none of its own choices described. The server was told what to do last
+    and it is the half that spends money, so it wins: if it is renting for
+    everything, this machine stands back until somebody says otherwise.
     """
+    first = True
     while not stop.is_set():
         panel.refresh_mode()
+        if first:
+            first = False
+            if panel.mode().get("name") == "cloud" and not _paused.is_set():
+                _paused.set()
+                logger.info("the server rents a machine for every video, so "
+                            "this one stands back. Change it on the panel.")
         stop.wait(30.0)
 
 
