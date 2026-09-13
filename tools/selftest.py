@@ -4340,7 +4340,17 @@ def check_a_bucket_without_credentials_is_not_available() -> str:
         os.environ["AWS_CONFIG_FILE"] = str(
             pathlib.Path(tempfile.gettempdir()) / "vsw-no-such-config")
         storage._client, storage._tried, storage._problem = None, False, ""
-        if storage.available():
+        # AND IT MUST NOT RAISE. `available()` is asked as a question
+        # everywhere -- `if storage.available():` -- so an exception out of
+        # it is not a "no", it is a crash in whatever was asking. The
+        # credential chain reaches the network, and on a machine where that
+        # fails it threw SSLError straight through this line.
+        try:
+            answer = storage.available()
+        except Exception as exc:                                # noqa: BLE001
+            raise Failed(f"storage.available() raised {type(exc).__name__} "
+                         f"instead of answering: {exc}")
+        if answer:
             raise Failed("a bucket with no credentials reports itself "
                          "available; a machine would accept a render and "
                          "then fail to fetch the recording")

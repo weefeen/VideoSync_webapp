@@ -96,21 +96,43 @@ def _connect():
         # `boto3`, or WITHOUT CREDENTIALS, this reports why"; only the
         # second half was never true.
         #
-        # Asked of a Session rather than assumed from our own two settings,
-        # because the ambient chain is a legitimate way to be configured --
-        # an AWS instance role supplies no key and is not misconfigured.
+        # OUR OWN KEYS ARE ENOUGH, AND ARE NOT WORTH A NETWORK CALL. When
+        # both are configured there is nothing to discover, so the chain is
+        # never consulted -- which is the ordinary case on every machine
+        # this runs on.
+        #
+        # Only when they are absent is the ambient chain asked, because it
+        # is a legitimate way to be configured: an instance role supplies
+        # no key and is not misconfigured. AND THAT ASK CAN RAISE. It
+        # reaches the network -- instance metadata, SSO -- and on a machine
+        # where that fails it threw `SSLError` straight out of
+        # `storage.available()`, which every caller treats as a question
+        # that answers True or False and never as one that explodes. It was
+        # raised from inside a page request and from inside the checks
+        # before anybody noticed it was possible.
         session = boto3.Session(
             aws_access_key_id=settings.object_key or None,
             aws_secret_access_key=settings.object_secret or None,
             region_name=settings.object_region or None)
-        if session.get_credentials() is None:
-            _problem = (
-                "no object-storage credentials on this machine, so the "
-                "bucket cannot be read or written. Set OBJECT_KEY and "
-                "OBJECT_SECRET in .env. Until then a render here cannot "
-                "fetch its recording or store its result.")
-            logger.warning("object storage unavailable: %s", _problem)
-            return None
+        if not (settings.object_key and settings.object_secret):
+            try:
+                found = session.get_credentials()
+            except Exception as exc:                  # noqa: BLE001
+                _problem = (
+                    f"could not work out whether this machine has any "
+                    f"object-storage credentials: {exc}. Set OBJECT_KEY and "
+                    f"OBJECT_SECRET in .env rather than relying on the "
+                    f"environment.")
+                logger.warning("object storage unavailable: %s", _problem)
+                return None
+            if found is None:
+                _problem = (
+                    "no object-storage credentials on this machine, so the "
+                    "bucket cannot be read or written. Set OBJECT_KEY and "
+                    "OBJECT_SECRET in .env. Until then a render here cannot "
+                    "fetch its recording or store its result.")
+                logger.warning("object storage unavailable: %s", _problem)
+                return None
         try:
             _client = session.client(
                 "s3",
