@@ -80,13 +80,42 @@ def _connect():
             return None
         global _transfer
         _transfer = TransferConfig(multipart_threshold=MULTIPART_THRESHOLD)
+
+        # CREDENTIALS, CHECKED HERE RATHER THAN AT THE FIRST CALL. `boto3
+        # .client` builds happily with none: it defers to the ambient chain
+        # -- environment, ~/.aws, instance metadata -- and only fails when
+        # something is actually asked of it. So a machine with no keys at
+        # all reported the bucket as AVAILABLE, and the failure surfaced
+        # much later as `botocore.exceptions.NoCredentialsError: Unable to
+        # locate credentials` in the middle of somebody's render.
+        #
+        # That is the difference between a machine that declines work and a
+        # machine that takes it and loses it, and it is exactly the shape a
+        # lent laptop arrives in: boto3 installed, keys never configured.
+        # The docstring at the top of this file has always said "without
+        # `boto3`, or WITHOUT CREDENTIALS, this reports why"; only the
+        # second half was never true.
+        #
+        # Asked of a Session rather than assumed from our own two settings,
+        # because the ambient chain is a legitimate way to be configured --
+        # an AWS instance role supplies no key and is not misconfigured.
+        session = boto3.Session(
+            aws_access_key_id=settings.object_key or None,
+            aws_secret_access_key=settings.object_secret or None,
+            region_name=settings.object_region or None)
+        if session.get_credentials() is None:
+            _problem = (
+                "no object-storage credentials on this machine, so the "
+                "bucket cannot be read or written. Set OBJECT_KEY and "
+                "OBJECT_SECRET in .env. Until then a render here cannot "
+                "fetch its recording or store its result.")
+            logger.warning("object storage unavailable: %s", _problem)
+            return None
         try:
-            _client = boto3.client(
+            _client = session.client(
                 "s3",
                 endpoint_url=settings.object_endpoint or None,
                 region_name=settings.object_region or None,
-                aws_access_key_id=settings.object_key or None,
-                aws_secret_access_key=settings.object_secret or None,
                 # Retries are the default 'legacy' 3 attempts otherwise, and
                 # this runs on a box whose network is shared with an upload.
                 config=Config(retries={"max_attempts": 5, "mode": "standard"},

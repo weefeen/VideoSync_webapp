@@ -43,7 +43,7 @@ import threading
 import time
 
 from . import storage
-from .settings import settings
+from .settings import DIGITAL, settings
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +77,22 @@ def key(name: str) -> str:
 def local_root() -> pathlib.Path | None:
     """The score root a fetched package should be extracted into.
 
-    The first configured digital root that exists. A node has exactly one;
-    the choice only matters on a development box with several, and there
-    the first is the one the operator listed first.
+    The first configured DIGITAL root that exists, falling back to any
+    root. A node has exactly one, so the choice only matters on a machine
+    with several -- a laptop lent to the queue, typically, where the roots
+    include somebody's working folders.
+
+    The kind is the point of the ordering. This said "digital" and took the
+    first root of ANY kind, which on a development box meant a fetched
+    package could be unpacked into a source tree that happened to be listed
+    first -- thousands of files from the server appearing inside a
+    repository, looking like work somebody did. Whatever is listed first
+    under SCORE_ROOT_DIGITAL is the intended destination; say so in .env
+    and it is honoured.
     """
+    for root in settings.score_roots:
+        if root.kind == DIGITAL and root.exists:
+            return root.path
     for root in settings.score_roots:
         if root.exists:
             return root.path

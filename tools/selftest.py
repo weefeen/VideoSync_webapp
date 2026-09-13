@@ -4136,6 +4136,120 @@ def check_a_video_counts_wherever_it_was_made() -> str:
             "render on a node or a lent laptop counts the same")
 
 
+def check_a_bucket_without_credentials_is_not_available() -> str:
+    """No keys is not "available"; it is a machine that must decline work.
+
+    `boto3.client` builds with no credentials at all -- it defers to the
+    ambient chain and fails only when something is asked of it. So a machine
+    with no keys reported the bucket as AVAILABLE, and the truth arrived as
+    `NoCredentialsError` in the middle of a render.
+
+    It is the state a lent laptop arrives in -- boto3 installed, keys never
+    set -- and it decides whether that machine declines the job or takes it
+    and loses it. `app/storage.py` has always claimed in its own docstring
+    that it reports this; the check is that it now does.
+    """
+    import dataclasses
+    import importlib
+    from app import storage
+    from app.settings import settings
+
+    if "without credentials" not in (storage.__doc__ or ""):
+        raise Failed("storage.py no longer promises to report missing "
+                     "credentials; this check is guarding nothing")
+
+    try:
+        import boto3                                          # noqa: F401
+    except ImportError:
+        return "boto3 absent here, which storage already refuses on"
+
+    was, seen = storage.settings, {}
+    try:
+        # A bucket configured, keys blank, and nothing in the ambient chain.
+        storage.settings = dataclasses.replace(
+            settings, object_bucket="video-sync", object_key="",
+            object_secret="")
+        for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                    "AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE",
+                    "AWS_CONFIG_FILE"):
+            seen[var] = os.environ.pop(var, None)
+        # Point the credential files at nothing, so a developer's own
+        # ~/.aws does not make this pass on their machine and fail in CI.
+        os.environ["AWS_SHARED_CREDENTIALS_FILE"] = str(
+            pathlib.Path(tempfile.gettempdir()) / "vsw-no-such-credentials")
+        os.environ["AWS_CONFIG_FILE"] = str(
+            pathlib.Path(tempfile.gettempdir()) / "vsw-no-such-config")
+        storage._client, storage._tried, storage._problem = None, False, ""
+        if storage.available():
+            raise Failed("a bucket with no credentials reports itself "
+                         "available; a machine would accept a render and "
+                         "then fail to fetch the recording")
+        why = storage.status().get("problem", "")
+        if "OBJECT_KEY" not in why:
+            raise Failed(f"the reason does not say what to set: {why!r}")
+    finally:
+        storage.settings = was
+        for var, value in seen.items():
+            os.environ.pop(var, None)
+            if value is not None:
+                os.environ[var] = value
+        storage._client, storage._tried, storage._problem = None, False, ""
+
+    return "no credentials -> not available, and the reason names OBJECT_KEY"
+
+
+def check_a_fetched_score_lands_where_it_was_told() -> str:
+    """A package from the bucket unpacks into a root chosen on purpose.
+
+    `local_root` says "the first configured DIGITAL root" and took the first
+    root of any kind. On a machine with several -- a laptop lent to the
+    queue, where the roots include working folders -- that meant thousands
+    of files from the server could be unpacked into whichever tree happened
+    to be listed first, looking like work somebody had done.
+    """
+    import dataclasses
+    from app import scorestore
+    from app.settings import DIGITAL, RASTER, ScoreRoot, settings
+
+    here = pathlib.Path(tempfile.mkdtemp())
+    a, b = here / "a-working-folder", here / "the-library"
+    a.mkdir()
+    b.mkdir()
+
+    was = scorestore.settings
+    try:
+        # Raster listed first, digital second: the digital one wins.
+        scorestore.settings = dataclasses.replace(
+            settings, score_roots=[ScoreRoot(RASTER, a), ScoreRoot(DIGITAL, b)])
+        if scorestore.local_root() != b:
+            raise Failed(f"a fetched package would land in "
+                         f"{scorestore.local_root()}, not the digital root")
+
+        # Order among digital roots is the operator's, and is respected.
+        scorestore.settings = dataclasses.replace(
+            settings, score_roots=[ScoreRoot(DIGITAL, b), ScoreRoot(DIGITAL, a)])
+        if scorestore.local_root() != b:
+            raise Failed("the first digital root listed is not the one used")
+
+        # Nothing digital: any root beats refusing to fetch at all.
+        scorestore.settings = dataclasses.replace(
+            settings, score_roots=[ScoreRoot(RASTER, a)])
+        if scorestore.local_root() != a:
+            raise Failed("with no digital root nothing would be fetched")
+
+        # A root that is not there is not a destination.
+        scorestore.settings = dataclasses.replace(
+            settings, score_roots=[ScoreRoot(DIGITAL, here / "gone"),
+                                   ScoreRoot(DIGITAL, b)])
+        if scorestore.local_root() != b:
+            raise Failed("a missing root was chosen over one that exists")
+    finally:
+        scorestore.settings = was
+        shutil.rmtree(here, ignore_errors=True)
+
+    return "digital root first, operator's order respected, missing roots skipped"
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -4193,6 +4307,8 @@ def main() -> int:
         check_a_plate_that_cannot_be_measured_is_still_served,
         check_a_render_cannot_hang_forever,
         check_a_video_counts_wherever_it_was_made,
+        check_a_bucket_without_credentials_is_not_available,
+        check_a_fetched_score_lands_where_it_was_told,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,
