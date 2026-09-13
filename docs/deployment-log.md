@@ -88,13 +88,17 @@ each reached through its own SSH host alias in `/root/.ssh/config`:
 | alias | repository | key on the node | registered as |
 |---|---|---|---|
 | `github-webapp` | `weefeen/VideoSync_webapp` | `id_webapp` | `chopin-dev-webapp` |
-| `github-vss` | `weefeen/VideoScoreSync` | `id_ed25519` | `chopin-dev-node` |
+| `github-vss` | `weefeen/VideoScoreSync` | `id_vss` | `chopin-dev-node` |
 | `github-fp` | `weefeen/music_fingerprints` | `id_fp` | `chopin-dev-fp` |
 
-The VideoScoreSync row is the odd one: it was registered with the first key
-generated on the box, before the per-repo keys existed, so its alias points
-at `id_ed25519` rather than at an `id_vss`. Left as it is because it works;
-noted because it will look wrong to anyone reading the config.
+The VideoScoreSync key used to be called `id_ed25519` — it was the first key
+generated on the box, before the per-repo ones existed — and this log used to
+say "left as it is because it works". It was not harmless. A later reader
+tested `id_vss` (a dead file that happened to share the obvious name), got
+`Permission denied`, and concluded the server could no longer pull the
+alignment engine at all. It could; it was current with `origin/main` the
+whole time. The key has been renamed to `id_vss`, the dead file deleted, and
+all three aliases now carry the name of the repository they open.
 
 Read-only is deliberate. Two of these repositories must never be written
 to from here, and having GitHub enforce that is better than remembering it.
@@ -329,12 +333,20 @@ Two things cost time and are written down so they do not again:
   `origin`; `git fetch github-webapp` fails with a message about access
   rights that reads exactly like a broken deploy key. The key is fine:
   `ssh -T git@github-webapp` answers `Hi weefeen/VideoSync_webapp!`.
-- **The deploy keys are root's and the checkout is `vsw`'s.** git as `vsw`
+- **The deploy keys are root's and a checkout is `vsw`'s.** git as `vsw`
   cannot fetch; git as root leaves root-owned files behind. So it is
-  `git fetch && git merge --ff-only` as root, then
-  `chown -R vsw:vsw /srv/vsw/app`. Root also needs
-  `git config --global --add safe.directory /srv/vsw/app`, once, or every
-  git command refuses with "dubious ownership".
+  `git fetch && git merge --ff-only` as root, then `chown -R vsw:vsw` on
+  the tree. Root also needs `git config --global --add safe.directory
+  <path>`, once, or every git command refuses with "dubious ownership".
+
+  `/srv/vsw/app` — the clone this originally described — **is gone**. It
+  was the bootstrap checkout, superseded by the `releases/` + `current`
+  layout that GitHub Actions deploys into, and by the time it was removed
+  it was on a different branch, two days stale, and referenced by no unit,
+  vhost or cron entry. It was still a convincing copy of the live app:
+  editing `app/routes.py` there and restarting changed nothing. The only
+  git checkout left on the box is `/srv/vsw/VideoScoreSync`, which is the
+  alignment engine and is meant to be one.
 
 `deploy/deploy.sh` does not apply here — it is written for the production
 host's rsynced release directories under `/mnt/volume_1/vsw`, not a git
@@ -493,9 +505,13 @@ production host should check this before anything else.
     rabbitmqctl set_permissions -p vsw vsw ".*" ".*" ".*"
     rabbitmqctl delete_user guest        # remove the default account
 
-The password is in `/srv/vsw/broker_password`, mode 600, and in `.env` as
-`RABBITMQ_URL`. Neither is in the repository; `.env.prod` carries
-`CHANGE_ME`.
+The password is in `.env` as `RABBITMQ_URL`, mode 600, and nowhere else.
+It used to be in `/srv/vsw/broker_password` as well — a second plaintext
+copy that no code read, so rotating the credential would have left it
+stale and still readable. That file has been deleted.
+`/srv/vsw/shared/compute-broker.pass` is a DIFFERENT password, the
+`vsw-compute` user's, and that separation is deliberate. Neither is in the
+repository; `.env.prod` carries `CHANGE_ME`.
 
 ### Two processes
 

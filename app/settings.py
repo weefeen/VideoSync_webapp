@@ -345,17 +345,24 @@ class Settings:
     def upload_dir(self) -> pathlib.Path:
         return self.work_dir / "uploads"
 
-    @property
-    def output_dir(self) -> pathlib.Path:
-        return self.work_dir / "output"
+    # There is no `output_dir`. There was: `work_dir/output`, created at
+    # every start and read by nothing, because a finished video lives under
+    # its own job's directory (see app/paths.py). An empty directory called
+    # `output` sitting beside the jobs is a confident lie about where the
+    # videos are, and it was believed at least once.
 
     @property
     def cache_dir(self) -> pathlib.Path:
-        """Rasterised bands, keyed by package + style."""
+        """Rasterised bands, keyed by package + style.
+
+        Written by the renderer, which means it fills up on a COMPUTE NODE
+        and stays empty on the web box. A stale 35 MB of it was left on the
+        web box from when rendering happened there.
+        """
         return self.work_dir / "bands"
 
     def ensure_dirs(self) -> None:
-        for d in (self.work_dir, self.upload_dir, self.output_dir, self.cache_dir):
+        for d in (self.work_dir, self.upload_dir, self.cache_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def problems(self) -> list[str]:

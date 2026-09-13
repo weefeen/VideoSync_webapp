@@ -47,10 +47,9 @@ if ! git -C "$ROOT" pull --ff-only 2>&1 | sed 's/^/  /'; then
     cat >&2 <<'WHY'
 
   The pull failed. If it said "Permission denied (publickey)", the deploy
-  key is no longer on the repository. The key this uses is named in
-  /root/.ssh/config under `Host github-vss` -- it is id_ed25519, NOT the
-  id_vss its name suggests. Add the PUBLIC half of whatever that entry
-  names to
+  key is no longer on the repository. It is /root/.ssh/id_vss, named in
+  /root/.ssh/config under `Host github-vss`. Add its PUBLIC half
+  (id_vss.pub) to
 
       github.com/weefeen/VideoScoreSync -> Settings -> Deploy keys -> Add
 
