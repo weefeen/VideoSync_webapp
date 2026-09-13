@@ -79,6 +79,13 @@ class Panel:
         # back yet, which is not a problem and must not be drawn as one.
         self._server = {"mode": "", "problem": "", "asked": False}
         self._lock = threading.Lock()
+        # A LOOK THAT FAILS IS WEATHER. This reaches another machine over
+        # the internet every few minutes, so it will fail sometimes -- and
+        # the first version put the raw subprocess exception at the top of
+        # the page, where it read as "this computer is broken" when nothing
+        # about rendering had changed. Nothing is said until several looks
+        # in a row have failed, and then it is said quietly.
+        self._misses = 0
 
     def full(self) -> dict:
         """Everything the page draws."""
@@ -112,9 +119,9 @@ class Panel:
     def _read_mode(self) -> str | None:
         try:
             done = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
                  SERVER, f"grep -E '^COMPUTE_MODE=' {ENV_PATH} || true"],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired) as exc:
             self._set("", f"could not reach the server: {exc}")
             return None
@@ -177,8 +184,23 @@ class Panel:
         (self.resume if on else self.pause)()
         return ""
 
+    # How many consecutive failed looks before the page mentions it. Three,
+    # at the interval below, is about a quarter of an hour of not reaching
+    # the server -- long enough that it is not a passing hiccup.
+    QUIET_MISSES = 3
+
     def _set(self, mode: str, problem: str) -> None:
         with self._lock:
+            if problem:
+                self._misses += 1
+                if self._misses < self.QUIET_MISSES:
+                    # Keep whatever was last known and say nothing.
+                    self._server = {**self._server, "asked": True}
+                    return
+                problem = ("not reachable for a while — this computer is "
+                           "still rendering normally")
+            else:
+                self._misses = 0
             self._server = {"mode": mode, "problem": problem, "asked": True}
 
 

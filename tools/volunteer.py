@@ -432,13 +432,18 @@ def _watch_mode(panel, stop: threading.Event) -> None:
     for good -- the panel then showed a stale answer for ever, with nothing
     anywhere saying it had stopped looking.
     """
+    # EVERY FEW MINUTES, NOT EVERY THIRTY SECONDS. This opens an ssh
+    # connection to another machine to read one word that nothing but this
+    # page ever writes. At thirty seconds it was a connection every half
+    # minute for the life of the session, which is both wasteful and a
+    # steady supply of chances to fail in front of somebody.
     while not stop.is_set():
         try:
             panel.refresh()
         except Exception:                              # noqa: BLE001
             logger.warning("could not read the server's settings",
                            exc_info=True)
-        stop.wait(30.0)
+        stop.wait(300.0)
 
 
 def _handle(task, ack) -> None:

@@ -614,7 +614,11 @@ $('#rightsGo').onclick = ()=>{
   if(name && blob) uploadAndIdentify(name, blob);
 };
 
-const READY = loadLibrary().then(()=>{ if(!S.file) draw(); sayTheLimit(); });
+const READY = loadLibrary().then(()=>{
+  if(!S.file) draw();
+  sayTheLimit();
+  sayTheTerms();
+});
 
 /* ── the frame, laid out the way the renderer lays it out ────────────── */
 /* The preview placed the video across the whole frame and drew the band on
@@ -1573,17 +1577,23 @@ function shareRow(job){
   </div>`;
 }
 
-/* Say what is true on the screen that claimed an email. */
+/* Say what is true on the screen that claimed an email.
+ *
+ * IT NOW SAYS THE OPPOSITE OF WHAT IT USED TO. This was written when no
+ * mail was ever sent: promising an email and sending none was the lie of
+ * the day, so the screen said "stay here" instead. Mail has worked for a
+ * while, and the sentence outlived its reason -- it asked somebody to sit
+ * and watch a page for the better part of an hour, with no progress shown
+ * until the delivery box appears, for a render that will mail them anyway.
+ *
+ * There is one copy for this screen now, in `copyForState`, and this
+ * defers to it. Two functions writing the same heading is how they came to
+ * disagree: `copyForState` already said "you can close this", and this one
+ * overwrote it wherever it ran first. */
 function correctDoneCopy(){
   const section = document.querySelector('section[data-s="done"]');
   if(!section || section.dataset.corrected) return;
-  section.dataset.corrected = '1';
-  const heading = section.querySelector('h1');
-  if(heading) heading.innerHTML = `It's <em>rendering</em>. Stay here &mdash; `
-    + `the video appears below when it is done.`;
-  const first = section.querySelector('.confirm > p');
-  if(first) first.textContent =
-    'It takes a few minutes. Nothing else is needed from you.';
+  copyForState('queued');
 }
 
 
@@ -1821,6 +1831,7 @@ document.addEventListener('click', () => setTimeout(() => {
   linkPartners();
   sayTheLimit();
   sayTheWindow();
+  sayTheTerms();
 }, 0), true);
 
 /* The handwritten note under the dropzone.
@@ -1905,6 +1916,37 @@ function sayTheLimit(){
   // repertoire. It is still enforced on the server; a recording over it is
   // refused there with the actual number, which is where the number belongs.
   lab.textContent = `mp4 · mov · avi · mkv · webm — up to ${size}`;
+}
+
+/* What we keep, for how long, and how many are free.
+ *
+ * The line under the recap said "your video is deleted from our machines
+ * once the render is delivered". That is not true and has not been:
+ * recordings are kept deliberately -- home recordings on whatever
+ * instrument in whatever room are the one thing a studio library cannot
+ * supply, and the thing recognition most needs to be robust against. The
+ * page has to say what actually happens, because a promise to delete is
+ * exactly the kind nobody checks and everybody remembers.
+ *
+ * It also said three free videos "this month" when the allowance is three
+ * a WEEK, and "two left" as a fixed number, which was true only for
+ * whoever the mockup imagined. The count of what a particular visitor has
+ * left is not knowable in the page, so it is not claimed. The rest is read
+ * from the server, like the size cap and the delivery window, so it cannot
+ * drift again. */
+function sayTheTerms(){
+  const line = document.querySelector('section[data-s="done"] .after');
+  if(!line || !SERVER.online) return;
+  const hours = SERVER.retentionHours || 48;
+  const window_ = hours % 24 === 0 && hours >= 48
+    ? `${hours / 24} days` : `${hours} hours`;
+  const free = SERVER.videosPerWeek || 0;
+  line.innerHTML =
+    `The download link works for ${window_}; after that the video moves to `
+    + `long-term storage rather than being deleted. Your recording is kept `
+    + `so we can keep improving how performances are matched to the score &mdash; `
+    + `nobody else is shown it, and we delete it if you ask.`
+    + (free ? ` <b>${free} free videos a week.</b>` : '');
 }
 
 /* The "it's on its way" screen still promised seven days.

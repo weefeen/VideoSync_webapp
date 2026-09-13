@@ -4680,6 +4680,96 @@ def _swallow(fn, *args) -> None:
         pass
 
 
+def check_the_page_promises_only_what_we_do() -> str:
+    """Three claims the page made, none of which were true.
+
+    They are grouped because they are one failure: copy written against an
+    intention, kept after the intention changed, and never read again.
+
+      * "Your video is deleted from our machines once the render is
+        delivered." It is not, and the opposite is a deliberate decision --
+        `paths.keep()` keeps the RECORDING on purpose, because home
+        recordings are the one thing a studio library cannot supply and
+        the thing recognition most needs. A promise to delete is exactly
+        the kind nobody checks and everybody remembers.
+
+      * "Stay here -- the video appears below when it is done." Written
+        when no mail was ever sent, and true then. Mail has worked for a
+        while, so this asked somebody to watch a page for the better part
+        of an hour for a render that would mail them anyway.
+
+      * "Two of your three free videos left this month." The allowance is
+        three a WEEK, and what one visitor has left is not knowable in the
+        page at all.
+
+    Asserted against the code rather than against a nicer sentence: the
+    retention claim has to agree with `paths.keep()`, and the numbers have
+    to be read from the server rather than typed.
+    """
+    import re as _re
+    from app import paths as jobpaths
+
+    page = (ROOT / "app" / "static" / "svs" / "index.html").read_text(
+        encoding="utf-8")
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8")
+
+    # COMMENTS ARE NOT COPY. The note explaining why a sentence was removed
+    # necessarily quotes the sentence, and a check that cannot tell the two
+    # apart forbids writing down why anything was fixed.
+    def spoken(js: str) -> str:
+        js = _re.sub(r"/\*.*?\*/", " ", js, flags=_re.S)
+        return _re.sub(r"^\s*//.*$", " ", js, flags=_re.M)
+
+    wire_copy = spoken(wire)
+    both = page + wire_copy
+
+    # THE UPLOAD IS KEPT, and the code is the authority on that.
+    kept = jobpaths.JobPaths("x").keep.__doc__ or ""
+    if "upload" not in kept.lower() or "kept" not in kept.lower():
+        raise Failed("paths.keep() no longer explains that the recording is "
+                     "kept; if that changed, this page's copy has to change "
+                     "with it, and this check is the reminder")
+    for lie in ("deleted from our machines",
+                "deleted once the render",
+                "your video is deleted"):
+        if lie in both.lower():
+            raise Failed(f"the page claims {lie!r}. The recording is kept "
+                         f"deliberately -- see app/paths.py -- so this is a "
+                         f"promise the service does not keep")
+
+    # NOBODY IS ASKED TO WAIT. A render is minutes to an hour, and a mail
+    # is sent; asking somebody to sit on the page is asking for nothing.
+    for wait in ("stay here", "stay on this page", "keep this page open"):
+        if wait in both.lower():
+            raise Failed(f"the page says {wait!r} while it is rendering. A "
+                         f"render takes minutes to the better part of an "
+                         f"hour, and an email is sent when it is done")
+    if "we will email you when it is done" not in wire_copy:
+        raise Failed("the rendering screen does not say the email is coming, "
+                     "so somebody has no reason to close the tab")
+
+    # THE NUMBERS COME FROM THE SERVER, not from whatever the mockup said.
+    if _re.search(r"free videos? (left )?this month", both, _re.I):
+        raise Failed("the page still says the free allowance is monthly; it "
+                     "is weekly, and it is reported by /api/library")
+    if _re.search(r"(two|three|2|3) of your", both, _re.I):
+        raise Failed("the page states how many free videos a visitor has "
+                     "left. That is not knowable in the page")
+    if "SERVER.videosPerWeek" not in wire or "SERVER.retentionHours" not in wire:
+        raise Failed("the allowance and the delivery window are not read "
+                     "from the server, so they will drift again")
+
+    # And one copy for the rendering screen, since two of them disagreed.
+    if wire_copy.count("It's <em>rendering</em>") != 1:
+        raise Failed("more than one place writes the rendering heading; that "
+                     "is how 'stay here' survived a screen that already said "
+                     "the opposite")
+
+    return ("nothing promises deletion, nobody is asked to wait, and the "
+            "allowance and window are read from the server")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -4745,6 +4835,7 @@ def main() -> int:
         check_the_limit_reset_cannot_be_reached_from_outside,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
+        check_the_page_promises_only_what_we_do,
         check_a_refusal_is_not_a_failed_recognition,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
