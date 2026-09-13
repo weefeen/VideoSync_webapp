@@ -12,6 +12,13 @@ for 48 hours.
 
 ## Where the rest is written down
 
+- **`docs/score-package-contract.md`** — what a score package must be,
+  and every place this repo, music_line_extractor and VideoScoreSync have
+  already drifted apart reading the same folder. Read it BEFORE debugging
+  a band that renders wrong: twice now the answer was something the
+  pipeline that made the file already does, in a code path that does not
+  feed us.
+
 This file says what the code is and how to run it on a laptop. Three others
 carry what a laptop cannot show:
 

@@ -167,6 +167,9 @@ def install_from_package(root: pathlib.Path, into: pathlib.Path) -> list[str]:
 # carrying one of these means the package was made by a pipeline that no
 # longer matches, and the operator should know at install time instead of
 # finding out in a rendered video.
+# Extend this table, not the algorithm. `docs/score-package-contract.md`
+# records which of music_line_extractor's fixes arrive baked into the
+# bands and which do not.
 KNOWN_ARTEFACTS = (
     # (needle, fatal, what it means)
     ("xlink:href", True,

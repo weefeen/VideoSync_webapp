@@ -9,6 +9,11 @@ a folder we treat as a read-only input contract:
     export.json                           manifest: geometry, style, entries
     chroma.npy                            present, unused here (no syncing)
 
+THREE programs read this folder -- music_line_extractor writes it,
+VideoScoreSync and this app read it -- and they have already drifted
+apart twice. `docs/score-package-contract.md` records where, and what
+each one does differently; read it before concluding a band is broken.
+
 The two repositories share no code. If the contract below stops matching
 what the exporter writes, this is the only file that needs to change.
 """
