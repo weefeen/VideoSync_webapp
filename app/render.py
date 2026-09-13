@@ -532,6 +532,33 @@ def _clamp01(value: float) -> float:
 # --------------------------------------------------------------------------
 # probing
 # --------------------------------------------------------------------------
+
+def quarter_turned(stream: dict) -> tuple[object, bool]:
+    """(what the file says, whether that is a quarter turn).
+
+    Read from `side_data_list`, with the legacy `rotate` tag as a fallback:
+    the tag is what older files carry and what ffmpeg wrote before the
+    display matrix became the norm, and a file can have either.
+
+    Only a quarter turn changes the SHAPE. A 180-degree rotation is still
+    the same rectangle, so swapping its sides would be wrong -- which is
+    why this asks `% 180 == 90` rather than `!= 0`.
+    """
+    spin = None
+    for side in (stream.get("side_data_list") or []):
+        if side.get("rotation") is not None:
+            spin = side["rotation"]
+            break
+    if spin is None:
+        spin = (stream.get("tags") or {}).get("rotate")
+    if spin is None:
+        return None, False
+    try:
+        return spin, abs(int(round(float(spin)))) % 180 == 90
+    except (TypeError, ValueError):
+        return spin, False
+
+
 def probe(video: pathlib.Path) -> dict:
     """Duration, dimensions, fps and stream presence."""
     try:
@@ -581,6 +608,29 @@ def probe(video: pathlib.Path) -> dict:
         pixel = sn / sd if sd else 1.0
     except (ValueError, ZeroDivisionError):
         pixel = 1.0
+
+    # A PHONE HELD UPRIGHT RECORDS LANDSCAPE AND SAYS "TURN ME". That is the
+    # ordinary iPhone and Android case: the frames are stored 1920x1080 and
+    # the container carries a display matrix saying 90 degrees. ffprobe
+    # reports the STORED size; ffmpeg applies the matrix when it decodes. So
+    # the numbers here said landscape while the filter graph was handed
+    # portrait frames, and every scale and crop was computed for the wrong
+    # shape -- measured on a 640x360 clip with a 90-degree matrix, which
+    # decodes to 360x640.
+    #
+    # Read from side_data_list, with the legacy `rotate` tag as a fallback:
+    # the tag is what older files carry and what ffmpeg wrote before the
+    # matrix became the norm, and a file can have either.
+    spin, turned = quarter_turned(v)
+    if turned:
+        # The frame turns, and so does the pixel: a non-square pixel that was
+        # wide becomes tall. Both have to follow or an anamorphic phone clip
+        # would be corrected in one axis and not the other.
+        width, height = height, width
+        pixel = (1.0 / pixel) if pixel else 1.0
+        logger.info("%s carries a %s-degree display matrix; reading it as "
+                    "%dx%d, which is what ffmpeg will decode",
+                    video.name, spin, width, height)
 
     return {"duration": duration, "fps": round(fps, 3),
             "width": width, "height": height,

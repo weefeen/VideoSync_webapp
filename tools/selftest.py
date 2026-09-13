@@ -1729,8 +1729,36 @@ def check_a_portrait_video_keeps_the_picture() -> str:
         raise Failed("16/9 stopped cropping. The portrait fix changed the "
                      "aspect everybody already uses.")
 
+    # A PHONE HELD UPRIGHT RECORDS LANDSCAPE AND SAYS "TURN ME". The frames
+    # are stored 1920x1080 and the container carries a display matrix saying
+    # 90 degrees; ffprobe reports the STORED size and ffmpeg applies the
+    # matrix when it decodes. So the probe said landscape while the filter
+    # graph received portrait, and every scale and crop above was computed
+    # for the wrong shape. Measured on a 640x360 clip with a 90-degree
+    # matrix: it decodes to 360x640.
+    #
+    # Only a QUARTER turn changes the shape -- 180 degrees is the same
+    # rectangle, and swapping its sides would be the same bug mirrored.
+    turns = {
+        "side_data 90": ({"side_data_list": [{"rotation": 90}]}, True),
+        "side_data -90": ({"side_data_list": [{"rotation": -90}]}, True),
+        "side_data 180": ({"side_data_list": [{"rotation": 180}]}, False),
+        "side_data 270": ({"side_data_list": [{"rotation": 270}]}, True),
+        "legacy tag 90": ({"tags": {"rotate": "90"}}, True),
+        "legacy tag 0": ({"tags": {"rotate": "0"}}, False),
+        "nothing said": ({}, False),
+        "unreadable": ({"tags": {"rotate": "sideways"}}, False),
+    }
+    for label, (stream, want) in turns.items():
+        _, got = rnd.quarter_turned(stream)
+        if got != want:
+            raise Failed(f"a stream describing {label} is read as "
+                         f"turned={got}; a portrait phone recording would be "
+                         f"laid out as landscape and cropped to pieces")
+
     return (f"{len(SHAPES)} source shapes x 4 offsets x 2 positions: none "
-            f"cropped, none outside the frame; panel refused; 16/9 unchanged")
+            f"cropped, none outside the frame; panel refused; 16/9 unchanged; "
+                f"{len(turns)} rotation cases, quarter turns only")
 
 
 def check_the_output_is_postable() -> str:
