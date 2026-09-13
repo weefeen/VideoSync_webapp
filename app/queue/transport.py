@@ -88,6 +88,17 @@ class LocalTransport:
                 # retried until it fills the log.
                 logger.exception("unreadable task, dropped: %.400s", body)
                 continue
+            # A CONSUMER MAY DECLINE HERE TOO. This took `accept` and
+            # ignored it, so on a machine with no broker -- which is every
+            # development machine, and every test -- the decline path did
+            # not exist and could not be exercised. Put back rather than
+            # dropped, with a pause, exactly as the broker does it.
+            if accept is not None and not accept(task):
+                logger.info("declined job %s; back on the queue", task.job_id)
+                self._tasks.put(body)
+                time.sleep(2.0)
+                continue
+
             with self._lock:
                 self._in_flight += 1
             try:
@@ -238,7 +249,15 @@ class AmqpTransport:
         backoff = 5
         while True:
             try:
-                self._consume_tasks_once(handle)
+                # `accept` PASSED THROUGH, which it was not. The decline
+                # check lives in `_consume_tasks_once`, which never received
+                # it -- so the first real task raised `NameError: name
+                # 'accept' is not defined`, the handler below read that as a
+                # lost connection, and the consumer backed off 5, 10, 20 ...
+                # 300 seconds. A queue with nothing in it never reached the
+                # line, so this survived every test and every idle run, and
+                # broke on the first upload somebody actually made.
+                self._consume_tasks_once(handle, accept)
                 backoff = 5
             except Exception as exc:              # noqa: BLE001
                 logger.warning("task consumer lost its connection: %s", exc)
@@ -246,7 +265,8 @@ class AmqpTransport:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
 
-    def _consume_tasks_once(self, handle: Callable[[RenderTask, Ack], None]) -> None:
+    def _consume_tasks_once(self, handle: Callable[[RenderTask, Ack], None],
+                            accept=None) -> None:
         connection = self._open()
         try:
             channel = connection.channel()

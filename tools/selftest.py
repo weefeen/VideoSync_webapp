@@ -38,6 +38,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import traceback
 
@@ -2834,20 +2835,18 @@ def check_a_volunteer_machine_stops_the_paid_one() -> str:
     if vol._needed_bytes(0) != 0:                          # noqa: SLF001
         raise Failed("a recording of no length is reckoned to need memory")
 
-    # Declining must be about THIS machine, not about the task being bad:
-    # the message goes back to the queue, and a task rejected with
-    # requeue=False is dead-lettered instead -- a visitor's video quietly
-    # discarded because a laptop was busy.
+    # THAT A DECLINE ACTUALLY REQUEUES is proved by running one, in
+    # `check_a_declined_task_really_goes_back`. It used to be proved here by
+    # searching transport.py for the decline line and for `requeue=True`
+    # near it -- and both were present, correct, and in a function that was
+    # never passed `accept` at all, so the real consumer raised NameError on
+    # the first task while this check passed. A search over source says the
+    # code was written; only running it says the code runs.
+    #
+    # What is still worth reading rather than running: Ctrl-C during a
+    # render hands the job back. Exercising that means interrupting a real
+    # render mid-encode, which this suite cannot do.
     tsrc = (ROOT / "app" / "queue" / "transport.py").read_text(encoding="utf-8")
-    i = tsrc.find("if accept is not None and not accept(task)")
-    if i < 0:
-        raise Failed("the transport has no way for a consumer to decline, "
-                     "so a volunteer must render whatever it is handed")
-    window = tsrc[i:i + 400]
-    if "requeue=True" not in window:
-        raise Failed("a declined task is not requeued; it would be "
-                     "dead-lettered, which throws away somebody's video "
-                     "because a machine was busy")
     if "interrupted mid-render" not in tsrc or tsrc.count("requeue=True") < 2:
         raise Failed("Ctrl-C during a render does not hand the job back, so "
                      "closing a laptop costs a visitor the whole lease")
@@ -4492,6 +4491,93 @@ def check_the_limit_reset_cannot_be_reached_from_outside() -> str:
             "and a call from the box clears every counter")
 
 
+def check_a_declined_task_really_goes_back() -> str:
+    """A consumer that declines is RUN here, not read.
+
+    This existed already and proved nothing. It searched transport.py for
+    the text `if accept is not None and not accept(task)` and for
+    `requeue=True` nearby -- both of which were present and correct, in a
+    function that was never passed `accept` at all. The AMQP consumer
+    therefore raised `NameError: name 'accept' is not defined` on the first
+    real task, the reconnect handler read that as a lost connection, and it
+    backed off 5, 10, 20 ... 300 seconds. An empty queue never reaches that
+    line, so every idle run looked perfect and the first upload somebody
+    made sat in the queue while the machine that should have taken it said
+    it was alive every 45 seconds.
+
+    A grep cannot catch that, and no amount of care in writing one would.
+    So this puts a task through a real transport and asserts on what
+    happens to it.
+    """
+    import time as _time
+    from app.queue import transport as tmod
+    from app.queue.messages import RenderTask
+
+    bus = tmod.LocalTransport()
+    task = RenderTask(job_id="decline-me", upload="x.mp4", package="P",
+                      duration=60.0)
+
+    seen, verdicts = [], [False, True]
+
+    def accept(t) -> bool:
+        seen.append(t.job_id)
+        return verdicts.pop(0) if verdicts else True
+
+    ran = []
+
+    def handle(t, ack) -> None:
+        ran.append(t.job_id)
+        ack()
+        raise SystemExit                      # stop the loop once it lands
+
+    bus.publish_task(task)
+    worker = threading.Thread(
+        target=lambda: _swallow(bus.consume_tasks, handle, accept),
+        daemon=True)
+    worker.start()
+
+    # Declined once, then taken: the task must come BACK, not vanish.
+    deadline = _time.time() + 20
+    while _time.time() < deadline and not ran:
+        _time.sleep(0.05)
+
+    if not seen:
+        raise Failed("the consumer never asked whether to take the task, so "
+                     "`accept` is not reaching the transport at all -- which "
+                     "is exactly the shape of the bug this exists for")
+    if len(seen) < 2:
+        raise Failed(f"the task was offered {len(seen)} time(s): a declined "
+                     f"task was dropped instead of going back on the queue")
+    if not ran:
+        raise Failed("the task was declined and never offered again, so a "
+                     "visitor's video would wait for ever")
+
+    # And the AMQP consumer passes it along the same way. Checked on the
+    # signature rather than a live broker, because this is the join that
+    # broke: the check exists BECAUSE the two halves were both correct and
+    # not connected.
+    import inspect
+    sig = inspect.signature(tmod.AmqpTransport._consume_tasks_once)   # noqa: SLF001
+    if "accept" not in sig.parameters:
+        raise Failed("the AMQP consumer's inner loop takes no `accept`, so "
+                     "the decline check inside it cannot work")
+    src = inspect.getsource(tmod.AmqpTransport.consume_tasks)
+    if "_consume_tasks_once(handle, accept)" not in src:
+        raise Failed("`accept` is not handed to the AMQP inner loop; the "
+                     "decline check would raise NameError on the first task")
+
+    return (f"offered {len(seen)} times, declined once, requeued and then "
+            f"rendered; and the AMQP consumer is passed the same callback")
+
+
+def _swallow(fn, *args) -> None:
+    """Run something that ends by raising, without noise."""
+    try:
+        fn(*args)
+    except BaseException:                                    # noqa: BLE001
+        pass
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -4544,6 +4630,7 @@ def main() -> int:
         check_the_video_carries_the_weefeen_mark,
         check_the_edition_is_credited,
         check_a_volunteer_machine_stops_the_paid_one,
+        check_a_declined_task_really_goes_back,
         check_a_node_may_read_what_it_is_told_to_pull,
         check_music_glyphs_survive_the_rasteriser,
         check_a_plate_that_cannot_be_measured_is_still_served,
