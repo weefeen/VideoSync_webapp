@@ -306,7 +306,7 @@ def _ink_band(raw: bytes, tag: str) -> tuple[float, float, float, float]:
                 band = (rows[0] / h, (rows[-1] + 1) / h,
                         cols[0] / w, (cols[-1] + 1) / w)
     except Exception as exc:                     # noqa: BLE001
-        logger.info("could not measure the engraving in %s: %s", path.name, exc)
+        logger.info("could not measure the engraving in %s: %s", tag, exc)
     _INK[key] = band
     return band
 

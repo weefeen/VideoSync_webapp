@@ -3876,6 +3876,44 @@ def check_linux_configuration_has_no_windows_paths() -> str:
 
 
 # --------------------------------------------------------------------------
+def check_a_plate_that_cannot_be_measured_is_still_served() -> str:
+    """The preview's fallback must be a whole plate, not a stack trace.
+
+    `_ink_band` measures where the engraving sits on a page so the preview
+    can crop the margins. When cairo cannot render the plate -- no library,
+    a malformed file, an odd viewBox -- it is meant to log and fall back to
+    the whole plate. The except branch that did that named a variable from
+    an earlier signature, so the one path written to survive a failure was
+    the one path that raised: every unmeasurable plate became a 500 on the
+    page preview, with the original reason hidden under a NameError.
+
+    Exercised by making the rasteriser fail on purpose and asking for the
+    band. The point is not the tuple; it is that the call returns at all.
+    """
+    from app import routes, svg
+
+    class _Broken:
+        @staticmethod
+        def svg2png(**_kw):
+            raise RuntimeError("cairo said no")
+
+    real = svg._cairosvg                                 # noqa: SLF001
+    svg._cairosvg = lambda: _Broken()                    # noqa: SLF001
+    try:
+        band = routes._ink_band(b"<svg/>", "selftest-unmeasurable")   # noqa: SLF001
+    except NameError as exc:
+        raise Failed(f"the fallback for an unmeasurable plate raises "
+                     f"{exc!r} instead of serving the whole plate")
+    finally:
+        svg._cairosvg = real                             # noqa: SLF001
+        routes._INK.pop("selftest-unmeasurable", None)  # noqa: SLF001
+
+    if tuple(band) != (0.0, 1.0, 0.0, 1.0):
+        raise Failed(f"an unmeasurable plate should be served whole, got "
+                     f"{band}")
+    return "rasteriser failure -> the whole plate, logged, not raised"
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -3930,6 +3968,7 @@ def main() -> int:
         check_a_volunteer_machine_stops_the_paid_one,
         check_a_node_may_read_what_it_is_told_to_pull,
         check_music_glyphs_survive_the_rasteriser,
+        check_a_plate_that_cannot_be_measured_is_still_served,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,
