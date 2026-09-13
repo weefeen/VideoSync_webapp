@@ -49,7 +49,7 @@ class Transport(Protocol):
     survives_restart: bool
 
     def publish_task(self, task: RenderTask) -> None: ...
-    def consume_tasks(self, handle: Callable[[RenderTask, Ack], None]) -> None: ...
+    def consume_tasks(self, handle: Callable[[RenderTask, Ack], None], accept=None) -> None: ...
     def publish_event(self, event: Event) -> None: ...
     def consume_events(self, apply: Callable[[Event], None]) -> None: ...
     def render_depth(self) -> tuple[int, int] | None: ...
@@ -76,7 +76,7 @@ class LocalTransport:
     def publish_task(self, task: RenderTask) -> None:
         self._tasks.put(task.to_json())
 
-    def consume_tasks(self, handle: Callable[[RenderTask, Ack], None]) -> None:
+    def consume_tasks(self, handle: Callable[[RenderTask, Ack], None], accept=None) -> None:
         """Take tasks and run them, one at a time, forever."""
         while True:
             body = self._tasks.get()
@@ -233,7 +233,7 @@ class AmqpTransport:
     def publish_task(self, task: RenderTask) -> None:
         self._publish(RENDER_QUEUE, task.to_json())
 
-    def consume_tasks(self, handle: Callable[[RenderTask, Ack], None]) -> None:
+    def consume_tasks(self, handle: Callable[[RenderTask, Ack], None], accept=None) -> None:
         """Take one task at a time and run it, reconnecting for ever."""
         backoff = 5
         while True:
@@ -271,7 +271,36 @@ class AmqpTransport:
                                      body)
                     channel.basic_reject(method.delivery_tag, requeue=False)
                     continue
-                self._run_off_thread(connection, handle, task)
+                # "NOT ME." A consumer may decline a task it should not
+                # run: a volunteer laptop about to be closed, or one without
+                # the free memory this recording's alignment needs. Requeued,
+                # so the next consumer -- or a rented node -- takes it in
+                # seconds, instead of a visitor waiting out a lease on a
+                # machine that was never going to finish.
+                #
+                # A short pause before it goes back, or a lone declining
+                # consumer spins on the same message as fast as the broker
+                # can redeliver it.
+                if accept is not None and not accept(task):
+                    channel.basic_reject(method.delivery_tag, requeue=True)
+                    logger.info("declined job %s; back on the queue",
+                                task.job_id)
+                    connection.sleep(2.0)
+                    continue
+
+                try:
+                    self._run_off_thread(connection, handle, task)
+                except KeyboardInterrupt:
+                    # Ctrl-C DURING a render. The delivery is still ours, so
+                    # hand it back deliberately: the job returns to the queue
+                    # now rather than when its lease expires, which is the
+                    # difference between a visitor waiting seconds and
+                    # waiting minutes.
+                    logger.info("interrupted mid-render; returning job %s to "
+                                "the queue", task.job_id)
+                    with contextlib.suppress(Exception):
+                        channel.basic_reject(method.delivery_tag, requeue=True)
+                    raise
                 channel.basic_ack(method.delivery_tag)
         finally:
             with contextlib.suppress(Exception):

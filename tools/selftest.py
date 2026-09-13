@@ -2739,9 +2739,60 @@ def check_a_volunteer_machine_stops_the_paid_one() -> str:
             conn.execute("UPDATE compute SET state='none', idle_since=NULL,"
                          " updated=NULL WHERE singleton = 1")
 
+    # A CONSUMER MAY DECLINE, and the two curves must agree. The site sizes
+    # its upload cap from the RENDERER'S memory; a volunteer sizes its
+    # refusal from the memory FREE ON IT right now. If those disagreed, the
+    # site would accept recordings the desktop always hands back -- work
+    # bouncing between machines while a visitor watches a bar -- or worse,
+    # the desktop would take one it cannot finish and die two thirds
+    # through.
+    import importlib.util
+    import math
+
+    from app.settings import (DTW_GB_AT, DTW_MINUTES_AT, USABLE_RAM,
+                              safe_duration_minutes)
+
+    spec = importlib.util.spec_from_file_location(
+        "volunteer_mod", ROOT / "tools" / "volunteer.py")
+    vol = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(spec and vol)
+
+    for gb in (4, 8, 16, 32, 64):
+        longest = safe_duration_minutes(gb)
+        wants = vol._needed_bytes(longest) / 1024 ** 3     # noqa: SLF001
+        budget = gb * USABLE_RAM
+        if abs(wants - budget) > 0.05:
+            raise Failed(
+                f"at {gb} GB the site accepts {longest:.1f} min, and the "
+                f"volunteer reckons that needs {wants:.2f} GB against a "
+                f"{budget:.2f} GB budget. The two curves have drifted, so "
+                f"jobs would bounce between machines.")
+
+    if vol._needed_bytes(0) != 0:                          # noqa: SLF001
+        raise Failed("a recording of no length is reckoned to need memory")
+
+    # Declining must be about THIS machine, not about the task being bad:
+    # the message goes back to the queue, and a task rejected with
+    # requeue=False is dead-lettered instead -- a visitor's video quietly
+    # discarded because a laptop was busy.
+    tsrc = (ROOT / "app" / "queue" / "transport.py").read_text(encoding="utf-8")
+    i = tsrc.find("if accept is not None and not accept(task)")
+    if i < 0:
+        raise Failed("the transport has no way for a consumer to decline, "
+                     "so a volunteer must render whatever it is handed")
+    window = tsrc[i:i + 400]
+    if "requeue=True" not in window:
+        raise Failed("a declined task is not requeued; it would be "
+                     "dead-lettered, which throws away somebody's video "
+                     "because a machine was busy")
+    if "interrupted mid-render" not in tsrc or tsrc.count("requeue=True") < 2:
+        raise Failed("Ctrl-C during a render does not hand the job back, so "
+                     "closing a laptop costs a visitor the whole lease")
+
     return (f"auto rents alone and stands aside for a volunteer; cloud "
             f"always rents; manual never does; the offer expires after "
-            f"{store.VOLUNTEER_WINDOW:.0f}s")
+            f"{store.VOLUNTEER_WINDOW:.0f}s; a consumer may decline and the "
+            f"job is requeued, not discarded")
 
 def check_a_node_may_read_what_it_is_told_to_pull() -> str:
     """Everything cloud-init pulls at boot must be permitted by the wrapper.
