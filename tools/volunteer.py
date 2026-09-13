@@ -54,7 +54,7 @@ from app import scorestore, storage, store      # noqa: E402
 from app import svg as appsvg                   # noqa: E402
 from app.queue import webside, worker           # noqa: E402
 from app.queue.messages import Event            # noqa: E402
-from app.queue.transport import transport       # noqa: E402
+from app.queue.transport import quiet_pika, transport  # noqa: E402
 from app.settings import settings               # noqa: E402
 
 logger = logging.getLogger("volunteer")
@@ -329,6 +329,13 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
+    # Pika narrates six lines per connection at INFO, and this opens a
+    # short-lived one for every heartbeat -- so the handful of lines that
+    # say what this machine is actually DOING scrolled past between walls
+    # of socket bookkeeping. `webside.start` and `worker.main` both quieten
+    # it; this has its own main and was the one place that did not. Its
+    # warnings still come through, which is the half worth reading.
+    quiet_pika()
 
     print()
     problems = _preflight()

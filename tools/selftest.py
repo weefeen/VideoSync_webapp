@@ -274,6 +274,45 @@ def check_old_databases_gain_the_new_columns() -> str:
 # --------------------------------------------------------------------------
 # the worker's report becomes the row, and only once
 # --------------------------------------------------------------------------
+def _a_package_on_disk() -> pathlib.Path:
+    """The smallest score package actually present on this machine's disk.
+
+    NOT `library.packages()`, which is what these checks used and which is
+    only sometimes a disk listing. Once the library moved into the bucket,
+    `library` answers from the published catalogue whenever storage is
+    reachable, and those entries carry `root = None` on purpose -- the web
+    box has no score bytes, which is the whole point of that design.
+
+    So a check that wanted a real folder to tar, copy or load got `None`
+    the moment the machine running it had bucket credentials. It never did
+    in CI and no developer machine had them either, so three checks passed
+    everywhere while testing nothing of the sort -- until a laptop was set
+    up to lend itself to the queue and needed the bucket to do it.
+
+    The roots are read directly, because "is there a package on this disk"
+    is exactly the question, and the library is deliberately not the place
+    to ask it.
+    """
+    from app import package as pkg
+    from app.settings import settings
+
+    found: list[pathlib.Path] = []
+    for root in settings.score_roots:
+        if not root.exists:
+            continue
+        for path, loaded, _ in pkg.inspect(root.path):
+            if loaded is not None:
+                found.append(path)
+    if not found:
+        raise Failed(
+            "no score package on this machine's disk. These checks tar and "
+            "load a real package, so one has to be installed under "
+            "SCORE_ROOT_DIGITAL or SCORE_ROOT_RASTER.")
+    # The smallest, because the caller tars it for real.
+    return min(found, key=lambda r: sum(f.stat().st_size
+                                        for f in r.rglob("*") if f.is_file()))
+
+
 def _queued(job_id: str, **over) -> None:
     """Put one job in the table, queued, ready to be reported on."""
     from app import store
@@ -991,16 +1030,32 @@ def check_a_result_is_safe_before_it_is_announced() -> str:
     finally:
         storage.reset()
 
-    # Unconfigured must stay harmless: this is what a developer machine and
-    # every test above it run with, and it has to behave exactly as before.
-    if storage.available():
-        raise Failed("storage reports available with nothing configured")
-    if storage.head("anything") is not None:
-        raise Failed("an unconfigured bucket answered a HEAD")
-    if storage.presigned_get("anything") is not None:
-        raise Failed("an unconfigured bucket signed a link")
-    if not storage.status()["problem"]:
-        raise Failed("storage is unavailable and will not say why")
+    # Unconfigured must stay harmless -- and UNCONFIGURED IS ARRANGED HERE,
+    # not assumed of the machine. This read the real settings and trusted
+    # that whoever ran it had no bucket, which was true of CI and of every
+    # developer machine until one was given credentials so it could lend
+    # itself to the queue. Then `available()` answered honestly, this check
+    # called that a failure, and the thing it exists to prove -- that an
+    # install with no bucket serves from local disk instead of breaking --
+    # was never actually exercised on the machines that did have one.
+    import dataclasses as _dc
+    from app.settings import settings as _settings
+
+    storage.reset()
+    was_settings = storage.settings
+    storage.settings = _dc.replace(_settings, object_bucket="")
+    try:
+        if storage.available():
+            raise Failed("storage reports available with nothing configured")
+        if storage.head("anything") is not None:
+            raise Failed("an unconfigured bucket answered a HEAD")
+        if storage.presigned_get("anything") is not None:
+            raise Failed("an unconfigured bucket signed a link")
+        if not storage.status()["problem"]:
+            raise Failed("storage is unavailable and will not say why")
+    finally:
+        storage.settings = was_settings
+        storage.reset()
 
     # And the event carries the key, or a stored result cannot be found again.
     from app.queue.messages import Event
@@ -2888,6 +2943,14 @@ def check_a_volunteer_machine_stops_the_paid_one() -> str:
     if not vol._accept(_Task()):                               # noqa: SLF001
         raise Failed("a volunteer refused a task it could fetch")
 
+    # The operator watches this window to see their own render happen, and
+    # pika narrates six lines per connection at INFO against a heartbeat
+    # that opens one every 45 seconds.
+    vsrc = (ROOT / "tools" / "volunteer.py").read_text(encoding="utf-8")
+    if "quiet_pika()" not in vsrc:
+        raise Failed("the volunteer does not quieten pika, so what it is "
+                     "doing is buried under socket bookkeeping")
+
     return (f"auto rents alone and stands aside for a volunteer; cloud "
             f"always rents; manual never does; the offer expires after "
             f"{store.VOLUNTEER_WINDOW:.0f}s; a consumer may decline and the "
@@ -3543,13 +3606,10 @@ def check_the_score_reaches_a_compute_node() -> str:
     from app import library
     from app.settings import settings
 
-    packages = library.packages()
-    if not packages:
-        raise Failed("no score package installed to publish")
-    # The smallest, because this tars it for real.
-    source = min((p.root for p in packages),
-                 key=lambda r: sum(f.stat().st_size
-                                   for f in r.rglob("*") if f.is_file()))
+    # ON DISK, not from the library: this tars the folder for real, and
+    # `library` answers from the published catalogue whenever the bucket is
+    # reachable -- where a package has no local folder at all, by design.
+    source = _a_package_on_disk()
 
     bucket: dict = {}
     saved = (storage.put, storage.head, storage.get, storage.available,
@@ -3682,12 +3742,11 @@ def check_the_web_box_needs_no_scores() -> str:
     from app import library, package as pkg, scorestore, storage
     from app.settings import settings
 
-    installed = library.packages()
-    if not installed:
-        raise Failed("no score package installed to publish")
-    source = min((q.root for q in installed),
-                 key=lambda r: sum(f.stat().st_size
-                                   for f in r.rglob("*") if f.is_file()))
+    # ON DISK. This check's whole point is that the web box needs no
+    # scores, so it must start from a machine that HAS one -- and ask the
+    # disk for it, not the library, which on a credentialed machine answers
+    # from the bucket with no folder behind it.
+    source = _a_package_on_disk()
     real = pkg.load(source)
 
     bucket: dict = {}
