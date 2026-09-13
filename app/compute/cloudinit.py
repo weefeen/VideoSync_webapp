@@ -185,6 +185,22 @@ runcmd:
   - [ chmod, '0700', /root/.ssh ]
   - bash -c 'ssh-keyscan -H {web_host} >> /root/.ssh/known_hosts 2>/dev/null || true'
   - bash -c 'rsync -a --delete --copy-unsafe-links -e "ssh -i /root/.ssh/vsw_pull -o StrictHostKeyChecking=no -o ConnectTimeout=20" root@{web_host}:/srv/vsw/current/ /srv/vsw/current/ && echo vsw-pull-ok > /srv/vsw/shared/pull.state || echo vsw-pull-FAILED > /srv/vsw/shared/pull.state'
+  # AND THE ENGINE. `app/sync.py` runs the alignment by handing
+  # `--vss-root` to a child process, and the alignment runs HERE -- so the
+  # VideoScoreSync this node carries is the one that decides where every
+  # bar lands. It used to come from the image and nowhere else, which meant
+  # updating the engine required re-capturing a multi-gigabyte image, and
+  # until somebody did, every node quietly aligned with whatever version
+  # happened to be baked in months earlier. That is the same failure the
+  # score library had.
+  #
+  # 19 MB over the VLAN, next to the code pull that is already happening.
+  # `.git` is excluded: the node needs the engine, not its history, and the
+  # deploy key that history points at has no business on a throwaway box.
+  # A failure here is NOT fatal the way the code pull is -- the image's
+  # copy still works -- but it is recorded, because a node aligning with an
+  # older engine than the operator believes is exactly what this prevents.
+  - bash -c 'rsync -a --delete --exclude .git -e "ssh -i /root/.ssh/vsw_pull -o StrictHostKeyChecking=no -o ConnectTimeout=20" root@{web_host}:/srv/vsw/VideoScoreSync/ /srv/vsw/VideoScoreSync/ && echo vss-pull-ok > /srv/vsw/shared/vss.state || echo vss-pull-FAILED > /srv/vsw/shared/vss.state'
   - [ chown, -R, 'vsw:vsw', /srv/vsw/current ]
   - bash -c 'ln -sfn /srv/vsw/shared/.env /srv/vsw/current/.env'
   - [ chown, -h, 'vsw:vsw', /srv/vsw/current/.env ]
