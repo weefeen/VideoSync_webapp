@@ -68,6 +68,77 @@ def case_trouble(root: pathlib.Path) -> list[tuple[str, str]]:
     return found
 
 
+
+def compute_plan_check() -> None:
+    """Compare our plan tables against Linode's own, and say what drifted.
+
+    PLAN_MEMORY_GB and PLAN_HOURLY_USD are the single source of truth for
+    the upload cap, the hourly price and everything the dashboard judges the
+    machine by -- which makes them worth exactly as much as they are
+    accurate. They are a COPY of somebody else's price list, and a copy goes
+    stale without telling anybody.
+
+    Checked here rather than in the test suite because it needs the network,
+    and a test that needs the network is a test that fails on a train. The
+    endpoint is public: no token, nothing to leak.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    from app.settings import (DEFAULT_PLAN, PLAN_HOURLY_USD, PLAN_MEMORY_GB,
+                              plan_hourly_usd, plan_memory_gb,
+                              safe_duration_minutes)
+
+    print("\n=== compute plans ===")
+    plan = settings.compute_plan or DEFAULT_PLAN
+    gb = plan_memory_gb(plan)
+    if not gb:
+        print(f"[{BAD}] COMPUTE_PLAN={plan!r} is not in PLAN_MEMORY_GB, so "
+              f"nothing can say what length it survives or what it costs")
+    else:
+        print(f"[{OK}] {plan}: {gb:.0f} GB, ${plan_hourly_usd(plan):.3f}/h, "
+              f"up to {int(safe_duration_minutes(gb))} min per recording")
+
+    try:
+        with urllib.request.urlopen(
+                "https://api.linode.com/v4/linode/types?page_size=200",
+                timeout=20) as r:
+            live = {t["id"]: t for t in json.load(r)["data"]}
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"[{WARN}] could not reach Linode to check the tables: {exc}")
+        print("         the numbers above are whatever was last written down")
+        return
+
+    drift = []
+    for name in sorted(set(PLAN_MEMORY_GB) | set(PLAN_HOURLY_USD)):
+        t = live.get(name)
+        if t is None:
+            drift.append(f"{name}: we list it, Linode no longer offers it")
+            continue
+        theirs_gb = t["memory"] / 1024
+        ours_gb = PLAN_MEMORY_GB.get(name)
+        if ours_gb is not None and abs(theirs_gb - ours_gb) > 0.01:
+            drift.append(f"{name}: we say {ours_gb:.0f} GB, Linode says "
+                         f"{theirs_gb:.0f} GB")
+        theirs_usd = t["price"]["hourly"]
+        ours_usd = PLAN_HOURLY_USD.get(name)
+        if (ours_usd is not None and theirs_usd is not None
+                and abs(theirs_usd - ours_usd) > 0.0005):
+            drift.append(f"{name}: we say ${ours_usd:.3f}/h, Linode says "
+                         f"${theirs_usd:.3f}/h")
+
+    if drift:
+        print(f"[{BAD}] the plan tables have drifted from Linode:")
+        for line in drift:
+            print(f"         {line}")
+        print("         fix app/settings.py -- the upload cap and every cost")
+        print("         panel are computed from these numbers")
+    else:
+        print(f"[{OK}] all {len(PLAN_MEMORY_GB)} plans match Linode's own "
+              f"memory and price")
+
+
 def main() -> int:
     print("=== configuration (.env) ===")
     problems = settings.problems()
@@ -99,6 +170,8 @@ def main() -> int:
     else:
         print(f"[{WARN}] cairosvg  unavailable — .svg bands cannot be rasterised")
         print(f"         {svg.why_unavailable()}")
+
+    compute_plan_check()
 
     print("\n=== score packages ===")
     usable: dict[str, tuple] = {}

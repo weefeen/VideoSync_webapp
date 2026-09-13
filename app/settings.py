@@ -86,11 +86,20 @@ PLAN_MEMORY_GB = {
 # costs a whole hour -- which is why the scaler holds a machine to the hour
 # boundary, and why a second job inside that hour is free.
 PLAN_HOURLY_USD = {
-    "g6-standard-1": 0.015, "g6-standard-2": 0.036, "g6-standard-4": 0.072,
+    "g6-standard-1": 0.018, "g6-standard-2": 0.036, "g6-standard-4": 0.072,
     "g6-standard-6": 0.144, "g6-standard-8": 0.288, "g6-standard-16": 0.576,
     "g6-dedicated-2": 0.054, "g6-dedicated-4": 0.108, "g6-dedicated-8": 0.216,
     "g6-dedicated-16": 0.432, "g6-dedicated-32": 0.864,
 }
+
+
+# THE ONE PLACE A PLAN NAME IS WRITTEN as a default. Everything that used
+# to be typed beside it -- the hourly price, the upload cap, the memory the
+# dashboard judges against -- is now looked up from it, so changing the plan
+# moves all of them together. That is the whole point: the price was its own
+# setting once, left at a g6-dedicated-4's rate while production ran a
+# g6-dedicated-16, and every cost panel was wrong by a factor of four.
+DEFAULT_PLAN = "g6-dedicated-4"
 
 
 def plan_hourly_usd(plan: str) -> float:
@@ -204,7 +213,8 @@ class Settings:
     # What an hour of the plan costs, for turning hours into money on the
     # dashboard. 8 GB / 4 dedicated cores is the size the measurements argue
     # for; adjust to whatever plan is actually chosen.
-    compute_hourly_cost: float = 0.108
+    # Derived from the plan; the literal default lives only in DEFAULT_PLAN.
+    compute_hourly_cost: float = 0.0
     # How busy an hour of the day has to be, historically, before a machine
     # is held through it rather than released. Keeping never saves money —
     # the hour a job runs in is paid for either way — so this is bought
@@ -223,7 +233,7 @@ class Settings:
     # submission renews it, so somebody who uses the site is never asked
     # twice. 0 disables the expiry.
     confirm_ttl_days: float = 180.0
-    compute_plan: str = "g6-dedicated-4"
+    compute_plan: str = DEFAULT_PLAN
     # A ceiling, because a loop that creates machines is not a bug that
     # costs an afternoon. Refused beyond this many in an hour, whatever the
     # queue says.
@@ -502,7 +512,8 @@ def _hourly_cost() -> float:
                 return value
         except ValueError:
             pass
-    return plan_hourly_usd(os.getenv("COMPUTE_PLAN", "").strip()) or 0.108
+    plan = os.getenv("COMPUTE_PLAN", "").strip() or DEFAULT_PLAN
+    return plan_hourly_usd(plan) or plan_hourly_usd(DEFAULT_PLAN)
 
 
 
@@ -543,7 +554,7 @@ def load() -> Settings:
         compute_region=os.getenv("COMPUTE_REGION", "eu-central").strip(),
         compute_image=os.getenv("COMPUTE_IMAGE", "").strip(),
         confirm_ttl_days=_number("CONFIRM_TTL_DAYS", 180.0),
-        compute_plan=os.getenv("COMPUTE_PLAN", "g6-dedicated-4").strip(),
+        compute_plan=os.getenv("COMPUTE_PLAN", DEFAULT_PLAN).strip(),
         compute_max_creates_per_hour=int(
             _number("COMPUTE_MAX_CREATES_PER_HOUR", 4)),
         compute_ssh_key=os.getenv("COMPUTE_SSH_KEY", "").strip(),
