@@ -194,6 +194,12 @@ class Settings:
     linode_token: str = ""
     compute_region: str = "eu-central"
     compute_image: str = ""
+    # How long a confirmed address stays confirmed without being used. A
+    # click is a permission, and a permission nobody has exercised in this
+    # long is not one any more -- mailboxes change hands. Any proved
+    # submission renews it, so somebody who uses the site is never asked
+    # twice. 0 disables the expiry.
+    confirm_ttl_days: float = 180.0
     compute_plan: str = "g6-dedicated-4"
     # A ceiling, because a loop that creates machines is not a bug that
     # costs an afternoon. Refused beyond this many in an hour, whatever the
@@ -490,6 +496,7 @@ def load() -> Settings:
         linode_token=os.getenv("LINODE_TOKEN", "").strip(),
         compute_region=os.getenv("COMPUTE_REGION", "eu-central").strip(),
         compute_image=os.getenv("COMPUTE_IMAGE", "").strip(),
+        confirm_ttl_days=_number("CONFIRM_TTL_DAYS", 180.0),
         compute_plan=os.getenv("COMPUTE_PLAN", "g6-dedicated-4").strip(),
         compute_max_creates_per_hour=int(
             _number("COMPUTE_MAX_CREATES_PER_HOUR", 4)),

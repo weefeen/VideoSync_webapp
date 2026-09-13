@@ -266,8 +266,13 @@ class Registry:
 
     # -- submitting ------------------------------------------------------
     def start(self, job: Job, score: str, mode: str | None,
-              style: rnd.Style, meta: dict) -> None:
-        """Put the job in the queue. It runs when a worker reaches it."""
+              style: rnd.Style, meta: dict, proved: bool = True) -> None:
+        """Put the job in the queue. It runs when a worker reaches it.
+
+        `proved` is whether the browser that submitted this showed it had
+        confirmed the address. It decides which MESSAGE is sent, never
+        whether the render happens -- the job is queued below either way.
+        """
         job.score = score
         job.mode = mode
         job.state = store.QUEUED
@@ -291,7 +296,7 @@ class Registry:
         except Exception:                        # noqa: BLE001
             logger.exception("job %s could not be handed to the queue; "
                              "the sweep will offer it again", job.id)
-        _say_it_is_queued(job)
+        _say_it_is_queued(job, proved)
 
     # -- the workers -----------------------------------------------------
 
@@ -381,7 +386,7 @@ def say_a_score_is_wanted(job: Job, score: str, address: str) -> None:
     threading.Thread(target=work, name=f"wanted-{job.id}", daemon=True).start()
 
 
-def _say_it_is_queued(job: Job) -> None:
+def _say_it_is_queued(job: Job, proved: bool = True) -> None:
     """Tell the visitor we have it, roughly how long, and where to look.
 
     A render can take the better part of an hour and silence for that long
@@ -407,7 +412,10 @@ def _say_it_is_queued(job: Job) -> None:
     # and `start_confirmation` refuses that too if the address is suppressed
     # or was asked recently. The render is NOT held up by any of this: the
     # visitor is watching the page and gets their video there regardless.
-    if not store.may_mail(address):
+    # `proved` is the browser half: the address is confirmed AND this is a
+    # browser that confirmed it. Without it, knowing somebody's address
+    # would be enough to have us write to them.
+    if not proved or not store.may_mail(address):
         _ask_them_to_confirm(address, job)
         return
 

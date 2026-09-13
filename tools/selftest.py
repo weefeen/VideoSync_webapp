@@ -2627,6 +2627,113 @@ def check_one_person_cannot_hold_billions_of_buckets() -> str:
     return "IPv6 truncated to /64, IPv4 untouched, unparseable preserved"
 
 
+def check_a_confirmation_is_bound_and_expires() -> str:
+    """Knowing an address must not be enough to have us write to its owner.
+
+    Confirmation used to be a property of the ADDRESS and it lasted for
+    ever. Anyone who knew a confirmed address could submit a job naming it,
+    and this server would mail its owner "we are making your score video"
+    about a video they never uploaded -- while spending their weekly
+    allowance, because the limits are keyed on the address rather than on
+    whoever typed it.
+
+    Two things now. The click records itself in the BROWSER that made it, so
+    a submission has to show that proof; and the permission LAPSES on
+    inactivity, because a mailbox changes hands and a click from years ago
+    is not consent today. Any proved submission renews it, so somebody who
+    uses the site is never asked twice.
+
+    An IP would answer neither question -- a whole office shares one and a
+    phone changes its own between cells -- which is why this is a signed
+    cookie and not an address book of peers.
+    """
+    import time as _t
+
+    from app import proof, store
+    from app.settings import settings
+
+    me = "bound-check@example.com"
+    other = "someone-else@example.com"
+
+    # --- the cookie ----------------------------------------------------
+    mine = proof.add(None, me)
+    if me in mine:
+        raise Failed("the address itself is in the cookie; a stolen cookie "
+                     "would name the mailbox it proves")
+    if not proof.proves(mine, me):
+        raise Failed("a freshly issued proof does not prove its address")
+    if proof.proves(mine, other):
+        raise Failed("a proof for one address proves another")
+    if proof.proves(None, me):
+        raise Failed("no cookie at all counts as proof")
+
+    body, mac = mine.split(".", 1)
+    bent = body[:-2] + ("AA" if not body.endswith("AA") else "BB") + "." + mac
+    if proof.proves(bent, me):
+        raise Failed("A FORGED COOKIE IS ACCEPTED -- anyone could mint proof "
+                     "for any address")
+
+    both = proof.add(mine, other)
+    if not (proof.proves(both, me) and proof.proves(both, other)):
+        raise Failed("a browser cannot hold proof for two addresses")
+    many = None
+    for i in range(proof.MAX_ADDRESSES + 3):
+        many = proof.add(many, f"held{i}@example.com")
+    held = sum(1 for i in range(proof.MAX_ADDRESSES + 3)
+               if proof.proves(many, f"held{i}@example.com"))
+    if held != proof.MAX_ADDRESSES:
+        raise Failed(f"the cookie holds {held} addresses, not "
+                     f"{proof.MAX_ADDRESSES}; it would grow without bound")
+
+    # --- the expiry ----------------------------------------------------
+    now = _t.time()
+    ttl = settings.confirm_ttl_days * 86400.0
+    if ttl <= 0:
+        raise Failed("confirmations never expire; a click from years ago "
+                     "still authorises mail today")
+
+    with store.write() as conn:
+        conn.execute("DELETE FROM emails WHERE address = ?", (me,))
+        conn.execute(
+            "INSERT INTO emails (address, created, confirmed) VALUES (?,?,?)",
+            (me, now - ttl - 86400, now - ttl - 86400))
+    if store.may_mail(me, now):
+        raise Failed(f"an address confirmed {settings.confirm_ttl_days:.0f}+ "
+                     f"days ago and untouched since is still mailable")
+
+    # Using the site renews it, so a regular visitor is never asked twice.
+    store.saw_address(me, now)
+    if not store.may_mail(me, now):
+        raise Failed("a proved submission did not renew the permission, so "
+                     "somebody who uses the site would be asked again")
+
+    # Suppression still outranks everything, freshness included.
+    with store.write() as conn:
+        conn.execute("UPDATE emails SET suppressed = ? WHERE address = ?",
+                     (now, me))
+    if store.may_mail(me, now):
+        raise Failed("SUPPRESSION WAS OVERRIDDEN by a recent visit; somebody "
+                     "who said 'not me' would start receiving mail again")
+    with store.write() as conn:
+        conn.execute("DELETE FROM emails WHERE address = ?", (me,))
+
+    # --- and the two are actually wired to the mailer -------------------
+    routes = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    jobs_src = (ROOT / "app" / "jobs.py").read_text(encoding="utf-8")
+    if "proof.proves(" not in routes:
+        raise Failed("the submission never checks the browser's proof")
+    if "proof.attach(" not in routes:
+        raise Failed("the confirmation click never records itself in the "
+                     "browser, so no submission could ever show proof")
+    if "if not proved or not store.may_mail(address)" not in jobs_src:
+        raise Failed("the mailer ignores whether the browser proved the "
+                     "address, so knowing it is enough to be written to")
+
+    return (f"cookie proves one address and no other, forgery refused, "
+            f"capped at {proof.MAX_ADDRESSES}; lapses after "
+            f"{settings.confirm_ttl_days:.0f} idle days, renewed by use, "
+            f"and suppression still outranks it")
+
 def check_no_confirmation_screen_without_a_confirmation() -> str:
     """"Open the email we just sent" only when one was actually sent.
 
@@ -3437,6 +3544,7 @@ def main() -> int:
         check_the_video_carries_a_mark,
         check_the_video_carries_the_weefeen_mark,
         check_the_edition_is_credited,
+        check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,
         check_the_delivery_page_can_show_the_download,

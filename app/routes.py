@@ -23,6 +23,7 @@ from . import jobs, package as pkg, pipeline
 from .queue import webside
 from . import botcheck
 from . import identify as ident
+from . import proof
 from . import scorestore
 from . import library
 from . import limits
@@ -1134,8 +1135,24 @@ def api_render(job_id: str):
         return jsonify({"error": str(exc)}), 400
 
     job.email = address
+    # PROVED HERE, not merely proved once. `may_mail` says the address has
+    # been confirmed and is not stale; the cookie says THIS browser is the
+    # one that proved it. Both, or the confirmation is asked for again --
+    # otherwise knowing an address is enough to have us mail its owner.
+    #
+    # The render is NOT affected either way. It is queued below regardless,
+    # and the visitor watches it on this page; only which MESSAGE goes out
+    # depends on this.
+    proved = bool(address) and store.may_mail(address) and proof.proves(
+        request.cookies.get(proof.COOKIE), address)
+    if proved:
+        # Using the site renews the permission, so somebody who comes back
+        # every month is never asked again while an address nobody has
+        # touched for six months lapses.
+        store.saw_address(address)
+
     jobs.registry.start(job, package.name, mode, style,
-                        _panel_meta(body.get("meta")))
+                        _panel_meta(body.get("meta")), proved=proved)
     # WHETHER A CONFIRMATION WAS ACTUALLY ASKED FOR. The page used to show
     # "open the email we just sent and click the link" to everyone whose
     # install can send mail at all -- including people whose address was
@@ -1145,9 +1162,7 @@ def api_render(job_id: str):
     # `store.may_mail` is the same question `_say_it_is_queued` asks before
     # choosing which message to send, so the page and the mailer cannot
     # disagree about which one went out.
-    return jsonify({"job": job.public(),
-                    "address_confirmed": bool(address)
-                                         and store.may_mail(address)})
+    return jsonify({"job": job.public(), "address_confirmed": proved})
 
 
 @bp.get("/api/jobs/<job_id>/status")
@@ -1354,15 +1369,24 @@ def confirm_address(token: str):
                            address, row["id"], exc_info=True)
 
     logger.info("address confirmed; %d waiting video(s) released", released)
+    store.saw_address(address, now)
     if released:
-        return _confirm_page(
+        page = _confirm_page(
             "Thank you \u2014 your video is on its way",
             "Your address is confirmed and the link to your finished video "
             "has just been emailed to you.")
-    return _confirm_page(
-        "Thank you \u2014 your address is confirmed",
-        "We will email you the link as soon as your video is ready. You can "
-        "close this page.")
+    else:
+        page = _confirm_page(
+            "Thank you \u2014 your address is confirmed",
+            "We will email you the link as soon as your video is ready. You "
+            "can close this page.")
+    # THE CLICK PROVES ONE BROWSER, so that is what is recorded. Until now a
+    # confirmation was a property of the address alone and lasted for ever,
+    # which meant anyone who merely KNEW an address could have this server
+    # mail its owner about a video they never made -- and spend the owner's
+    # weekly allowance doing it, since the limits are keyed on the address.
+    proof.attach(page, address, request)
+    return page
 
 
 @bp.route("/stop/<token>", methods=["GET", "POST"])

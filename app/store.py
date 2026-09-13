@@ -266,9 +266,19 @@ CREATE TABLE IF NOT EXISTS emails (
     confirmed    REAL,                -- when they clicked
     suppressed   REAL,                -- when they said "not me". Permanent.
     last_sent    REAL,                -- last confirmation mail, to not repeat
-    unsub_token  TEXT                 -- stable one-click unsubscribe
+    unsub_token  TEXT,                -- stable one-click unsubscribe
+    last_seen    REAL                 -- last proved from a browser
 );
 CREATE INDEX IF NOT EXISTS emails_token ON emails(token_hash);
+
+-- Small values the server makes for itself and must not lose: the key that
+-- signs browser proofs, and whatever else earns a place here. NOT for
+-- configuration, which belongs in .env where an operator can see it.
+CREATE TABLE IF NOT EXISTS meta (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL,
+    made   REAL NOT NULL
+);
 """
 
 # How close to the end of a paid hour a machine may be released. Linode
@@ -342,6 +352,12 @@ _ADDED = (
     # means a token that stays the same across messages -- unlike
     # the confirmation token, which is single use and cleared.
     ("emails", "unsub_token", "TEXT"),
+    # When this address was last proved from a browser. A confirmation
+    # expires on INACTIVITY rather than on age: somebody who uses the site
+    # every month should not be asked again on a fixed anniversary, and an
+    # address nobody has touched for half a year should not stay mailable
+    # for ever on the strength of one click.
+    ("emails", "last_seen", "REAL"),
     # The recognitions table once kept `client` — the visitor's address —
     # and now keeps the place it resolved to instead, so that deleting a
     # recording deletes the address with it. An older database still has the
@@ -1062,28 +1078,81 @@ def compute_alarm_cleared() -> str:
 # ---------------------------------------------------------------------------
 # addresses: who has proved they own one
 # ---------------------------------------------------------------------------
+
+def get_meta(key: str) -> str | None:
+    """A value the server stored for itself, or None."""
+    row = one("SELECT value FROM meta WHERE key = ?", (key,))
+    return row["value"] if row else None
+
+
+def set_meta(key: str, value: str) -> None:
+    """Store it, keeping whatever was there if two processes race.
+
+    `DO NOTHING`, deliberately. The one caller makes a signing key when
+    there is none, and two workers starting at once would each make one --
+    the first to land wins and the other reads it back, which is what must
+    happen: a key that changes under a running process invalidates every
+    cookie already issued.
+    """
+    # Keeps a non-empty existing value, replaces an empty one. DO NOTHING
+    # alone made an empty row permanent: a caller that stores "" once leaves
+    # every later read falsy, so a key-maker mints a fresh key on every call
+    # and no cookie it ever signed verifies again -- silently.
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO meta (key, value, made) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "made=excluded.made WHERE meta.value = ''",
+            (key, value, time.time()))
+
+
+def saw_address(address: str, now: float | None = None) -> None:
+    """Note that this address was just proved from a browser."""
+    with write() as conn:
+        conn.execute("UPDATE emails SET last_seen = ? WHERE address = ?",
+                     (now or time.time(), (address or "").strip().lower()))
+
+
 def email_state(address: str) -> dict:
     """What we know about an address. Never raises on an unknown one."""
     row = one("SELECT * FROM emails WHERE address = ?",
               ((address or "").strip().lower(),))
     if row is None:
         return {"known": False, "confirmed": False, "suppressed": False,
-                "last_sent": 0.0}
+                "last_sent": 0.0, "proved_at": 0.0}
+    keys = row.keys()
+    confirmed = row["confirmed"] or 0.0
+    seen = (row["last_seen"] or 0.0) if "last_seen" in keys else 0.0
     return {"known": True,
             "confirmed": bool(row["confirmed"]),
             "suppressed": bool(row["suppressed"]),
-            "last_sent": row["last_sent"] or 0.0}
+            "last_sent": row["last_sent"] or 0.0,
+            # The most recent moment somebody proved this mailbox from a
+            # browser: the click itself, or a later submission that showed
+            # the proof cookie.
+            "proved_at": max(confirmed, seen)}
 
 
-def may_mail(address: str) -> bool:
+def may_mail(address: str, now: float | None = None) -> bool:
     """The single gate every outgoing message to a visitor passes.
 
-    Confirmed, and not suppressed. Suppression outranks everything: somebody
-    who said they did not ask for this does not start receiving mail again
-    because a different visitor typed their address.
+    Confirmed, not suppressed, and not stale. Suppression outranks
+    everything: somebody who said they did not ask for this does not start
+    receiving mail again because a different visitor typed their address.
+
+    STALE MATTERS because a confirmation used to last for ever. One click,
+    years ago, and the address stayed mailable by anyone who typed it. A
+    mailbox changes hands, a person loses interest, and a permission nobody
+    has exercised in half a year is not a permission any more -- so it
+    lapses on INACTIVITY, and any proved submission renews it.
     """
     state = email_state(address)
-    return state["confirmed"] and not state["suppressed"]
+    if not state["confirmed"] or state["suppressed"]:
+        return False
+    ttl = settings.confirm_ttl_days * 86400.0
+    if ttl <= 0:
+        return True
+    return ((now or time.time()) - state["proved_at"]) <= ttl
 
 
 def start_confirmation(address: str, token_hash: str, now: float,
