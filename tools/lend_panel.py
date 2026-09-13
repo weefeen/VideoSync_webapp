@@ -247,8 +247,17 @@ button{font:inherit;font-family:var(--mono);font-size:9.5px;letter-spacing:.19em
   text-transform:uppercase;border:0;border-radius:2px;padding:14px 24px;
   cursor:pointer;transition:background .18s,opacity .18s}
 button:focus-visible{outline:2px solid var(--mag);outline-offset:2px}
-.primary{background:var(--b1);color:#fff}
-.primary:hover{background:var(--b3)}
+/* BOTH STATES, ALWAYS SHOWN. This was one button whose label was the
+   ACTION -- "Stop taking jobs" -- so the only way to learn that the other
+   state existed was to already be in it. What a control does and which
+   way it is set are different things, and a switch says both at once. */
+.switch{display:inline-flex;border:1px solid var(--hair);border-radius:3px;
+  overflow:hidden}
+.switch button{background:none;color:var(--soft);padding:13px 22px}
+.switch button+button{border-left:1px solid var(--hair)}
+.switch button:hover:not(.on){color:var(--ink);background:var(--hair-2)}
+.switch button.on{background:var(--b1);color:#fff}
+.switch button.on[data-want="hold"]{background:var(--soft)}
 .ghost{background:none;color:var(--soft);border:1px solid var(--hair);
   padding:13px 23px}
 .ghost:hover{border-color:var(--ink);color:var(--ink)}
@@ -315,7 +324,10 @@ footer code{font-family:var(--mono);font-size:12px}
 <p class="because" id="because"></p>
 
 <div class="act">
-  <button class="primary" id="toggle"></button>
+  <div class="switch" id="switch" role="group" aria-label="Take jobs or not">
+    <button data-want="take">Take jobs</button>
+    <button data-want="hold">Don&rsquo;t take jobs</button>
+  </div>
   <button class="ghost" id="stop">Stop after this job</button>
 </div>
 
@@ -392,9 +404,14 @@ function paint(s){
       minutes(s.quiet_for) + ' to let another machine take it.';
   }
 
-  const toggle = document.getElementById('toggle');
-  toggle.textContent = taking ? 'Stop taking jobs' : 'Take jobs';
-  toggle.disabled = busy;
+  // The switch shows which way it is set; the other half is the thing you
+  // can click. Never a label that changes under the pointer.
+  document.querySelectorAll('#switch button').forEach(b => {
+    const isOn = (b.dataset.want === 'take') === taking;
+    b.classList.toggle('on', isOn);
+    b.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+    b.disabled = busy;
+  });
   const stop = document.getElementById('stop');
   stop.disabled = !job;
   stop.textContent = job ? 'Stop after this job' : 'Nothing to finish';
@@ -438,9 +455,9 @@ function paint(s){
   }
 }
 
-document.getElementById('toggle').onclick = () =>
-  send(document.getElementById('toggle').textContent === 'Take jobs'
-       ? '/take' : '/hold');
+document.querySelectorAll('#switch button').forEach(b => {
+  b.onclick = () => send(b.dataset.want === 'take' ? '/take' : '/hold');
+});
 document.getElementById('stop').onclick = () => send('/stop');
 document.querySelectorAll('.mode input').forEach(i => {
   i.onchange = () => { if(i.checked) send('/mode', {mode: i.value}); };
