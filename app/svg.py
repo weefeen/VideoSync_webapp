@@ -98,6 +98,39 @@ def rasterize(path: pathlib.Path, width: int, height: int,
     cairosvg = _cairosvg()
     if cairosvg is None:
         raise RuntimeError(why_unavailable())
-    png = cairosvg.svg2png(url=str(path), output_width=width,
+    png = cairosvg.svg2png(bytestring=adapt(path.read_bytes()),
+                           output_width=width,
                            output_height=height, background_color=background)
     return Image.open(io.BytesIO(png)).convert("RGB")
+
+
+# What music_line_extractor's own `_fix_svg` does before handing a Verovio
+# SVG to cairosvg. Kept here because THE TWO PIPELINES DIVERGED: MLE has two
+# copies of that function, and the one that exports the bands we consume is
+# the smaller one. Its page renderer also recolours editor marks and
+# substitutes music glyphs; its band exporter does neither, so a band
+# arrives here carrying things that were already solved upstream for a
+# different output.
+#
+# Three of MLE's fixes are baked into the bands before we see them --
+# `xlink:href` rewritten to `href`, `<g class="dir problem">` removed, the
+# red diagnostic colour stripped from turns -- and are asserted rather than
+# repeated, so a package that regresses on one is caught by
+# tools/check_score.py rather than rendered wrong.
+_MAGENTA = (
+    # Verovio's default RDF declaration marks editor-added notes magenta and
+    # labels them "extra)". On the Breitkopf editions of the NIFC corpus that
+    # is a shout in the middle of the music. MLE recolours it grey for its
+    # own pages; a band exported for video never passed through that, so a
+    # marked note would arrive at full magenta in somebody's finished film.
+    (b'fill="magenta"', b'fill="grey"'),
+    (b'color="magenta"', b'color="grey"'),
+)
+
+
+def adapt(svg: bytes) -> bytes:
+    """A Verovio SVG, made ready for cairosvg. Cheap and idempotent."""
+    for old_bytes, new_bytes in _MAGENTA:
+        if old_bytes in svg:
+            svg = svg.replace(old_bytes, new_bytes)
+    return svg

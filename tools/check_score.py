@@ -157,6 +157,8 @@ def check(root: pathlib.Path) -> Report:
                 elif svgs:
                     r.note(f"mixed bands: {svgs} vector, "
                            f"{len(good) - svgs} raster")
+                if svgs:
+                    _check_vector_bands(root, r)
                 else:
                     r.note("bands are raster only -- they will be upscaled to "
                            "the band rectangle and soften")
@@ -321,6 +323,63 @@ def check(root: pathlib.Path) -> Report:
             r.bad(f"the bands cannot be scheduled: {type(exc).__name__}: {exc}")
 
     return r
+
+
+
+def _check_vector_bands(root: pathlib.Path, r: "Report") -> None:
+    """What a Verovio band still carries that would spoil the video.
+
+    THE PIPELINES DIVERGED and this is the guard against it happening
+    again. music_line_extractor adapts a Verovio SVG for cairosvg in a
+    function called `_fix_svg` -- and it has TWO of them. The one that
+    renders its own pages recolours editor marks and substitutes music
+    glyphs; the one that exports the bands we consume does neither. So a
+    band can arrive here carrying something that was solved upstream for a
+    different output, and the first anybody hears of it is a box in a
+    finished video, which is where the metronome note in a tempo marking
+    was found.
+
+    Read from the first, middle and last band rather than all of them: they
+    come out of one Verovio run, so what afflicts one afflicts all, and a
+    package is dozens of files at half a megabyte.
+    """
+    from app import smufl
+
+    bands = sorted((root / "score" / "lines").glob("*.svg"))
+    if not bands:
+        return
+    sample = {bands[0], bands[len(bands) // 2], bands[-1]}
+
+    artefacts: set[tuple[bool, str]] = set()
+    undrawable: set[str] = set()
+    embedded: set[str] = set()
+    for band in sorted(sample):
+        text = band.read_text(encoding="utf-8", errors="replace")
+        artefacts.update(smufl.artefacts(text))
+        undrawable.update(smufl.undrawable(text))
+        embedded.update(smufl.faces(text))
+
+    for fatal, why in sorted(artefacts):
+        if fatal:
+            r.bad(f"the bands {why}")
+        else:
+            r.note(f"the bands {why}")
+    for why in sorted(undrawable):
+        r.bad(f"a band draws {why}")
+
+    if embedded:
+        if smufl.available():
+            many = len(embedded) > 1
+            r.ok(f"music font{'s' if many else ''} "
+                 f"{', '.join(sorted(embedded))} "
+                 f"{'travel' if many else 'travels'} with the score and "
+                 f"will be installed where it renders")
+        else:
+            r.warn(f"the bands embed {', '.join(sorted(embedded))}, and "
+                   f"{smufl.why_unavailable()} -- the server will still "
+                   f"unpack it, this machine cannot check it")
+    elif not undrawable:
+        r.note("the bands embed no font, and draw no text that needs one")
 
 
 def install(root: pathlib.Path) -> int:

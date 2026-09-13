@@ -2741,9 +2741,45 @@ def check_music_glyphs_survive_the_rasteriser() -> str:
                      f"worker starts at {worker_at}; fontconfig is cached at "
                      f"process start, so that worker would still draw boxes")
 
+    # THE OTHER HALF, and the reason this check exists at all rather than
+    # just a fix. music_line_extractor adapts Verovio output for cairosvg in
+    # `_fix_svg` -- and it has TWO of them. The page renderer recolours
+    # editor marks and substitutes music glyphs; the band exporter, whose
+    # output we consume, does neither. Three of its fixes ARE baked into the
+    # bands before we see them, so those are asserted; the two that are not
+    # are handled here.
+    from app import svg as appsvg
+
+    for needle, fatal, _why in smufl.KNOWN_ARTEFACTS:
+        if needle in text:
+            raise Failed(f"an installed band still contains {needle!r}, "
+                         f"which the exporting pipeline is supposed to have "
+                         f"removed{' and which is fatal' if fatal else ''}")
+
+    # Editor-marked notes come through magenta because only the PAGE
+    # pipeline recolours them. Ours does it at render time.
+    if appsvg.adapt(b'<g fill="magenta" color="magenta">') !=             b'<g fill="grey" color="grey">':
+        raise Failed("a magenta editor mark is not recoloured, so it would "
+                     "shout over the music in a finished video")
+    once = appsvg.adapt(b'fill="magenta"')
+    if appsvg.adapt(once) != once:
+        raise Failed("the adaptation is not idempotent")
+
+    # And the general form: live text in a font the file does not carry
+    # cannot be drawn by anything here, whatever the codepoint.
+    faked = text.replace('font-family="Leipzig"', 'font-family="Nowhere"', 1)
+    if not smufl.undrawable(faked):
+        raise Failed("text in a font the score does not embed is not "
+                     "reported; the next glyph like this would reach a "
+                     "video as a box with nothing to warn anybody")
+    if smufl.undrawable(text):
+        raise Failed(f"this package draws text it cannot supply a font for: "
+                     f"{smufl.undrawable(text)}")
+
     return (f"{len(faces)} embedded face(s), {total_pua} music codepoints, "
             f"every glyph this score uses is covered, unpacked at install "
-            f"and installed before the worker starts")
+            f"and installed before the worker starts; editor marks "
+            f"recoloured, upstream artefacts absent")
 
 def check_a_confirmation_is_bound_and_expires() -> str:
     """Knowing an address must not be enough to have us write to its owner.

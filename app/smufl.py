@@ -159,3 +159,59 @@ def install_from_package(root: pathlib.Path, into: pathlib.Path) -> list[str]:
     """
     bands = sorted((root / "score" / "lines").glob("*.svg"))
     return install_from(bands[0], into) if bands else []
+
+# Things a band should not still contain by the time it reaches us. Each was
+# solved upstream in music_line_extractor -- but in the copy of `_fix_svg`
+# that renders PAGES, not the one that exports BANDS, and the two have
+# already drifted apart once. Detected rather than silently repaired: a band
+# carrying one of these means the package was made by a pipeline that no
+# longer matches, and the operator should know at install time instead of
+# finding out in a rendered video.
+KNOWN_ARTEFACTS = (
+    # (needle, fatal, what it means)
+    ("xlink:href", True,
+     "uses the deprecated xlink:href for glyph references; cairosvg resolves "
+     "href, so every notehead would be missing"),
+    ('class="dir problem"', False,
+     "carries Verovio's diagnostic 'problem' markers, which are meant for "
+     "the engraver and not for a viewer"),
+    ("magenta", False,
+     "colours editor-marked notes magenta, which shouts over the music; "
+     "app/svg.py recolours these grey at render time"),
+)
+
+
+def artefacts(svg_text: str) -> list[tuple[bool, str]]:
+    """Upstream problems still present in this SVG, fatal ones flagged."""
+    return [(fatal, why) for needle, fatal, why in KNOWN_ARTEFACTS
+            if needle in svg_text]
+
+
+def undrawable(svg_text: str) -> list[str]:
+    """Live text this host has no way to draw.
+
+    THE GENERAL FORM of the tofu bug, rather than a list of the codepoints
+    that happened to break once. Verovio draws most things as `<path>`, but
+    whatever it writes as text needs a real font -- and the only font we can
+    guarantee is one the SVG carries with it, because that is the one we
+    unpack and install. A private-use character in a font the file does not
+    embed cannot be drawn by anything on this machine, and will be a box.
+    """
+    import re as _re
+
+    embedded = set(faces(svg_text))
+    trouble: list[str] = []
+    # Each <tspan> that names a font and holds private-use characters.
+    for m in _re.finditer(
+            r"<tspan[^>]*font-family=\"([^\"]+)\"[^>]*>([^<]*)</tspan>",
+            svg_text):
+        family = m.group(1).split(",")[0].strip().strip("'\"")
+        text = m.group(2)
+        pua = sorted({ord(c) for c in text if 0xE000 <= ord(c) <= 0xF8FF})
+        if not pua or family in embedded:
+            continue
+        trouble.append(
+            "%s in font %r, which this file does not embed -- it would "
+            "render as empty boxes"
+            % (", ".join("U+%04X" % c for c in pua), family))
+    return sorted(set(trouble))
