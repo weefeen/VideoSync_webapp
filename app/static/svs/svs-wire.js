@@ -1112,12 +1112,18 @@ document.addEventListener('DOMContentLoaded', foldScoreSources);
  * this is the app's own output, cut short and scaled down. Showing the
  * actual thing beats illustrating it.
  *
+ * The passage is chosen, not taken from the top. Half of this recording
+ * carries a tempo marking whose metronome note is LIVE TEXT in the score's
+ * own music font, and a machine that cannot draw that font renders it as
+ * an empty box -- so the excerpt is cut from a stretch with none, and the
+ * frame was looked at before it shipped. See docs/deployment-log.md.
+ *
  * Muted and inline so it may play on its own, and held still for anyone
  * who has asked for less motion — the same courtesy the drawn version
  * paid with its prefers-reduced-motion rule.
  */
 const SAMPLE = 'assets/sample.mp4';
-const SAMPLE_CAPTION = '3ème Scherzo, Op. 39';
+const SAMPLE_CAPTION = 'Rondo in C minor, Op. 1';
 
 const baseSampleHTML = sampleHTML;
 sampleHTML = function(){
