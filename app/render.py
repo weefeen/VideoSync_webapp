@@ -710,8 +710,15 @@ def prepare_bands(pkg: ScorePackage, size: tuple[int, int], style: Style,
     # differently once a rasteriser becomes available, and cached bands
     # derived from the PNG twins must not be reused for vector output.
     source = "svg" if any(b.is_vector for b in pkg.bands) else "raster"
+    # AND WHAT WAS DONE TO THE SVG ON THE WAY IN. Without this the cache
+    # answers for a treatment it has never heard of: the tempo-glyph fix
+    # was deployed to every machine and changed nothing for any score
+    # already rendered, because the boxed bands were on disk under a key
+    # that could not tell the difference. `adapt_fingerprint` is derived
+    # from the code that does the treating, so it cannot be forgotten.
     cache = (settings.cache_dir /
-             f"{pkg.name[:40]}-{style.key()}-{source}-{size[0]}x{size[1]}")
+             f"{pkg.name[:40]}-{style.key()}-{source}-{svg.adapt_fingerprint()}"
+             f"-{size[0]}x{size[1]}")
     cache.mkdir(parents=True, exist_ok=True)
 
     out: dict[int, pathlib.Path] = {}

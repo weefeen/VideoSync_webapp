@@ -206,6 +206,35 @@ def substitute_music_text(svg_text: str) -> str:
     return _TSPAN.sub(one, svg_text)
 
 
+@functools.lru_cache(maxsize=1)
+def adapt_fingerprint() -> str:
+    """What this module currently does to an SVG, as a short hash.
+
+    THE BANDS ARE CACHED AS PNG, keyed by package, style, format and size
+    -- and by nothing at all about how the SVG was treated on the way in.
+    So the tempo-glyph fix landed, was deployed everywhere, and changed
+    nothing for any score that had already been rendered once: the boxed
+    bands were on disk and were reused. A rendering fix that cannot reach
+    cached output is not a fix, it is a commit.
+
+    Derived from the source rather than a number somebody remembers to
+    increment, because the version people forget to bump is exactly the
+    version this failure is made of. A comment-only edit invalidates the
+    cache too; that costs one re-render and is the right way round.
+    """
+    import hashlib
+    import inspect
+
+    material = "".join((
+        inspect.getsource(adapt),
+        inspect.getsource(substitute_music_text),
+        repr(sorted(_SMUFL_TO_UNICODE.items())),
+        _SMUFL_FALLBACK,
+        repr(_MAGENTA),
+    ))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+
+
 def adapt(svg: bytes) -> bytes:
     """A Verovio SVG, made ready for cairosvg. Cheap and idempotent."""
     for old_bytes, new_bytes in _MAGENTA:
