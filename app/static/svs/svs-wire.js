@@ -1134,18 +1134,33 @@ sampleHTML = function(){
     onerror="this.remove()"></video>`;
 };
 
-/* Overriding sampleHTML is not enough on its own: svs-min.js ends by
- * calling draw(), which fills this frame and sets a `built` flag before
- * this file has even loaded. So the drawn version is already in the page
- * and will never be rebuilt. Replace it outright, keeping the badge. */
+/* THE VIDEO IS IN index.html NOW, so the first paint is already the final
+ * thing. This used to build it here, which could only ever happen AFTER
+ * svs-min.js had drawn its illustration into the same frame and marked it
+ * `built` -- so the drawn one showed, then vanished half a second later.
+ * A flash of something that is not the product, on the first screen
+ * anybody sees.
+ *
+ * Kept as a fallback for a page whose markup predates that, and it still
+ * honours the one thing markup cannot express: somebody who has asked for
+ * less motion gets a still frame with controls rather than a loop. */
 function realSample(){
   const frame = $('#sampleFrame');
-  if(!frame || frame.dataset.real) return;
-  frame.dataset.real = '1';
-  Array.from(frame.children).forEach(el => {
-    if(!el.classList.contains('badge')) el.remove();
-  });
-  frame.insertAdjacentHTML('beforeend', sampleHTML());
+  if(!frame) return;
+  if(!frame.dataset.real){
+    frame.dataset.real = '1';
+    Array.from(frame.children).forEach(el => {
+      if(!el.classList.contains('badge')) el.remove();
+    });
+    frame.insertAdjacentHTML('beforeend', sampleHTML());
+  }
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches){
+    const vid = frame.querySelector('video.samplevid');
+    if(vid && !vid.controls){
+      vid.autoplay = false; vid.loop = false; vid.controls = true;
+      try{ vid.pause(); }catch(e){}
+    }
+  }
 }
 
 /* Name what is actually playing. */

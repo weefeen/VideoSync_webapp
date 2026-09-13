@@ -2927,6 +2927,7 @@ def check_a_volunteer_machine_stops_the_paid_one() -> str:
     # And what it declines: a recording it cannot reach, going quiet as it does.
     class _Task:
         job_id = "t1"
+        kind = "render"
         upload = str(ROOT / "no-such-recording.mp4")
         input_key = ""
         duration = 60.0
@@ -2941,6 +2942,22 @@ def check_a_volunteer_machine_stops_the_paid_one() -> str:
     _Task.input_key = "jobs/t1/input.mp4"
     if not vol._accept(_Task()):                               # noqa: SLF001
         raise Failed("a volunteer refused a task it could fetch")
+
+    # A PING CARRIES NO RECORDING BY DESIGN. Declined, it is requeued and
+    # comes straight back to the head -- one delivery at a time -- so a
+    # single ping left over from a diagnosis blocked every real job behind
+    # it, indefinitely. Measured on the live queue.
+    class _Ping:
+        job_id = "p1"
+        kind = "ping"
+        upload = ""
+        input_key = ""
+        duration = None
+
+    vol._quiet_until = 0.0                                     # noqa: SLF001
+    if not vol._accept(_Ping()):                               # noqa: SLF001
+        raise Failed("a ping was declined; requeued at the head of the "
+                     "queue it blocks every real job behind it")
 
     # The operator watches this window to see their own render happen, and
     # pika narrates six lines per connection at INFO against a heartbeat
@@ -3171,6 +3188,91 @@ def check_music_glyphs_survive_the_rasteriser() -> str:
             f"every glyph this score uses is covered, unpacked at install "
             f"and installed before the worker starts; editor marks "
             f"recoloured, upstream artefacts absent")
+
+
+def check_a_tempo_mark_is_never_a_box() -> str:
+    """The note in a tempo marking is DRAWN, on any machine.
+
+    The check above asserts the score's font is unpacked and installed.
+    That passed all along, and was never enough: a machine lent to the
+    queue had the font installed, fontconfig resolved it (`fc-match
+    Leipzig` -> Leipzig), and cairo drew an empty box anyway. Half of one
+    real recording -- 288 seconds of 578 -- carried a band with one of
+    these, and it shipped to the landing page before anybody noticed.
+
+    A fix that depends on every render host agreeing about fonts is a fix
+    that breaks quietly on the next host. So the character is SUBSTITUTED
+    for a standard Unicode music symbol before rasterising, and this
+    asserts on the output rather than on the setup: no private-use
+    character survives in live text, and what replaces it draws as
+    something other than the fallback box.
+    """
+    from app import svg
+
+    sample = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="120">'
+        '<text x="10" y="80" font-size="40">Piu lento ('
+        '<tspan font-family="Leipzig" font-size="50">\ueca7</tspan>'
+        ' = 132)</text></svg>').encode("utf-8")
+
+    out = svg.adapt(sample).decode("utf-8")
+    if "\ueca7" in out:
+        raise Failed("a private-use music character survives into the "
+                     "rasteriser, where it becomes an empty box on any host "
+                     "whose fonts do not happen to cooperate")
+    if "\u266a" not in out:
+        raise Failed("the eighth note was not substituted for a real "
+                     "Unicode symbol")
+    if "Segoe UI Symbol" not in out:
+        raise Failed("the music font was not swapped for a fallback list, so "
+                     "the substituted symbol is asked of a font that has it "
+                     "only by luck")
+
+    # ALL OR NOTHING. A tspan holding a glyph we cannot map keeps the font it
+    # asked for: half-substituting puts the wrong symbol beside a box and
+    # makes it look deliberate.
+    unknown = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<text><tspan font-family="Leipzig">\ueca7\ue0a4</tspan></text>'
+        '</svg>').encode("utf-8")
+    if "Segoe" in svg.adapt(unknown).decode("utf-8"):
+        raise Failed("a tspan with an unmapped glyph was substituted anyway; "
+                     "the unknown one becomes a box beside a real note")
+
+    # And it is idempotent, because bands are adapted on every render.
+    if svg.adapt(svg.adapt(sample)) != svg.adapt(sample):
+        raise Failed("adapting twice differs from adapting once")
+
+    if not svg.available():
+        return ("substituted and the family swapped; drawing not measured, "
+                "cairo is absent here")
+
+    # The measurement, where there is a rasteriser: the note must not be
+    # the same shape as the box it replaces.
+    import io as _io
+    from PIL import Image as _Image
+    c = svg._cairosvg()                                       # noqa: SLF001
+
+    def px(family: str, ch: str) -> int:
+        one = ('<svg xmlns="http://www.w3.org/2000/svg" width="160" '
+               'height="160"><rect width="160" height="160" fill="white"/>'
+               f'<text x="20" y="120" font-family="{family}" '
+               f'font-size="110">{ch}</text></svg>')
+        png = c.svg2png(bytestring=one.encode("utf-8"), output_width=160,
+                        output_height=160, background_color="white")
+        return sum(1 for v in _Image.open(_io.BytesIO(png)).convert("L")
+                   .getdata() if v < 200)
+
+    box = px("NoSuchFontAnywhere", "&#xECA7;")
+    note = px("Segoe UI Symbol, Apple Symbols, DejaVu Sans, Noto Music, serif",
+              "&#x266A;")
+    if note == box:
+        raise Failed(f"the substituted note draws exactly like the box it "
+                     f"replaces ({note} px); nothing was gained")
+    if note == 0:
+        raise Failed("the substituted note draws nothing at all")
+    return (f"no private-use character reaches the rasteriser; the note "
+            f"draws at {note} px against the box's {box}")
 
 def check_a_confirmation_is_bound_and_expires() -> str:
     """Knowing an address must not be enough to have us write to its owner.
@@ -4633,6 +4735,7 @@ def main() -> int:
         check_a_declined_task_really_goes_back,
         check_a_node_may_read_what_it_is_told_to_pull,
         check_music_glyphs_survive_the_rasteriser,
+        check_a_tempo_mark_is_never_a_box,
         check_a_plate_that_cannot_be_measured_is_still_served,
         check_a_render_cannot_hang_forever,
         check_a_video_counts_wherever_it_was_made,

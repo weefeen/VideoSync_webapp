@@ -154,6 +154,22 @@ def _stop_after() -> None:
     _paused.set()
 
 
+def _take_work() -> None:
+    """Take work again, whatever this machine had decided for itself.
+
+    CLEARS THE QUIET PERIOD TOO, and that is the point. `taking` is "not
+    paused AND not standing aside", so a machine that had just handed a job
+    back went on refusing for two heartbeat windows -- and the switch, which
+    only cleared `paused`, appeared to do nothing at all for six minutes.
+    The stand-back exists to let some other machine take a job; a person
+    saying "take work" outranks it, because they know something the timer
+    does not.
+    """
+    global _quiet_until
+    _quiet_until = 0.0
+    _paused.clear()
+
+
 def _preflight() -> list[str]:
     """Everything that must be true before this machine is any use."""
     problems: list[str] = []
@@ -328,6 +344,16 @@ def _accept(task) -> bool:
         logger.info("paused; job %s goes back to the queue", task.job_id)
         return False
 
+    # A PING IS NOT A RENDER. It carries no recording by design -- it is the
+    # question "is anybody there", answered in a second without touching
+    # ffmpeg -- so the reachability check below refused it, requeued it, and
+    # went quiet. With one delivery at a time it came straight back to the
+    # head of the queue, so a single ping blocked every real job behind it
+    # for as long as anybody cared to watch. Measured: one left over from a
+    # diagnosis held up a visitor's video indefinitely.
+    if task.kind != "render":
+        return True
+
     # THE RECORDING HAS TO BE REACHABLE. A task carries the web box's own
     # path and, when it was staged, the bucket key; this machine can see the
     # bucket and nothing else. Without the key the job belongs to a worker
@@ -487,7 +513,7 @@ def main() -> int:
     # terminal is where this is started -- but nothing requires you to
     # remember them, or to remember that the other half of the decision
     # lives in a file on the web box.
-    panel = lend_panel.Panel(_state, _paused.set, _paused.clear, _stop_after)
+    panel = lend_panel.Panel(_state, _paused.set, _take_work, _stop_after)
     threading.Thread(target=_watch_mode, args=(panel, stop), name="mode",
                      daemon=True).start()
     url = lend_panel.serve(panel)

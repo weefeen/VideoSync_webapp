@@ -450,6 +450,15 @@ function paint(s){
       ? 'Standing aside for ' + clock(s.quiet_for) + ' after handing one back.'
       : 'Waiting for someone to upload a performance.';
     extra.innerHTML = '';
+  }else if(s.quiet_for > 0){
+    // NOT THE SAME AS "on hold", and saying so mattered: a machine standing
+    // aside after handing a job back read as switched off, and the switch
+    // looked broken because it could not clear a timer it did not know about.
+    box.className = 'status off'; dot.className = 'dot';
+    text.textContent = 'Standing aside for ' + clock(s.quiet_for);
+    sub.textContent = 'It handed a job back, so it is letting another '
+      + 'machine take it. Switch off and on again to take work now.';
+    extra.innerHTML = '';
   }else{
     box.className = 'status off'; dot.className = 'dot';
     text.textContent = 'Everything is on hold';
