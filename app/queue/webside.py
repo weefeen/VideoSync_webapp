@@ -198,7 +198,7 @@ def _apply(event) -> None:
 HEARTBEAT_SECONDS = 60.0
 
 
-def _handle(task: RenderTask, ack) -> None:
+def _handle(task: RenderTask, ack, observe=None) -> None:
     """Run one task, saying so periodically for as long as it takes.
 
     The encode is silent for up to about twenty-eight minutes — ffmpeg
@@ -206,9 +206,26 @@ def _handle(task: RenderTask, ack) -> None:
     would expire mid-render and the janitor would queue the job again while
     it was still being rendered. The lease has to measure "is a worker there",
     not "has a stage finished".
+
+    `observe` is shown every event on its way out, and is how a machine can
+    know what it is itself doing. Everything a render reports goes to the
+    BROKER, which is right -- the table lives on the web box and the worker
+    must never write to it -- but it left the rendering machine unable to
+    answer "what am I doing" without asking the server about itself. A
+    volunteer's panel is the caller that needs it. Never allowed to affect
+    the render: an observer that raises is ignored, because watching must
+    not be able to break the thing being watched.
     """
     bus = transport()
     stop = threading.Event()
+
+    def publish(event: Event) -> None:
+        if observe is not None:
+            try:
+                observe(event)
+            except Exception:                         # noqa: BLE001
+                logger.debug("an observer raised; ignoring", exc_info=True)
+        bus.publish_event(event)
 
     def beat() -> None:
         while not stop.wait(HEARTBEAT_SECONDS):
@@ -222,7 +239,7 @@ def _handle(task: RenderTask, ack) -> None:
     threading.Thread(target=beat, name=f"beat-{task.job_id}",
                      daemon=True).start()
     try:
-        worker.handle_task(task, bus.publish_event)
+        worker.handle_task(task, publish)
     finally:
         stop.set()
         ack()

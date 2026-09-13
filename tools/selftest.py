@@ -4309,6 +4309,89 @@ def check_a_fetched_score_lands_where_it_was_told() -> str:
     return "digital root first, operator's order respected, missing roots skipped"
 
 
+def check_the_lending_panel_is_local_and_narrow() -> str:
+    """The page that lends this machine may be reached from nowhere else.
+
+    It pauses a renderer mid-job and rewrites COMPUTE_MODE on the
+    production server -- which is the difference between renting a machine
+    for every upload and renting none -- and it has NO LOGIN. That is the
+    right trade only while it cannot be reached from off this machine, so
+    the binding is the whole of its security and is asserted here rather
+    than left to a default.
+
+    The mode is the other half. It is interpolated into a command that runs
+    as root over ssh, so what may be interpolated is a fixed list, and
+    anything else is refused before it reaches a shell.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+    sys.path.insert(0, str(ROOT / "tools"))
+    import lend_panel                                       # noqa: PLC0415
+
+    src = (ROOT / "tools" / "lend_panel.py").read_text(encoding="utf-8")
+    if '"0.0.0.0"' in src or "'0.0.0.0'" in src:
+        raise Failed("the panel binds 0.0.0.0. It can pause a render and "
+                     "change what the server spends, and it has no login")
+    if '("127.0.0.1", port)' not in src:
+        raise Failed("the panel does not bind 127.0.0.1 explicitly")
+
+    state = {"taking": True, "paused": False, "quiet_for": 0.0, "job": None,
+             "free_gb": 8.0, "longest_min": 10.0,
+             "scores_here": 1, "scores_total": 2}
+    rang = []
+    panel = lend_panel.Panel(lambda: state, lambda: rang.append("pause"),
+                             lambda: rang.append("resume"),
+                             lambda: rang.append("stop"))
+    panel._set_mode("manual", "")                            # noqa: SLF001
+
+    # A mode that is not a mode never reaches ssh. If the whitelist were
+    # gone this would be shell, on the production box, as root.
+    for bogus in ("manual; rm -rf /", "$(id)", "../auto", "", "AUTO ", "x"):
+        if panel.set_mode(bogus) == "":
+            raise Failed(f"the panel accepted {bogus!r} as a mode; it is "
+                         f"interpolated into a root command on the server")
+
+    url = lend_panel.serve(panel, port=5098)
+    if not url:
+        raise Failed("the panel would not start")
+
+    page = urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
+    # Every question the page exists to answer has somewhere to appear.
+    for needed in ("Take jobs", "Stop after this job",
+                   "What is happening now", "What this machine can take",
+                   "If this machine is not listening"):
+        if needed not in page:
+            raise Failed(f"the panel never shows {needed!r}")
+    for name in lend_panel.MODES:
+        if f'value="{name}"' not in page:
+            raise Failed(f"the mode {name!r} cannot be chosen on the page")
+
+    got = _json.loads(urllib.request.urlopen(url + "state", timeout=5).read())
+    missing = {"taking", "paused", "job", "free_gb", "longest_min",
+               "mode"} - set(got)
+    if missing:
+        raise Failed(f"the page is not told {sorted(missing)}")
+
+    # The controls reach the volunteer, and an unknown one is refused.
+    urllib.request.urlopen(urllib.request.Request(
+        url + "hold", method="POST", data=b"{}"), timeout=5)
+    if rang != ["pause"]:
+        raise Failed(f"holding did not pause the volunteer: {rang}")
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            url + "mode", method="POST",
+            data=_json.dumps({"mode": "whatever"}).encode()), timeout=10)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            raise Failed(f"a bogus mode answered {exc.code}, not 400")
+    else:
+        raise Failed("a bogus mode was accepted over HTTP")
+
+    return ("loopback only, no login; the mode is a whitelist before it is "
+            f"ever a command; {len(lend_panel.MODES)} modes offered")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -4368,6 +4451,7 @@ def main() -> int:
         check_a_video_counts_wherever_it_was_made,
         check_a_bucket_without_credentials_is_not_available,
         check_a_fetched_score_lands_where_it_was_told,
+        check_the_lending_panel_is_local_and_narrow,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,

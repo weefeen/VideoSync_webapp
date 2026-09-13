@@ -2,6 +2,15 @@
 
     python tools/volunteer.py            offer this machine
     python tools/volunteer.py --check    just say whether it could
+    python tools/volunteer.py --no-panel don't open the page
+
+A PAGE OPENS. Everything below used to be a keystroke in a scrolling
+terminal and a setting in a file on another machine, neither visible from
+the other. The page at 127.0.0.1:5055 says in words whether this machine
+is taking jobs, what it is rendering and how far in, what length it would
+accept right now, and what happens to a job when this machine is not
+listening -- which is the one control that lives on the web box. Every
+change is explicit; nothing on it decides anything by itself.
 
 WHY. A render costs about 29 cents on a rented machine, because Linode
 rounds a partial hour up and a video takes ten minutes. This desktop is
@@ -46,6 +55,7 @@ import socket
 import sys
 import threading
 import time
+import webbrowser
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -56,6 +66,8 @@ from app.queue import webside, worker           # noqa: E402
 from app.queue.messages import Event            # noqa: E402
 from app.queue.transport import quiet_pika, transport  # noqa: E402
 from app.settings import settings               # noqa: E402
+
+import lend_panel                                  # noqa: E402
 
 logger = logging.getLogger("volunteer")
 
@@ -69,6 +81,73 @@ QUIET_POLL = 5.0
 # Set while a render is in flight, so the library warmer gets out of the way
 # -- the visitor's own upload is coming down the same connection.
 _rendering = threading.Event()
+
+# What this machine is doing, for the page to show. Held here rather than
+# asked of the web box: everything a render reports goes to the BROKER, so
+# without this the only way for this machine to learn what it was itself
+# doing was to ask the server about itself.
+_job_lock = threading.Lock()
+_job: dict | None = None
+
+# How many of the published scores are already on this disk. Recomputed by
+# the warmer rather than per request: it is a directory walk per package.
+_scores = {"here": 0, "total": 0}
+
+
+def _job_started(task) -> None:
+    with _job_lock:
+        global _job
+        _job = {"id": task.job_id, "piece": task.package or "a score",
+                "minutes": round((task.duration or 0) / 60.0, 1) or None,
+                "stage": "prepare", "detail": "", "began": time.time()}
+
+
+def _job_event(event) -> None:
+    """Every event this machine publishes, on its way to the broker."""
+    with _job_lock:
+        if _job is None or getattr(event, "job_id", "") != _job["id"]:
+            return
+        kind = getattr(event, "type", "")
+        if kind in ("done", "failed"):
+            _job["stage"] = "done" if kind == "done" else _job["stage"]
+            _job["detail"] = ("" if kind == "done"
+                              else getattr(event, "error", "") or "It stopped.")
+            return
+        if getattr(event, "stage", None):
+            _job["stage"] = event.stage
+        if getattr(event, "detail", ""):
+            _job["detail"] = event.detail
+
+
+def _job_finished() -> None:
+    with _job_lock:
+        global _job
+        _job = None
+
+
+def _state() -> dict:
+    """Everything the page shows, measured now."""
+    quiet_for = max(0.0, _quiet_until - time.time())
+    with _job_lock:
+        job = dict(_job) if _job else None
+    if job:
+        job["running_for"] = round(time.time() - job.pop("began"), 1)
+    free = free_memory_bytes()
+    return {
+        "taking": not _paused.is_set() and quiet_for <= 0,
+        "paused": _paused.is_set(),
+        "quiet_for": round(quiet_for, 1),
+        "job": job,
+        "free_gb": (free / 1024 ** 3) if free else None,
+        "longest_min": _longest_now() if free else None,
+        "scores_here": _scores["here"],
+        "scores_total": _scores["total"],
+    }
+
+
+def _stop_after() -> None:
+    """Finish the job in hand, then take nothing more."""
+    _paused.set()
 
 
 def _preflight() -> list[str]:
@@ -312,19 +391,34 @@ def _longest_now() -> float:
     return DTW_MINUTES_AT * math.sqrt(free_gb / DTW_GB_AT)
 
 
+def _watch_mode(panel, stop: threading.Event) -> None:
+    """Keep the web box's setting fresh, off the request path.
+
+    Read on a timer rather than when the page asks: it is an ssh round trip
+    to another machine, and a page that waits on one feels broken.
+    """
+    while not stop.is_set():
+        panel.refresh_mode()
+        stop.wait(30.0)
+
+
 def _handle(task, ack) -> None:
     """The worker's own handler, with the warmer held off around it."""
     _rendering.set()
+    _job_started(task)
     try:
-        webside._handle(task, ack)                     # noqa: SLF001
+        webside._handle(task, ack, observe=_job_event)  # noqa: SLF001
     finally:
         _rendering.clear()
+        _job_finished()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true",
                         help="report readiness and exit")
+    parser.add_argument("--no-panel", action="store_true",
+                        help="do not open the page in a browser")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -352,6 +446,7 @@ def main() -> int:
         here = [n for n in published if root and (root / n / "score").is_dir()]
     except Exception:                                  # noqa: BLE001
         published, here = [], []
+    _scores["here"], _scores["total"] = len(here), len(published)
     print(f"  ready: {worker.name()}")
     print(f"    broker   {settings.rabbitmq_url.split('@')[-1]}")
     print(f"    scores   {len(here)} of {len(published)} already here"
@@ -374,6 +469,22 @@ def main() -> int:
     print(f"  free memory now: {free_memory_bytes() / 1e9:.1f} GB "
           f"-- longest recording this could align right now: "
           f"{_longest_now():.0f} min")
+    print()
+    # THE PAGE. The keystrokes still work -- they cost nothing and a
+    # terminal is where this is started -- but nothing requires you to
+    # remember them, or to remember that the other half of the decision
+    # lives in a file on the web box.
+    panel = lend_panel.Panel(_state, _paused.set, _paused.clear, _stop_after)
+    threading.Thread(target=_watch_mode, args=(panel, stop), name="mode",
+                     daemon=True).start()
+    url = lend_panel.serve(panel)
+    if url:
+        print(f"  the panel:  {url}")
+        if not args.no_panel:
+            try:
+                webbrowser.open(url)
+            except Exception:                          # noqa: BLE001
+                pass
     print()
     print("  consuming.   p pause    r resume    q stop after this job")
     print("               Ctrl-C hands the current job straight back\n")
