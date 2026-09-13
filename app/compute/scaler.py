@@ -53,7 +53,22 @@ LABEL = "vsw-compute"
 # node is ephemeral and a static target would be permanently down between
 # renders; Prometheus re-reads the directory on its own, so nothing has to be
 # reloaded. Written when a machine is created, emptied when it goes away.
-TARGETS_FILE = pathlib.Path("/etc/prometheus/targets/compute.json")
+# WHERE THE SCALER MAY ACTUALLY WRITE. This was
+# /etc/prometheus/targets/compute.json, and every create and destroy logged
+#
+#     OSError: [Errno 30] Read-only file system
+#
+# because vsw-scaler.service runs with ProtectSystem=full, which makes /etc
+# read-only for the service -- errno 30, not a permission error, which is
+# why it did not look like one. The consequence was invisible and total:
+# Prometheus never learned a node existed, so Grafana could not show a
+# single thing about the machine doing the work.
+#
+# Fixed by writing where the scaler already owns the directory rather than
+# by loosening the sandbox. Prometheus reads it through file_sd; see
+# deploy/install-monitoring.sh.
+TARGETS_FILE = pathlib.Path(
+    settings.work_dir).parent / "prometheus" / "compute.json"
 
 
 def _publish_target(present: bool) -> None:
@@ -72,8 +87,13 @@ def _publish_target(present: bool) -> None:
             }])
         else:
             body = "[]"
+        TARGETS_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = TARGETS_FILE.with_suffix(".tmp")
         tmp.write_text(body, encoding="utf-8")
+        # Prometheus reads this as its own user; the scaler's umask would
+        # otherwise leave it unreadable and the node would stay invisible
+        # for a different reason than before.
+        tmp.chmod(0o644)
         tmp.replace(TARGETS_FILE)          # atomic: never a half-read file
     except Exception:                      # noqa: BLE001
         logger.warning("could not update the Prometheus target file",

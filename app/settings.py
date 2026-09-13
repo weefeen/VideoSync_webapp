@@ -75,6 +75,29 @@ PLAN_MEMORY_GB = {
 }
 
 
+# Hourly price per plan, USD, from Linode's own type list. Kept beside
+# PLAN_MEMORY_GB because the two are read together whenever the question is
+# "is this the right machine": memory decides the longest recording it can
+# align, price decides what that costs. Exported as a metric so the
+# dashboard judges the plan that is actually configured rather than one
+# somebody typed into a panel months ago.
+#
+# Linode ROUNDS A PARTIAL HOUR UP, so a node that renders for ten minutes
+# costs a whole hour -- which is why the scaler holds a machine to the hour
+# boundary, and why a second job inside that hour is free.
+PLAN_HOURLY_USD = {
+    "g6-standard-1": 0.015, "g6-standard-2": 0.036, "g6-standard-4": 0.072,
+    "g6-standard-6": 0.144, "g6-standard-8": 0.288, "g6-standard-16": 0.576,
+    "g6-dedicated-2": 0.054, "g6-dedicated-4": 0.108, "g6-dedicated-8": 0.216,
+    "g6-dedicated-16": 0.432, "g6-dedicated-32": 0.864,
+}
+
+
+def plan_hourly_usd(plan: str) -> float:
+    """What an hour of this plan costs, or 0 when the plan is unknown."""
+    return float(PLAN_HOURLY_USD.get((plan or "").strip(), 0.0))
+
+
 def safe_duration_minutes(ram_gb: float) -> float:
     """The longest recording a machine with this much RAM can align."""
     if ram_gb <= 0:
@@ -460,6 +483,29 @@ class Settings:
         return issues
 
 
+def _hourly_cost() -> float:
+    """What an hour of the configured plan costs.
+
+    DERIVED FROM THE PLAN, not typed beside it. COMPUTE_HOURLY_COST used to
+    be its own setting, so changing COMPUTE_PLAN left the price behind and
+    every cost panel on the dashboard quietly described the old machine --
+    the same fault the upload cap had, where the limit was sized for a box
+    that had stopped doing the work.
+
+    The env var still overrides, for a plan this table has not met.
+    """
+    override = os.getenv("COMPUTE_HOURLY_COST", "").strip()
+    if override:
+        try:
+            value = float(override)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return plan_hourly_usd(os.getenv("COMPUTE_PLAN", "").strip()) or 0.108
+
+
+
 def load() -> Settings:
     roots = [ScoreRoot(DIGITAL, p) for p in _paths("SCORE_ROOT_DIGITAL")]
     roots += [ScoreRoot(RASTER, p) for p in _paths("SCORE_ROOT_RASTER")]
@@ -491,7 +537,7 @@ def load() -> Settings:
         object_secret=os.getenv("OBJECT_SECRET", "").strip(),
         alert_email=os.getenv("ALERT_EMAIL", "").strip(),
         compute_grace_seconds=_number("COMPUTE_GRACE_SECONDS", 600.0),
-        compute_hourly_cost=_number("COMPUTE_HOURLY_COST", 0.108),
+        compute_hourly_cost=_hourly_cost(),
         compute_keep_if_arrivals=_number("COMPUTE_KEEP_IF_ARRIVALS", 1.0),
         linode_token=os.getenv("LINODE_TOKEN", "").strip(),
         compute_region=os.getenv("COMPUTE_REGION", "eu-central").strip(),

@@ -199,6 +199,25 @@ def render() -> str:
            "line it is being judged against.")
     out.append(_line("vsw_storage_included_bytes", 250 * 1000 ** 3))
 
+    # THE PLAN ITSELF, so "is this the right machine" is a graph rather than
+    # an argument. Memory decides the longest recording that can be aligned;
+    # price decides what an hour of it costs. Both come from the configured
+    # plan, so changing COMPUTE_PLAN moves every panel that judges it.
+    from .settings import plan_memory_gb, safe_duration_minutes
+
+    plan = settings.compute_plan or ""
+    family("vsw_compute_plan_memory_bytes", "gauge",
+           "RAM on the configured compute plan. The alignment allocates a "
+           "full DTW matrix, so this is what sets the longest recording the "
+           "site can accept.")
+    out.append(_line("vsw_compute_plan_memory_bytes",
+                     int(plan_memory_gb(plan) * 1024 ** 3), {"plan": plan}))
+    family("vsw_compute_plan_max_minutes", "gauge",
+           "Longest recording this plan can align, derived from its memory.")
+    out.append(_line("vsw_compute_plan_max_minutes",
+                     round(safe_duration_minutes(plan_memory_gb(plan)), 1),
+                     {"plan": plan}))
+
     family("vsw_videos_delivered_total", "counter",
            "Videos finished. Counted at delivery, never at submission.")
     out.append(_line("vsw_videos_delivered_total", whole["n"]))
