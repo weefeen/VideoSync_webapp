@@ -142,13 +142,10 @@ def _state() -> dict:
         "longest_min": _longest_now() if free else None,
         "scores_here": _scores["here"],
         "scores_total": _scores["total"],
-        # WHAT RENTING ONE COSTS, from the plan itself. The page says
-        # "~$0.29 a video" beside the choice that spends it, and a figure
-        # typed into a page is a figure that goes stale the day the plan
-        # changes -- which is the whole reason PLAN_HOURLY_USD exists.
-        # A partial hour is rounded up by the provider, so one video on an
-        # idle machine costs one hour whatever the render took.
-        "hourly_cost": settings.compute_hourly_cost,
+        # NOT the price of renting a machine. That belongs to the SERVER's
+        # plan and is read from the server: taken from here it described
+        # this laptop's development .env, and the page quoted 11 cents for
+        # a machine the server rents at 29. See lend_panel.refresh_mode.
     }
 
 
@@ -414,7 +411,17 @@ def _watch_mode(panel, stop: threading.Event) -> None:
     """
     first = True
     while not stop.is_set():
-        panel.refresh_mode()
+        try:
+            panel.refresh_mode()
+        except Exception:                              # noqa: BLE001
+            # This thread is the only thing that keeps the server's
+            # settings on the page. Without this, one bad read ended it
+            # and the panel showed a stale answer for ever, with nothing
+            # anywhere saying it had stopped looking.
+            logger.warning("could not read the server's settings",
+                           exc_info=True)
+            stop.wait(30.0)
+            continue
         if first:
             first = False
             if panel.mode().get("name") == "cloud" and not _paused.is_set():

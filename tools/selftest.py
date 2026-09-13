@@ -4399,9 +4399,25 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
         raise Failed("the panel would not start")
 
     page = urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
-    for needed in ("This computer", "Anything it is not taking"):
+    for needed in ("This computer", "can&rsquo;t take a video"):
         if needed not in page:
             raise Failed(f"the panel never asks {needed!r}")
+    # IT SAYS WHY A MACHINE WOULD EVER BE RENTED. Without both reasons the
+    # second question reads as a contradiction of the first -- "if this
+    # computer makes the videos, what is there to rent?" -- which is the
+    # question an earlier heading actually provoked.
+    for reason in ("window is closed", "free memory allows"):
+        if reason not in lend_panel.PAGE:
+            raise Failed(f"the page never says {reason!r}, so renting looks "
+                         f"like it contradicts making them here")
+    # And the price describes the SERVER's plan, not this machine's .env.
+    if "compute_hourly_cost" in (ROOT / "tools" / "volunteer.py").read_text(
+            encoding="utf-8"):
+        raise Failed("the panel's price comes from this machine's settings; "
+                     "it quotes a figure for a computer it is not describing")
+    if "COMPUTE_(MODE|PLAN)" not in src:
+        raise Failed("the panel does not read the server's plan, so it "
+                     "cannot price a machine the server would rent")
     for group, answers in (("computer", lend_panel.THIS_COMPUTER),
                            ("otherwise", lend_panel.OTHERWISE)):
         for name in answers:

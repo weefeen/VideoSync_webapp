@@ -6,25 +6,30 @@ machines: whether `tools/volunteer.py` was running here, and what
 the other, one of them is a keystroke in a scrolling terminal, and the only
 way to answer "what is happening right now" was to read a log.
 
-AND WHY IT ASKS ONLY ONE THING. Two earlier versions of this page failed
-the same way, each less badly. The first exposed the two settings
-faithfully and made the reader combine them. The second offered the four
-outcomes that combination produces -- better, but still three of the four
-were about whether this computer takes work, and that is not a decision
-anybody makes: the window is open because you want it to take work. Owning
-the machine IS the intent.
+AND WHY IT ASKS WHAT IT ASKS. Three earlier versions failed, each in a way
+only visible once somebody tried to use it. The first exposed the two
+settings faithfully and made the reader combine them. The second offered
+the four outcomes that combination produces, which read as a maze: the
+answers were not alternatives to each other, they were two axes. The third
+demoted "this computer renders" to a statement -- true most of the time and
+not always, because the processor may be wanted for something else.
 
-So there is one question, and it is about the only thing genuinely in
-doubt:
+So: two questions, two answers each, about different machines.
 
-    WHILE THIS WINDOW IS OPEN     videos are made here. A statement, not
-                                  an option.
-    WHEN IT IS CLOSED             rent a machine, or let them wait. Two
-                                  answers, and the real decision -- it is
-                                  the one that costs money.
+    THIS COMPUTER         makes the videos, or takes nothing for now
+    IF IT CANNOT TAKE ONE rent a machine, or let it wait
 
-Everything else on the page is the answer to "what is happening right
-now", which is what you open it to find out.
+The second heading names the CONSEQUENCE rather than a cause, because the
+first draft of it ("anything it is not taking") provoked exactly the right
+question -- if this computer makes the videos, why would anything be
+rented? Two things: the window is closed, or the performance is longer
+than this machine's free memory allows. The page says both, and says the
+length as a live figure rather than a generality.
+
+Everything above the questions is the answer to "what is happening right
+now", which is what you open it to find out. It is deliberately not drawn
+as a card: with the same border and fill as the answer rows, a page with
+two questions read as three lists of the same thing.
 
 LOOPBACK ONLY, and that is not a detail. This page can pause a renderer and
 change what the production server does with its money, and it has no login
@@ -40,9 +45,17 @@ from __future__ import annotations
 import html
 import json
 import logging
+import pathlib
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Its own, rather than relying on whoever imported it having done this.
+# `volunteer.py` does it before importing this; a person opening this
+# module from `tools/` does not, and the difference showed up only as a
+# price that never appeared.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 logger = logging.getLogger("volunteer.panel")
 
@@ -95,15 +108,15 @@ OTHERWISE = {
         "mode": "auto",
         "title": "Rent a machine",
         "cost": "per video",
-        "detail": "Nobody waits. One is created for the video and destroyed "
-                  "afterwards, and only while this computer is not taking it.",
+        "detail": "Nobody waits. One is created for that video and destroyed "
+                  "when it is done.",
     },
     "wait": {
         "mode": "manual",
-        "title": "Let them wait",
+        "title": "Let it wait",
         "cost": "free",
-        "detail": "Nothing is rented and nothing is charged. Uploads sit in "
-                  "the queue until this computer takes them.",
+        "detail": "Nothing is rented and nothing is charged. It sits in the "
+                  "queue until this computer can take it.",
     },
 }
 
@@ -129,7 +142,10 @@ class Panel:
         self.pause = pause
         self.resume = resume
         self.stop_after = stop_after
-        self._mode = {"name": "", "problem": "reading…"}
+        # `asked` False means the first ssh has not come back yet, which is
+        # not a problem and must not be drawn as one.
+        self._mode = {"name": "", "problem": "", "plan": "",
+                      "hourly_cost": None, "asked": False}
         self._mode_lock = threading.Lock()
 
     def full(self) -> dict:
@@ -149,11 +165,25 @@ class Panel:
             return dict(self._mode)
 
     def refresh_mode(self) -> None:
-        """Read COMPUTE_MODE off the web box. Never raises."""
+        """Read the server's own settings. Never raises.
+
+        THE PLAN COMES FROM THE SERVER TOO, and it has to. The price beside
+        "rent a machine" was read from `settings.compute_hourly_cost` on
+        THIS machine -- a laptop whose .env is a development file -- and so
+        the page quoted 11 cents for a machine the server rents at 29. A
+        figure that describes another computer has to be read from that
+        computer; the alternative is a number that is confidently wrong.
+
+        Only the plan NAME travels. What it costs is looked up in
+        `PLAN_HOURLY_USD` here, which is the same table on both machines
+        because it is the same repository -- so there is still exactly one
+        place a price is written down.
+        """
         try:
             done = subprocess.run(
                 ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                 SERVER, f"grep -E '^COMPUTE_MODE=' {ENV_PATH} || true"],
+                 SERVER,
+                 f"grep -E '^COMPUTE_(MODE|PLAN)=' {ENV_PATH} || true"],
                 capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as exc:
             self._set_mode("", f"could not reach the web box: {exc}")
@@ -162,12 +192,14 @@ class Panel:
             self._set_mode("", (done.stderr or "").strip()[-200:]
                            or "the web box refused the connection")
             return
-        name = ""
+        name, plan = "", ""
         for line in done.stdout.splitlines():
             if line.startswith("COMPUTE_MODE="):
                 name = line.split("=", 1)[1].strip().lower()
+            elif line.startswith("COMPUTE_PLAN="):
+                plan = line.split("=", 1)[1].strip()
         # Unset means `auto`, which is what app/store.py falls back to.
-        self._set_mode(name or "auto", "")
+        self._set_mode(name or "auto", "", plan)
 
     def set_computer(self, name: str) -> str:
         """Whether this machine renders. Returns '' or a reason."""
@@ -209,9 +241,30 @@ class Panel:
         logger.info("compute mode set to %s on the web box", name)
         return ""
 
-    def _set_mode(self, name: str, problem: str) -> None:
+    def _set_mode(self, name: str, problem: str, plan: str = "") -> None:
         with self._mode_lock:
-            self._mode = {"name": name, "problem": problem}
+            cost = self._mode.get("hourly_cost")
+            if plan:
+                # NEVER FATAL. This runs inside the thread that keeps the
+                # server's settings fresh, and that thread has no handler:
+                # an exception here stopped it for good, so the page froze
+                # on whatever it last knew and said nothing about why.
+                # A missing price is a missing price, not a dead panel.
+                try:
+                    from app.settings import DEFAULT_PLAN, plan_hourly_usd
+                    cost = (plan_hourly_usd(plan)
+                            or plan_hourly_usd(DEFAULT_PLAN))
+                except Exception:                      # noqa: BLE001
+                    logger.warning("could not price the plan %r", plan,
+                                   exc_info=True)
+            self._mode = {"name": name, "problem": problem,
+                          "plan": plan or self._mode.get("plan", ""),
+                          "hourly_cost": cost,
+                          # "we have not asked yet" is not "it is broken".
+                          # The placeholder was rendered as a failure, so
+                          # the page opened accusing the server of being
+                          # unreachable before the first ssh had returned.
+                          "asked": True}
 
 
 def serve(panel: Panel, port: int = 5055) -> str:
@@ -342,8 +395,14 @@ header{display:flex;align-items:baseline;gap:10px;margin-bottom:26px;
 .wordmark{font-family:var(--serif);font-weight:600;font-size:16px;
   color:var(--ink)}
 
-.status{background:var(--surface);border:1px solid var(--line);
-  border-radius:6px;padding:18px 20px}
+/* NOT A CARD. It had the same border, radius and fill as the answer rows
+   below it, so a page with two questions read as three lists of the same
+   thing. A status is reported, not chosen, and it should not look like
+   something you can pick. */
+.status{border-left:3px solid var(--good);padding:2px 0 2px 16px;
+  margin-bottom:6px}
+.status.busy{border-left-color:var(--mag)}
+.status.idle{border-left-color:var(--quiet)}
 .status .now{font-family:var(--serif);font-size:23px;font-weight:600;
   letter-spacing:-.015em;line-height:1.25;margin:0;text-wrap:balance}
 .status .sub{color:var(--soft);margin:5px 0 0;font-size:14.5px}
@@ -418,20 +477,18 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 <div class="wrap">
 <header><span class="wordmark">weefeen</span><span>this computer</span></header>
 
-<div class="status">
+<div class="status" id="status">
   <p class="now"><span class="dot" id="dot"></span><span id="nowtext">…</span></p>
   <p class="sub" id="sub"></p>
   <div id="extra"></div>
 </div>
 
 <h2>This computer</h2>
-<p class="hint">Whether this machine renders, right now. It stops taking
-  new work the moment you close the black window, whatever is set here.</p>
+<p class="hint">Whether this machine renders, right now.</p>
 <div>__COMPUTER__</div>
 
-<h2>Anything it is not taking</h2>
-<p class="hint">What the server does with an upload while this computer is
-  closed, or set to take nothing. The only answer that costs money.</p>
+<h2>If this computer can&rsquo;t take a video</h2>
+<p class="hint" id="whynot">…</p>
 <div>__OTHERWISE__</div>
 <div id="override"></div>
 <p class="problem" id="problem"></p>
@@ -473,11 +530,13 @@ function clock(s){
 
 function paint(s){
   const job = s.job, dot = document.getElementById('dot');
+  const box = document.getElementById('status');
   const text = document.getElementById('nowtext');
   const sub = document.getElementById('sub');
   const extra = document.getElementById('extra');
 
   if(job){
+    box.className = 'status busy';
     dot.className = 'dot live';
     text.textContent = 'Making a video on this computer';
     sub.textContent = job.piece + ' · running ' + clock(job.running_for) +
@@ -490,11 +549,16 @@ function paint(s){
       '<div class="after"><button id="stop">Finish this one, then stop</button></div>';
     document.getElementById('stop').onclick = () => send('/stop');
   }else if(s.taking){
+    box.className = 'status';
     dot.className = 'dot on';
-    text.textContent = 'Ready — nothing to do yet';
-    sub.textContent = 'The next upload is made on this computer.';
+    text.textContent = 'Ready — nothing to render';
+    // Deliberately NOT "the next upload is made here": that is the answer
+    // to the first question below, and saying it twice made the page read
+    // as three lists of the same thing.
+    sub.textContent = 'Waiting for someone to upload a performance.';
     extra.innerHTML = '';
   }else{
+    box.className = 'status idle';
     dot.className = 'dot';
     text.textContent = 'This computer is not taking videos';
     sub.textContent = s.server_overrides
@@ -521,14 +585,29 @@ function paint(s){
       'one is standing back. Pick either answer above to change it.</div>'
     : '';
 
-  if(s.mode && s.mode.problem)
-    document.getElementById('problem').textContent =
-      'The server could not be reached: ' + s.mode.problem;
+  // "Not asked yet" is not "broken". The placeholder used to be drawn as a
+  // failure, so the page opened accusing the server of being unreachable
+  // before the first ssh had returned.
+  document.getElementById('problem').textContent =
+    (s.mode && s.mode.asked && s.mode.problem)
+      ? 'The server could not be reached: ' + s.mode.problem : '';
 
-  // The price, from the server's own plan rather than typed in here.
-  if(s.hourly_cost){
+  // WHY a machine would ever be rented, which is the question the old
+  // heading provoked and did not answer. Exactly two reasons, and the
+  // second one is a live number, not a generality.
+  const cap = s.longest_min == null ? null : Math.floor(s.longest_min);
+  document.getElementById('whynot').textContent =
+    'Two things stop it: the black window is closed, or the performance is '
+    + 'longer than its free memory allows'
+    + (cap == null ? '' : ' (over ' + cap + ' minutes right now)')
+    + '. This is what happens then — the only answer that costs money.';
+
+  // The price, read from the SERVER's plan. Taken from this machine's own
+  // settings it quoted the wrong figure for somebody else's computer.
+  const cost = s.mode && s.mode.hourly_cost;
+  if(cost){
     document.querySelectorAll('[data-cost="rent"]').forEach(e =>
-      e.textContent = '~$' + s.hourly_cost.toFixed(2) + ' a video');
+      e.textContent = '~$' + cost.toFixed(2) + ' a video');
   }
 
   document.getElementById('facts').innerHTML = [
