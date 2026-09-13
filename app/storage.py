@@ -124,6 +124,46 @@ def output_key(job_id: str, suffix: str = ".mp4") -> str:
     return f"jobs/{job_id}/output/{job_id}_PROCESSED{suffix}"
 
 
+# What an object says it is. It used to say `video/mp4`, always, hardcoded --
+# which was true for as long as this module only ever uploaded finished
+# videos, and quietly wrong the moment it also carried score packages,
+# engravings and a catalogue. A `.tar` labelled `video/mp4` downloads from a
+# browser as a media file, because the label outranks the name; a `.svg`
+# labelled that way will not render from a bucket URL at all.
+#
+# Spelled out rather than left to `mimetypes`, whose answers depend on files
+# in /etc that differ between this machine and the server -- and a content
+# type that varies by host is a bug that only appears in production.
+CONTENT_TYPES = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".tar": "application/x-tar",
+    ".json": "application/json",
+    ".jsonl": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".txt": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".krn": "text/plain; charset=utf-8",
+}
+
+
+def content_type(key: str) -> str:
+    """The MIME type for an object key.
+
+    `application/octet-stream` for anything unlisted -- "bytes, I will not
+    guess" is the honest answer and makes a browser save the file under the
+    name it already has.
+    """
+    suffix = pathlib.PurePosixPath(key).suffix.lower()
+    return CONTENT_TYPES.get(suffix, "application/octet-stream")
+
+
 def put(local: pathlib.Path, key: str) -> int:
     """Upload, then CONFIRM, then return the confirmed size in bytes.
 
@@ -141,7 +181,7 @@ def put(local: pathlib.Path, key: str) -> int:
     expected = local.stat().st_size
     # No ACL argument anywhere: the bucket is private and objects inherit
     # that. Passing one is how a bucket accidentally becomes public.
-    extra = {"ExtraArgs": {"ContentType": "video/mp4"}}
+    extra = {"ExtraArgs": {"ContentType": content_type(key)}}
     if _transfer is not None:
         extra["Config"] = _transfer
     try:

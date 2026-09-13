@@ -2740,6 +2740,52 @@ def check_the_video_carries_the_weefeen_mark() -> str:
     return f"panel -> {seen[rnd.PANEL_LEFT]}; no panel -> {seen[rnd.PANEL_OFF]}"
 
 
+def check_an_object_says_what_it_is() -> str:
+    """Every object carries its own content type, not the video's.
+
+    `storage.put` hardcoded `ContentType: video/mp4` on every upload. That
+    was true while this module only ever carried finished videos, and
+    quietly wrong from the moment it also carried score packages,
+    engravings and a catalogue -- all of which went into the bucket
+    labelled as video.
+
+    A label outranks a filename. A `.tar` marked `video/mp4` downloads from
+    a browser as a media file, which is how this was found; a `.svg` marked
+    that way will not render from a bucket URL at all. The site was spared
+    only because it fetches previews through boto3 and sets its own
+    mimetype on the way out.
+    """
+    from app import storage
+
+    expected = {
+        "jobs/abc/output/abc_PROCESSED.mp4": "video/mp4",
+        "scores/Some Score.tar": "application/x-tar",
+        "scores/Some Score/band.svg": "image/svg+xml",
+        "scores/Some Score/pages/p1.svg": "image/svg+xml",
+        "scores/catalogue.json": "application/json",
+    }
+    for key, want in expected.items():
+        got = storage.content_type(key)
+        if got != want:
+            raise Failed(f"{key} would be stored as {got!r}, not {want!r}")
+
+    # Unknown means unknown. Guessing lets a browser rename a file it has
+    # no business renaming; "bytes" makes it keep the name it arrived with.
+    if storage.content_type("scores/no-suffix") != "application/octet-stream":
+        raise Failed("an unrecognised object claims a type it cannot know")
+
+    # And put() must actually consult it. The bug was not the absence of a
+    # table, it was a literal on the upload call.
+    src = (ROOT / "app" / "storage.py").read_text(encoding="utf-8")
+    body = src[src.index("def put("):src.index("def get(")]
+    if "content_type(key)" not in body:
+        raise Failed("put() does not derive the content type from the key")
+    if '"video/mp4"' in body:
+        raise Failed("put() still hardcodes video/mp4 for every object")
+
+    return (f"{len(expected)} kinds mapped, unknown stays octet-stream, "
+            f"put() derives it from the key")
+
 def check_the_score_reaches_a_compute_node() -> str:
     """The score a node renders can get to a host that has never had it.
 
@@ -3243,6 +3289,7 @@ def main() -> int:
         check_a_compute_node_gets_no_dangerous_secret,
         check_a_compute_node_can_actually_run,
         check_the_input_reaches_a_compute_node,
+        check_an_object_says_what_it_is,
         check_the_score_reaches_a_compute_node,
         check_the_web_box_needs_no_scores,
         check_a_transparent_band_floats_over_the_video,
