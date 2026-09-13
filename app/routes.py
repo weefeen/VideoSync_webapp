@@ -254,6 +254,36 @@ def api_visitors():
     return jsonify(visitors.everything())
 
 
+@bp.post("/api/limits/forget")
+def api_limits_forget():
+    """Clear every rate-limit counter. NOT for the public, and guarded.
+
+    The operator's undo. Three renders a week is right for a visitor and
+    impossible for the person proving the service works, so there has to be
+    a way back -- and it has to be a way only they can reach, because a
+    reset anyone could call is the same as no limit at all. This is the one
+    endpoint here that makes the service MORE abusable, so unlike its
+    neighbours it does not rely on the front-end configuration alone.
+
+    THE GUARD IS THE ABSENCE OF `X-Forwarded-For`, NOT `remote_addr`. Every
+    request arrives from 127.0.0.1 because Apache proxies from there, so
+    `remote_addr` says "local" for the whole internet and would have been a
+    guard that permits everything. Apache sets X-Forwarded-For on what it
+    proxies; a call made on the box straight to gunicorn carries none. That
+    is the difference between "came from outside" and "came from someone
+    already on this machine", and it is the only one available here.
+
+    Apache denies the path as well. Two independent mistakes are needed to
+    expose it, which is the point.
+    """
+    if request.headers.get("X-Forwarded-For"):
+        # Indistinguishable from a path that does not exist, deliberately.
+        return jsonify({"error": "Not found"}), 404
+    held = limits.forget()
+    logger.warning("rate limits cleared by a local request (%d key(s))", held)
+    return jsonify({"cleared": held})
+
+
 @bp.get("/api/stats")
 def api_stats():
     """What this install has actually done. Counts, never estimates."""

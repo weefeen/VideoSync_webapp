@@ -146,6 +146,32 @@ class Panel:
             return (done.stderr or "").strip()[-200:] or "the change was refused"
         return ""
 
+    def forget_limits(self) -> tuple[str, int]:
+        """Clear the site's rate limits. Returns (problem, keys cleared).
+
+        Reached over ssh and then over LOOPBACK on the web box, never from
+        the internet: `curl` to 127.0.0.1:5000 carries no X-Forwarded-For,
+        which is how the endpoint tells "somebody already on this machine"
+        from "the whole internet arriving through Apache". Apache denies
+        the path too, so two independent mistakes are needed to expose it.
+        """
+        try:
+            done = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                 SERVER,
+                 "curl -fsS -m 20 -X POST http://127.0.0.1:5000"
+                 "/api/limits/forget"],
+                capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"could not reach the server: {exc}", 0
+        if done.returncode != 0:
+            return ((done.stderr or "").strip()[-200:]
+                    or "the server refused it"), 0
+        try:
+            return "", int(json.loads(done.stdout).get("cleared", 0))
+        except (ValueError, TypeError):
+            return "the server's answer could not be read", 0
+
     def set_working(self, on: bool) -> str:
         """The one control. Returns '' or a reason."""
         (self.resume if on else self.pause)()
@@ -204,6 +230,13 @@ def serve(panel: Panel, port: int = 5055) -> str:
                     return
             elif path == "/stop":
                 panel.stop_after()
+            elif path == "/forget-limits":
+                problem, cleared = panel.forget_limits()
+                if problem:
+                    self._json({"problem": problem}, code=400)
+                    return
+                self._json({**panel.full(), "cleared": cleared})
+                return
             else:
                 self._send(404, b"no", "text/plain")
                 return
@@ -313,6 +346,7 @@ button.plain{font:inherit;font-size:13.5px;font-weight:600;border-radius:5px;
 button.plain:hover{border-color:var(--ink)}
 button.plain:focus-visible{outline:3px solid var(--mag);outline-offset:2px}
 
+.hint{color:var(--soft);font-size:14px;margin:0 0 12px}
 h2{font-family:var(--serif);font-size:17px;font-weight:600;margin:34px 0 12px}
 .facts{display:flex;flex-wrap:wrap;gap:24px;padding:16px 18px;
   background:var(--surface);border:1px solid var(--line);border-radius:8px}
@@ -343,6 +377,17 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 
 <h2>What this computer can take</h2>
 <div class="facts" id="facts"></div>
+
+<h2>Testing</h2>
+<p class="hint">The site allows one visitor three videos a week, which is
+  right for a visitor and impossible for whoever is proving it works.</p>
+<div class="control">
+  <span class="label"><b>Clear the weekly limits</b>
+    <span>Everyone&rsquo;s, on the whole site — uploads, renders and mail.
+      There is no way to clear one person&rsquo;s.</span></span>
+  <button class="plain" id="forget">Clear</button>
+</div>
+<p class="problem" id="cleared"></p>
 
 <footer>This page is on this computer only — <code>127.0.0.1:__PORT__</code>.
   Closing it changes nothing. Closing the black <code>lend.bat</code> window
@@ -437,6 +482,20 @@ function paint(s){
   ].map(([n,k]) => '<div class="fact"><div class="n">' + n +
                    '</div><div class="k">' + k + '</div></div>').join('');
 }
+
+document.getElementById('forget').onclick = async function(){
+  const note = document.getElementById('cleared');
+  this.disabled = true; note.textContent = 'Clearing…';
+  try{
+    const r = await fetch('/forget-limits', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'});
+    const s = await r.json();
+    note.textContent = r.ok
+      ? 'Cleared ' + s.cleared + ' counter(s). Upload again straight away.'
+      : (s.problem || 'That did not go through.');
+  }catch(e){ note.textContent = e.message; }
+  this.disabled = false;
+};
 
 document.getElementById('knob').onclick = function(){
   send('/working', {on: this.getAttribute('aria-checked') !== 'true'});

@@ -93,7 +93,7 @@ cat > /etc/apache2/sites-available/vsw-https.conf <<APACHE
     # /api/visitors existing is itself worth knowing to somebody looking.
     # Matched before any ProxyPass, and ProxyPass ! keeps each one from
     # reaching the application at all.
-    <LocationMatch "^/(metrics|api/(failures|compute|visitors))">
+    <LocationMatch "^/(metrics|api/(failures|compute|visitors)|api/limits/forget)">
         Require all denied
         ErrorDocument 403 "Not found"
     </LocationMatch>
@@ -101,6 +101,7 @@ cat > /etc/apache2/sites-available/vsw-https.conf <<APACHE
     ProxyPass /api/failures !
     ProxyPass /api/compute !
     ProxyPass /api/visitors !
+    ProxyPass /api/limits/forget !
 
     # ── everything else goes to the app ─────────────────────────────────
     ProxyPreserveHost On

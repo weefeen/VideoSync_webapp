@@ -4416,6 +4416,82 @@ def check_the_lending_panel_is_local_and_narrow() -> str:
             "'manual' is the only mode it can write, so it never rents")
 
 
+def check_the_limit_reset_cannot_be_reached_from_outside() -> str:
+    """The one endpoint that makes this service MORE abusable.
+
+    Three renders a week is right for a visitor and impossible for whoever
+    is proving the service works, so there has to be a way to clear the
+    counters -- and a reset anybody could call is the same as having no
+    limits at all, on a free, unauthenticated endpoint that costs a GPU
+    minute and a multi-gigabyte render per call.
+
+    ITS GUARD IS NOT `remote_addr`, AND THAT IS THE POINT. Apache proxies
+    from 127.0.0.1, so `remote_addr` is loopback for the entire internet:
+    the obvious guard would have permitted everything while reading as
+    though it permitted nothing. Apache sets X-Forwarded-For on what it
+    proxies and a call made on the box straight to gunicorn carries none,
+    so the ABSENCE of that header is what separates "already on this
+    machine" from "arrived from outside".
+
+    Checked here rather than trusted to the front end, because the
+    neighbouring endpoints (/metrics, /api/visitors) rely on the Apache
+    configuration alone -- which is right for reading, and not enough for
+    a switch that turns the limits off.
+    """
+    from app import limits, routes
+
+    app = routes.create_app()
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    # A visitor, arriving through the proxy: indistinguishable from a path
+    # that does not exist.
+    got = client.post("/api/limits/forget",
+                      headers={"X-Forwarded-For": "203.0.113.9"})
+    if got.status_code != 404:
+        raise Failed(
+            f"a proxied request cleared the rate limits ({got.status_code}). "
+            f"Anyone could reset their own allowance, which is the same as "
+            f"having none")
+
+    # A chain, which is what a second proxy produces. Still outside.
+    got = client.post("/api/limits/forget",
+                      headers={"X-Forwarded-For": "203.0.113.9, 10.0.0.2"})
+    if got.status_code != 404:
+        raise Failed("a forwarded chain cleared the rate limits")
+
+    # GET is not it either: a link somebody clicks must not disarm this.
+    if client.get("/api/limits/forget").status_code not in (404, 405):
+        raise Failed("the reset answers GET, so a link or a crawler could "
+                     "clear the limits")
+
+    # And from the box itself it works, and actually empties the counters.
+    limits.guard("render_ip", "selftest-victim")
+    before = limits._counters._hits                     # noqa: SLF001
+    if not before:
+        raise Failed("nothing was recorded, so clearing proves nothing")
+    got = client.post("/api/limits/forget")
+    if got.status_code != 200:
+        raise Failed(f"a local request could not clear the limits "
+                     f"({got.status_code})")
+    if limits._counters._hits:                          # noqa: SLF001
+        raise Failed("the reset answered but the counters are still there")
+
+    allowed, _ = limits._counters.check("render_ip",     # noqa: SLF001
+                                        "selftest-victim")
+    if not allowed:
+        raise Failed("the counters were cleared and the limit still refuses")
+
+    # The front end denies it as well -- two independent mistakes needed.
+    vhost = (ROOT / "deploy" / "install-web.sh").read_text(encoding="utf-8")
+    if "limits/forget" not in vhost:
+        raise Failed("the installer's Apache rules do not deny "
+                     "/api/limits/forget, so a rebuilt box would publish it")
+
+    return ("a proxied request gets 404, a chain gets 404, GET is refused, "
+            "and a call from the box clears every counter")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -4476,6 +4552,7 @@ def main() -> int:
         check_a_bucket_without_credentials_is_not_available,
         check_a_fetched_score_lands_where_it_was_told,
         check_the_lending_panel_is_local_and_narrow,
+        check_the_limit_reset_cannot_be_reached_from_outside,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_a_refusal_is_not_a_failed_recognition,

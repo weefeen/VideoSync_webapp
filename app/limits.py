@@ -174,7 +174,38 @@ class _Counters:
         return kept
 
 
+    def forget(self) -> int:
+        """Drop every counter. Returns how many keys were held.
+
+        The operator's undo, and the only thing here that raises a limit
+        rather than lowering one. It exists because the person who has to
+        test this service is subject to it: three renders a week is right
+        for a visitor and impossible for somebody proving the thing works.
+
+        Everything, not one address. The render allowance is keyed on the
+        client address AND the mail address, and an operator testing from
+        a phone, a laptop and a tunnel is several clients -- so "reset
+        mine" would need to name a set nobody can enumerate. On an install
+        this size, clearing the lot is both simpler and honest about what
+        it does.
+        """
+        with self._lock:
+            self._load()
+            held = len(self._hits)
+            self._hits = {}
+            self._dirty = True
+            self._save()
+        logger.warning("every rate-limit counter was cleared (%d key(s))",
+                       held)
+        return held
+
+
 _counters = _Counters()
+
+
+def forget() -> int:
+    """Clear every rate-limit counter. Returns how many keys were held."""
+    return _counters.forget()
 
 
 class Refused(Exception):
