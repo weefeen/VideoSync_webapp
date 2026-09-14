@@ -243,7 +243,8 @@ recognise = function(){
     if(copy) copy.innerHTML = `
       <h2>Uploading and checking your <em>video</em></h2>
       <span class="uprail"><i id="listenbar" style="width:0%"></i></span>
-      <span class="lab">${esc(S.file || '')} &middot; please wait a few seconds</span>`;
+      <span class="lab"><i class="live"></i>${esc(S.file || '')}
+        &middot; please wait, this takes a few seconds</span>`;
     listenTick();
     return;
   }
@@ -351,6 +352,28 @@ bandCSS.textContent = `
     background:var(--hair);overflow:hidden;margin:14px 0 10px}
   .uprail i{position:absolute;left:0;top:0;height:100%;border-radius:2px;
     background:var(--mag);transition:width .25s linear}
+
+  /* SOMETHING THAT IS OBVIOUSLY ALIVE. Recognition is the better part of a
+     minute, and the only sign of it was a 2px rail advancing on a time
+     estimate -- which at that height and speed is indistinguishable from a
+     page that has stopped. A blinking light says "working" before anybody
+     has to judge whether a bar has moved.
+     It also pulses the RAIL itself, so the two agree rather than one
+     looking alive and the other stuck. */
+  .lab .live{display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:#e0a92b;box-shadow:0 0 0 0 rgba(224,169,43,.55);
+    margin-right:9px;vertical-align:middle;
+    animation:liveblink 1.1s ease-in-out infinite}
+  @keyframes liveblink{
+    0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(224,169,43,.55)}
+    50%{opacity:.3;box-shadow:0 0 0 5px rgba(224,169,43,0)}}
+  .dropzone.busy .uprail{animation:railbreathe 1.6s ease-in-out infinite}
+  @keyframes railbreathe{0%,100%{opacity:1}50%{opacity:.55}}
+  /* Somebody who asked for less motion still gets the words, and a light
+     that is simply on rather than blinking. */
+  @media (prefers-reduced-motion:reduce){
+    .lab .live{animation:none}
+    .dropzone.busy .uprail{animation:none}}
 `;
 document.head.appendChild(bandCSS);
 
@@ -1222,12 +1245,22 @@ function realSample(){
     });
     frame.insertAdjacentHTML('beforeend', sampleHTML());
   }
+  const vid = frame.querySelector('video.samplevid');
   if(matchMedia('(prefers-reduced-motion: reduce)').matches){
-    const vid = frame.querySelector('video.samplevid');
     if(vid && !vid.controls){
       vid.autoplay = false; vid.loop = false; vid.controls = true;
       try{ vid.pause(); }catch(e){}
     }
+  }else if(vid){
+    // ASK, DO NOT ASSUME. The `autoplay` attribute is a request a browser
+    // may refuse -- battery saver, a site setting, a policy -- and a
+    // <video> that never decodes a frame draws NOTHING: the frame's own
+    // near-black background, which reads as a broken page rather than a
+    // paused one. The poster covers that; this covers the case where it
+    // could have played and simply was not asked twice.
+    const go = () => { const p = vid.play(); if(p) p.catch(()=>{}); };
+    go();
+    document.addEventListener('click', go, {once: true});
   }
 }
 
