@@ -28,3 +28,4 @@ preview/
 lend-setup.py
 .env.before-lending
 *.bak-*
+tools/.fontcache/
