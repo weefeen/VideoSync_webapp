@@ -34,10 +34,19 @@ That mapping is the whole reason this can be done up front — the names come
 from the pair list the recogniser answers with, so a band published here is
 findable by the exact string a request will carry.
 
-VEROVIO IS NOT IN THE APP'S ENVIRONMENT. It lives where the engraving
-happens; this is an operator's tool and is run with that interpreter:
+TWO INTERPRETERS, AND SO TWO STEPS. Verovio lives where the engraving
+happens and boto3 lives with the app; neither environment has both, and
+installing one into the other to save a step is how an environment becomes
+a mystery. So engraving writes files, and a second pass uploads them:
 
-    C:\\Users\\msmabq\\.conda\\envs\\2026liszt\\python.exe tools/make_preview_bands.py --all
+    ..\\envs\\2026liszt\\python.exe        tools/make_preview_bands.py --all --out bands
+    ..\\envs\\VideoScoreSync\\python.exe   tools/make_preview_bands.py --upload-from bands
+
+`--out` writes `<code>.svg` per work plus a `previews.json` beside them,
+which carries the mapping the upload needs: a band belongs in the bucket
+under the EDITION name, and the file on disk is named for the corpus code.
+`--all` on its own still publishes directly, for an environment that has
+both.
 """
 from __future__ import annotations
 
@@ -226,6 +235,41 @@ def title_of(krn: pathlib.Path) -> str:
     return ", ".join(p for p in (otl, ops) if p)
 
 
+def upload_from(folder: pathlib.Path) -> int:
+    """Publish bands a `--out` run wrote. Needs boto3, not verovio.
+
+    The second half of the two-step. It reads the `previews.json` that run
+    left behind, because the file on disk is named for the corpus code and
+    the bucket wants the edition name -- and nothing else knows which is
+    which.
+    """
+    index_path = folder / "previews.json"
+    if not index_path.is_file():
+        print(f"  no previews.json in {folder} -- run --out there first")
+        return 1
+    if not storage.available():
+        print(f"  no bucket: {storage.status().get('problem')}")
+        return 1
+
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    sent = missing = 0
+    for name, meta in sorted(index.items()):
+        band = folder / f"{meta.get('source', '')}.svg"
+        if not band.is_file():
+            missing += 1
+            continue
+        storage.put(band, f"scores/{name}/band.svg")
+        sent += 1
+        if sent % 25 == 0:
+            print(f"    {sent} of {len(index)} ...")
+
+    write_previews(index)
+    print(f"\n  published {sent} band(s); previews.json lists {len(index)}")
+    if missing:
+        print(f"  {missing} listed with no file on disk")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--list", action="store_true",
@@ -233,8 +277,13 @@ def main() -> int:
     ap.add_argument("--one", help="a single corpus code, e.g. 023-1-BH")
     ap.add_argument("--all", action="store_true", help="every work with a source")
     ap.add_argument("--out", help="write beside the tool instead of publishing")
+    ap.add_argument("--upload-from", dest="upload_from",
+                    help="publish bands a previous --out run wrote")
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
+
+    if args.upload_from:
+        return upload_from(pathlib.Path(args.upload_from))
 
     if not CORPUS.is_dir():
         print(f"no corpus at {CORPUS}")
@@ -300,6 +349,13 @@ def main() -> int:
         print(f"\n  published {done} band(s); previews.json now lists "
               f"{len(index)}")
     else:
+        if out_dir and index:
+            # The mapping the upload pass needs. Without it a folder of
+            # `023-1-BH.svg` cannot be published: the bucket wants the
+            # edition name, and only this knows which is which.
+            (out_dir / "previews.json").write_text(
+                json.dumps(index, ensure_ascii=False, indent=1),
+                encoding="utf-8")
         print(f"\n  wrote {done} band(s)"
               + (f" to {out_dir}" if out_dir else ""))
     if failed:

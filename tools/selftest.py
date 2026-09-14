@@ -4901,6 +4901,20 @@ def check_a_wanted_score_reaches_the_operator() -> str:
             raise Failed(f"the panel would start {why}, and both halves "
                          f"become arguments to a command on the server")
 
+    # THE TWO SHAPES OF `editions`, which cost a failed submission. The
+    # live answer carries objects (`library.resolve` -> `e.public()`); the
+    # stored recognition carries bare names. The page must read a NAME from
+    # either, because it puts that string in the render request -- and
+    # reading the stored shape while the server sends the live one posted
+    # "{'name': 'Op.25_1.re ETUDE...', 'present': False}" as a score.
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8")
+    if "typeof e === 'string'" not in wire:
+        raise Failed("the page assumes one shape for an edition. The live "
+                     "answer sends objects and the stored recognition sends "
+                     "names; whichever it assumes, the other one submits a "
+                     "score nobody can find")
+
     page = lend_panel.PAGE
     if "Asked for, not engraved" not in page:
         raise Failed("the panel never shows what was asked for")

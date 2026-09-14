@@ -542,7 +542,17 @@ function applyAnswer(a){
     // dimensions, and `staveHTML` falls back to the drawn staves. What the
     // server does with the request is the server's half.
     const c = cands[0] || {};
-    const folder = (c.editions || [])[0] || '';
+    // EDITIONS ARRIVE AS OBJECTS HERE, and as bare strings in the stored
+    // recognition the server reads later. `library.resolve` sends
+    // `e.public()` -- {name, present, renderable} -- while
+    // `recognitions.candidates` holds the names flattened. Reading the
+    // stored form and writing the page against it sent a stringified
+    // object as the score, and the server answered "No score package named
+    // \"{'name': 'Op.25_1.re ETUDE...', 'present': False}\"".
+    const eds = (c.editions || [])
+      .map(e => (typeof e === 'string' ? e : (e && e.name) || ''))
+      .filter(Boolean);
+    const folder = eds[0] || '';
     if(folder){
       const label = c.label || S.heardLabel || 'this piece';
       // `_readable` composes "Op.23 · Ballade" when the name has both.
