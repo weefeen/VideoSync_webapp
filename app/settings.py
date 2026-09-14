@@ -283,6 +283,26 @@ class Settings:
     vss_root: pathlib.Path | None = None
     sync_python: str = ""
     sync_timeout: float = 900.0
+    # WHICH ALIGNER. Two methods, and the choice is real rather than a
+    # preference between equivalents:
+    #
+    #   score      music_line_extractor's V11_SOD. The recording is aligned
+    #              against THE SCORE, by score-onset dynamic programming.
+    #              Right on everything except concertos, and it needs no
+    #              reference recording at all -- so a package is its score.
+    #
+    #   reference  The older path: the recording is warped onto the
+    #              package's own reference performance by chroma matching.
+    #              Right about seventy percent of the time on solo piano,
+    #              but it is what to use where the score cannot carry the
+    #              alignment -- a concerto, where the orchestra is in the
+    #              recording and not in the piano score.
+    #
+    # A concerto is a property of the piece, not of the site, so a package
+    # may override this for itself; see `method_for` below.
+    sync_method: str = "score"
+    mle_root: pathlib.Path | None = None
+    mle_python: str = ""
     # Telling someone their video is ready. Credentials belong in .env,
     # which is not committed; .env.example carries the names only.
     smtp_host: str = ""
@@ -320,6 +340,54 @@ class Settings:
         if not self.composer_filter:
             return True
         return self.composer_filter.strip().lower() in (surname or "").lower()
+
+    SYNC_METHODS = ("score", "reference")
+
+    def method_for(self, package_root=None) -> str:
+        """Which aligner to use, for this package.
+
+        A package may pin its own by shipping `score/sync.json` holding
+        `{"method": "reference"}`. That is where the knowledge belongs: a
+        concerto needs the reference method because of what the piece IS,
+        and flipping the whole site for one work would make every other
+        render worse.
+
+        An unknown name falls back to the configured default rather than
+        raising. A typo in one package's file must not take the site down.
+        """
+        import json as _json
+
+        chosen = (self.sync_method or "score").strip().lower()
+        if chosen not in self.SYNC_METHODS:
+            chosen = "score"
+        if package_root is None:
+            return chosen
+        pinned = pathlib.Path(package_root) / "score" / "sync.json"
+        if not pinned.is_file():
+            return chosen
+        try:
+            asked = str(_json.loads(pinned.read_text(encoding="utf-8"))
+                        .get("method", "")).strip().lower()
+        except (ValueError, OSError, AttributeError):
+            return chosen
+        return asked if asked in self.SYNC_METHODS else chosen
+
+    def why_cannot_align_with_the_score(self) -> str:
+        """Empty when the score-based aligner can run here."""
+        if not self.mle_root:
+            return ("MLE_ROOT is not set. Score-based alignment is "
+                    "music_line_extractor's, and it is run from its own "
+                    "checkout.")
+        if not (self.mle_root / "services" / "auto_sync_harness.py").is_file():
+            return (f"No music_line_extractor at {self.mle_root}: it has no "
+                    f"services/auto_sync_harness.py.")
+        if not self.mle_python:
+            return ("MLE_PYTHON is not set. The aligner needs the "
+                    "extractor's own interpreter, not this one.")
+        if not (pathlib.Path(self.mle_python).is_file()
+                or shutil.which(self.mle_python)):
+            return f"No interpreter at {self.mle_python!r}."
+        return ""
 
     def background_for(self, kind: str) -> str | None:
         """The configured artwork for a background kind, if it exists."""
@@ -585,6 +653,10 @@ def load() -> Settings:
         geoip_db=_one("GEOIP_DB"),
         vss_root=_one("VSS_ROOT"),
         sync_python=os.getenv("SYNC_PYTHON", "").strip().strip('"'),
+        sync_method=(os.getenv("SYNC_METHOD", "score").strip().lower()
+                     or "score"),
+        mle_root=_one("MLE_ROOT"),
+        mle_python=os.getenv("MLE_PYTHON", "").strip().strip('"'),
         sync_timeout=_number("SYNC_TIMEOUT", 900.0),
         smtp_host=os.getenv("SMTP_HOST", "").strip(),
         smtp_port=int(_number("SMTP_PORT", 587)),

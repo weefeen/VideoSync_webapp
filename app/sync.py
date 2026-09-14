@@ -1,9 +1,26 @@
-"""Align a performance to a score, via VideoScoreSync.
+"""Align a performance to a score. Two methods, neither of them ours.
 
-We do not implement alignment. VideoScoreSync does — `audio_to_chroma`
-turns a recording into a chroma matrix, `audio_synchronization_service`
-warps it against the package's own reference chroma — and it is reached as
-a **subprocess with its own interpreter**, never imported.
+SEPARATION OF CONCERNS. music_line_extractor prepares scores and does the
+synchronisation; VideoScoreSync embeds the score into the video in sync.
+This module owns neither job — it chooses between two aligners and reads
+the answer.
+
+    score      music_line_extractor's V11_SOD, score-onset dynamic
+               programming. The recording is aligned against THE SCORE, so
+               a package needs no reference performance at all. Right on
+               everything except concertos.
+
+    reference  VideoScoreSync's chroma warp onto the package's own
+               reference recording. Right about seventy percent of the
+               time on solo piano, and the method to use where the score
+               cannot carry the alignment -- a concerto, whose orchestra
+               is in the recording and not in the piano score.
+
+`SYNC_METHOD` picks the default and a package may pin its own in
+`score/sync.json`, because a concerto is a property of the piece.
+
+Either way it is reached as a **subprocess with its own interpreter**,
+never imported.
 
 That is forced rather than chosen. Chroma extraction aborts the whole
 process under the interpreter this app runs on:
@@ -35,7 +52,21 @@ from .settings import settings
 
 logger = logging.getLogger(__name__)
 
-RUNNER = pathlib.Path(__file__).resolve().parent.parent / "tools" / "sync_runner.py"
+_TOOLS = pathlib.Path(__file__).resolve().parent.parent / "tools"
+
+# ONE PER METHOD, both subprocesses, each under the interpreter of the
+# library that owns the work.
+#
+#   score      music_line_extractor's V11_SOD. Aligns the recording
+#              against THE SCORE, needs no reference recording.
+#   reference  VideoScoreSync's chroma warp onto the package's own
+#              reference performance. For a concerto, where the orchestra
+#              is in the recording and not in the piano score.
+RUNNERS = {"score": _TOOLS / "mle_sync_runner.py",
+           "reference": _TOOLS / "sync_runner.py"}
+
+# Kept: `tools/selftest.py` and older callers name it.
+RUNNER = RUNNERS["reference"]
 
 
 class SyncError(RuntimeError):
@@ -115,15 +146,45 @@ def align(package_root: pathlib.Path, media: pathlib.Path,
     measures = job_dir / "measures.data"
     status = work / "result.json"
 
-    command = [
-        settings.sync_python, "-u", str(RUNNER),
-        "--vss-root", str(settings.vss_root),
-        "--package", str(package_root),
-        "--audio", str(media),
-        "--out", str(measures),
-        "--work", str(work),
-        "--status", str(status),
-    ]
+    # WHICH ALIGNER, and the package gets the last word: a concerto needs
+    # the reference method because of what the piece is, so pinning it
+    # site-wide would make every other render worse.
+    method = settings.method_for(package_root)
+    if method == "score":
+        problem = settings.why_cannot_align_with_the_score()
+        if problem:
+            # Falling back rather than refusing. The reference path is
+            # what ran until today and still works; a machine that cannot
+            # reach the extractor should render a video by the old route,
+            # not fail the job. Logged at warning because a node quietly
+            # using the worse aligner is worth noticing.
+            logger.warning("score-based alignment unavailable (%s); "
+                           "falling back to the reference method", problem)
+            method = "reference"
+
+    if method == "score":
+        command = [
+            settings.mle_python, "-u", str(RUNNERS["score"]),
+            "--mle-root", str(settings.mle_root),
+            "--package", str(package_root),
+            "--audio", str(media),
+            "--out", str(measures),
+            "--work", str(work),
+            "--status", str(status),
+        ]
+        interpreter = settings.mle_python
+    else:
+        command = [
+            settings.sync_python, "-u", str(RUNNERS["reference"]),
+            "--vss-root", str(settings.vss_root),
+            "--package", str(package_root),
+            "--audio", str(media),
+            "--out", str(measures),
+            "--work", str(work),
+            "--status", str(status),
+        ]
+        interpreter = settings.sync_python
+    logger.info("aligning %s by the %s method", media.name, method)
     # DONTWRITEBYTECODE because the child imports from a repository we are
     # only ever allowed to read: without it, running this leaves __pycache__
     # directories behind inside VideoScoreSync, which even tracks its own.
@@ -146,7 +207,7 @@ def align(package_root: pathlib.Path, media: pathlib.Path,
         ) from exc
     except OSError as exc:
         raise SyncUnavailable(
-            f"Could not run the aligner with {settings.sync_python!r}: {exc}"
+            f"Could not run the aligner with {interpreter!r}: {exc}"
         ) from exc
 
     payload = _status(status, done)
@@ -159,6 +220,19 @@ def align(package_root: pathlib.Path, media: pathlib.Path,
 
     if not measures.is_file():
         raise SyncError("Alignment reported success but wrote no measures.")
+
+    # THE ALIGNER'S OWN VERDICT, where it has one. Bars that do not run
+    # forwards are a wrong alignment however plausible each timing looks,
+    # and no measurement taken afterwards would catch it: crowding counts
+    # bars sharing a moment and span counts the extent, and a jumbled
+    # alignment can pass both.
+    quality = payload.get("quality") or {}
+    if quality and not quality.get("monotonic", True):
+        raise SyncError(
+            "The score could not be followed through that recording — the "
+            "bars did not come out in order. This usually means the "
+            "recording is of a different piece, or an arrangement the "
+            "engraved score does not match.")
 
     crowding = float(payload.get("crowding", 0.0))
     crowded = int(payload.get("crowded_measures", 0))

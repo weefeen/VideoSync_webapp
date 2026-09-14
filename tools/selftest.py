@@ -5197,6 +5197,82 @@ def check_the_drifting_backdrop_can_find_a_plate() -> str:
             f"{len(body.get('works', []))} work(s) can back the page here")
 
 
+def check_each_library_does_its_own_job() -> str:
+    """Two aligners, chosen by setting, and the piece gets the last word.
+
+    SEPARATION OF CONCERNS. music_line_extractor prepares scores and does
+    the synchronisation; VideoScoreSync embeds the score into the video in
+    sync. The web application had drifted from that and asked
+    VideoScoreSync to align as well, by chroma matching -- right about
+    seventy percent of the time.
+
+    So there are two methods now, and the checks here are the joins that
+    would fail silently:
+
+      * the score method exists, is the default, and is routed to its own
+        runner under its own interpreter;
+      * a package can pin the other one, because a concerto needs the
+        reference method for what the piece IS and flipping the site for
+        one work would make every other render worse;
+      * both runners agree on how a measures file is read. They did not:
+        the second copy of that parser read a measure number as a
+        timestamp, and a flawless alignment was refused by the span check
+        as a result.
+    """
+    import json as _json
+    import tempfile as _tmp
+    from app import sync as syncing
+    from app.settings import settings
+
+    # 1. Both runners exist and are distinct files.
+    for name in ("score", "reference"):
+        if name not in syncing.RUNNERS:
+            raise Failed(f"there is no {name!r} aligner to choose")
+        if not syncing.RUNNERS[name].is_file():
+            raise Failed(f"the {name!r} aligner names a runner that is not "
+                         f"there: {syncing.RUNNERS[name]}")
+    if syncing.RUNNERS["score"] == syncing.RUNNERS["reference"]:
+        raise Failed("both methods point at the same runner")
+
+    # 2. The score method is the default, and the setting is readable.
+    if settings.method_for() not in settings.SYNC_METHODS:
+        raise Failed(f"the configured method {settings.sync_method!r} is not "
+                     f"one of {settings.SYNC_METHODS}")
+
+    # 3. A package pins its own, and a broken pin does not take the site
+    #    down -- it falls back rather than raising.
+    with _tmp.TemporaryDirectory() as tmp:
+        pkg = __import__("pathlib").Path(tmp) / "Op.X__000-0-XX"
+        (pkg / "score").mkdir(parents=True)
+        default = settings.method_for()
+        other = next(m for m in settings.SYNC_METHODS if m != default)
+        (pkg / "score" / "sync.json").write_text(
+            _json.dumps({"method": other}), encoding="utf-8")
+        if settings.method_for(pkg) != other:
+            raise Failed(f"a package pinned {other!r} and was given "
+                         f"{settings.method_for(pkg)!r}")
+        (pkg / "score" / "sync.json").write_text("{not json", encoding="utf-8")
+        if settings.method_for(pkg) != default:
+            raise Failed("an unreadable sync.json changed the method; a typo "
+                         "in one package must not affect the render")
+        (pkg / "score" / "sync.json").write_text(
+            _json.dumps({"method": "wishful"}), encoding="utf-8")
+        if settings.method_for(pkg) != default:
+            raise Failed("an unknown method name was accepted")
+
+    # 4. ONE PARSER. Both runners read the same measures files, and the two
+    #    column orders both turn up, so a private copy is a bug waiting.
+    mle = (ROOT / "tools" / "mle_sync_runner.py").read_text(encoding="utf-8")
+    if "from sync_runner import read_measures" not in mle:
+        raise Failed("the score runner does not share the measures parser "
+                     "with the reference runner; two copies disagreed once "
+                     "already and refused a correct alignment")
+
+    return (f"two methods, default {settings.method_for()!r}, each with its "
+            f"own runner; a package may pin the other and a bad pin is "
+            f"ignored; one measures parser between them")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5264,6 +5340,7 @@ def main() -> int:
         check_a_wanted_score_reaches_the_operator,
         check_a_piece_we_have_not_engraved_still_looks_real,
         check_the_drifting_backdrop_can_find_a_plate,
+        check_each_library_does_its_own_job,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_the_page_promises_only_what_we_do,
