@@ -61,7 +61,12 @@ async function loadLibrary(){
                // Empty unless the operator configured Turnstile. When set, an
                // upload carries a token the server checks; when empty, this
                // whole path is dormant and the site works as before.
-               turnstileSiteKey: data.turnstile_site_key || '' };
+               turnstileSiteKey: data.turnstile_site_key || '',
+               // Works with a real opening band and no package yet. Kept
+               // out of WORKS on purpose: the library is what can be
+               // MADE, and these cannot -- they only have to look right
+               // while somebody waits for the engraving.
+               previews: data.previews || {} };
     if(Array.isArray(data.works) && data.works.length) WORKS = data.works;
   }catch(err){
     // No server: keep the shipped library so the whole interface still
@@ -561,11 +566,16 @@ function applyAnswer(a){
         ? {t: bits.slice(1).join(' \u00b7 '), op: bits[0]}
         : {t: label, op: ''};
       if(!W(folder)){
+        // ITS REAL OPENING BARS, when one has been engraved. `realBand()`
+        // wants `band`, `band_w` and `band_h`; with them the preview shows
+        // this piece, and without them it falls back to generic staves --
+        // which is the whole difference between "we are making yours" and
+        // a visibly worse screen for the person whose piece we lack.
+        const pv = (SERVER.previews || {})[folder] || {};
         WORKS = WORKS.concat([{
           id: folder, t: named.t, op: named.op, bars: 0,
-          // No band and no dimensions, so `realBand()` declines and the
-          // preview draws its schematic -- which is what it draws for
-          // every piece anyway.
+          band: pv.band || '', band_w: pv.band_w || 0, band_h: pv.band_h || 0,
+          vector: true,
           art: {image: false, video: false}, src: '', ref: true,
         }]);
       }

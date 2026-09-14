@@ -4930,6 +4930,81 @@ def check_a_wanted_score_reaches_the_operator() -> str:
             "a new one makes a sound and a backlog does not")
 
 
+def check_a_piece_we_have_not_engraved_still_looks_real() -> str:
+    """The design screen shows the actual opening bars, or generic staves.
+
+    A request for a piece with no package is taken rather than refused --
+    the score is made from requests like it. But the design screen previews
+    a REAL band: `realBand()` wants `band`, `band_w` and `band_h`, and
+    `staveHTML` falls back to drawn staves without them. So the visitor
+    whose piece we had not engraved got a visibly worse screen than
+    everybody else: the same refusal, expressed in squiggles.
+
+    `tools/make_preview_bands.py` engraves one system per work straight
+    from the Humdrum corpus, and publishes it where a package's own preview
+    goes -- `scores/<name>/band.svg`, served by the endpoint that already
+    exists. This asserts the three joins between that and the screen.
+    """
+    import dataclasses
+    from app import routes, scorestore
+    from app.settings import settings
+
+    # 1. The library offers them, and NOT as works: `works` is what can be
+    #    made, and anything reading it as "the repertoire" must not start
+    #    counting pieces that cannot be rendered.
+    app = routes.create_app()
+    app.config["TESTING"] = True
+    body = app.test_client().get("/api/library").get_json()
+    if "previews" not in body:
+        raise Failed("/api/library does not offer the preview bands, so the "
+                     "page cannot show a held piece's own opening bars")
+    if not isinstance(body["previews"], dict):
+        raise Failed("previews is not a mapping of name -> band")
+    names = {w["id"] for w in body.get("works", [])}
+    if names & set(body["previews"]):
+        raise Failed("a work appears in both `works` and `previews`; the "
+                     "library is what can be MADE and these cannot be")
+
+    # 2. Each entry carries what `realBand()` actually requires. Two of the
+    #    three is the same as none: it falls back to staves either way.
+    was = routes.scorestore.previews
+    try:
+        routes.scorestore.previews = lambda: {
+            "Op.23_X__023-1-BH": {"w": 1280, "h": 231, "title": "Ballade"},
+            "Missing_h__001": {"w": 1280, "title": "no height"},
+        }
+        offered = routes._previews_offered()               # noqa: SLF001
+    finally:
+        routes.scorestore.previews = was
+    entry = offered.get("Op.23_X__023-1-BH")
+    if not entry:
+        raise Failed("a published preview was not offered to the page")
+    for field in ("band", "band_w", "band_h"):
+        if not entry.get(field):
+            raise Failed(f"a preview is offered without {field!r}; "
+                         f"`realBand()` needs all three and draws generic "
+                         f"staves if any is missing")
+    if "/band" not in entry["band"]:
+        raise Failed("a preview does not point at the band endpoint")
+    if "Missing_h__001" in offered:
+        raise Failed("a preview with no height was offered; it would be "
+                     "laid out at a shape nobody engraved")
+
+    # 3. The page reads them when it enters a held piece into its library.
+    wire = (ROOT / "app" / "static" / "svs" / "svs-wire.js").read_text(
+        encoding="utf-8")
+    if "SERVER.previews" not in wire:
+        raise Failed("the page never looks at the preview bands, so a held "
+                     "piece still draws generic staves")
+    i = wire.find("SERVER.previews")
+    if "band_w" not in wire[i:i + 400] or "band_h" not in wire[i:i + 400]:
+        raise Failed("the page takes a preview's url without its size, and "
+                     "`realBand()` declines without both")
+
+    return (f"offered separately from works, all three fields or none, and "
+            f"the page reads them; {len(offered)} usable in this fixture")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -4994,6 +5069,7 @@ def main() -> int:
         check_the_lending_panel_is_local_and_narrow,
         check_the_limit_reset_cannot_be_reached_from_outside,
         check_a_wanted_score_reaches_the_operator,
+        check_a_piece_we_have_not_engraved_still_looks_real,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_the_page_promises_only_what_we_do,

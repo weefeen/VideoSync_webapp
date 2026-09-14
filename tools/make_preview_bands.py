@@ -271,6 +271,17 @@ def upload_from(folder: pathlib.Path) -> int:
 
 
 def main() -> int:
+    # THE CONSOLE MUST NOT BE ABLE TO STOP THE WORK. This prints the names
+    # of 373 works engraved across Europe -- `Ėtudes`, `3ème`, `c-moll` --
+    # and a Windows console is cp1252, which cannot encode most of them. It
+    # killed a run at 87 of 373 with UnicodeEncodeError, having already
+    # done the engraving: the batch died reporting a success.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:                             # noqa: BLE001
+            pass
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--list", action="store_true",
                     help="what has a source, and what already has a band")
@@ -342,6 +353,14 @@ def main() -> int:
         index[name] = {"w": w, "h": h, "title": title_of(krn),
                        "source": krn.stem}
         done += 1
+        # WRITTEN AS IT GOES, not at the end. The bands are on disk the
+        # moment each is engraved; without this the mapping that says which
+        # file belongs to which edition only existed after the last one,
+        # so anything that stopped the run threw away the work it had done.
+        if out_dir and done % 20 == 0:
+            (out_dir / "previews.json").write_text(
+                json.dumps(index, ensure_ascii=False, indent=1),
+                encoding="utf-8")
         print(f"    {krn.stem:<14} {len(svg_text) // 1024:>4} KB  {name[:52]}")
 
     if not out_dir and done:

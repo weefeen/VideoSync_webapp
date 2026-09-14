@@ -376,13 +376,21 @@ class _Cache:
         with self._lock:
             self._at = 0.0
 
-    def entries(self) -> list[dict]:
+    def entries(self, fetch=None) -> list[dict]:
+        """The cached list, refreshed on a timer.
+
+        `fetch` so this can serve more than the catalogue: the preview
+        index has the same shape of problem -- read on every visit, changed
+        when somebody engraves something -- and a second copy of the
+        timer-and-fallback dance would be a second place to get it wrong.
+        """
+        fetch = fetch or _read_catalogue
         with self._lock:
             fresh, at = list(self._entries), self._at
         if at and time.monotonic() - at < CATALOGUE_SECONDS:
             return fresh
         try:
-            got = _read_catalogue()
+            got = fetch()
         except Exception:                              # noqa: BLE001
             # A bucket that cannot be reached must not empty the library and
             # tell every visitor their score is gone. The last good answer
@@ -401,6 +409,40 @@ _cache = _Cache()
 def entries() -> list[Entry]:
     """Every package in the published library, as the web box sees it."""
     return [Entry(e) for e in _cache.entries()]
+
+
+PREVIEWS = f"{PREFIX}previews.json"
+
+# The preview index, on the same timer as the catalogue and for the same
+# reason: a page asks for it on every visit and it changes when somebody
+# engraves something, which is rare.
+_previews = _Cache()
+
+
+def _read_previews() -> list[dict]:
+    """The bands engraved for works nobody has packaged yet.
+
+    One object listing every work that has a `band.svg` without having a
+    package -- written by `tools/make_preview_bands.py`. Shaped as a list
+    of entries so it can share `_Cache` with the catalogue; the caller
+    wants a mapping and gets one from `previews()`.
+    """
+    if storage.head(PREVIEWS) is None:
+        return []
+    with tempfile.TemporaryDirectory() as tmp:
+        out = pathlib.Path(tmp) / "previews.json"
+        storage.get(PREVIEWS, out)
+        try:
+            body = json.loads(out.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            logger.error("the published previews are not readable: %s", exc)
+            return []
+    return [{"name": k, **v} for k, v in body.items()] if isinstance(body, dict) else []
+
+
+def previews() -> dict[str, dict]:
+    """name -> {w, h, title} for every work with a preview band."""
+    return {e["name"]: e for e in _previews.entries(_read_previews)}
 
 
 def published(name: str) -> int | None:

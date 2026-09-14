@@ -204,7 +204,41 @@ def api_library():
                     "retention_hours": settings.retention_hot_hours,
                     "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
                     "max_minutes": MAX_DURATION_MINUTES,
+                    # WORKS WITH A BAND BUT NO PACKAGE. A piece nobody has
+                    # engraved is still requested, and the design screen
+                    # previews a REAL band -- so without these it drew
+                    # generic staves for exactly the visitor whose piece we
+                    # do not have: the same refusal, in squiggles.
+                    #
+                    # Deliberately NOT in `works`: these are not
+                    # renderable, and anything that treats the library as
+                    # "what can be made" must not start seeing them.
+                    "previews": _previews_offered(),
                     "page_rule": _PAGE_RULE})
+
+
+def _previews_offered() -> dict:
+    """Band-only works, as the page needs them: name -> band url and size.
+
+    The url is the same one a packaged work reports, because it is the same
+    object in the same place -- `scores/<name>/band.svg`, served by
+    `/api/library/<name>/band`. A work that later gets a real package
+    overwrites its own preview, so the two never disagree.
+    """
+    try:
+        found = scorestore.previews()
+    except Exception:                                # noqa: BLE001
+        logger.warning("could not read the preview bands", exc_info=True)
+        return {}
+    out = {}
+    for name, meta in found.items():
+        w, h = int(meta.get("w") or 0), int(meta.get("h") or 0)
+        if not (w and h):
+            continue
+        out[name] = {"band": f"/api/library/{quote(name)}/band",
+                     "band_w": w, "band_h": h,
+                     "title": meta.get("title") or ""}
+    return out
 
 
 @bp.get("/metrics")
