@@ -1860,7 +1860,11 @@ def check_the_output_is_postable() -> str:
         refuse and which outputs were postable depended on what visitors
         uploaded.
       * `-profile:v high` - YouTube asks for High by name. Left to x264 it
-        depends on the build.
+        depends on the build. CHECKED BY CALLING `_video_args`, not by
+        grepping: the codec arguments are now built per machine, so a
+        literal in the command would prove only that the cpu branch is
+        right and would say nothing about the hardware one. Every branch
+        is asked, including the ones this machine cannot run.
       * `-pix_fmt yuv420p` - "4:2:0 chroma subsampling", all three.
 
     The frame-rate clamp is checked separately, by calling it: 23-60 is
@@ -1895,7 +1899,6 @@ def check_the_output_is_postable() -> str:
                           "file they refuse",
         '"-ac", "2"': "1 or 2 channels only; a multichannel source passed "
                       "straight through before",
-        '"-profile:v", "high"': "YouTube asks for H.264 High by name",
         '"-pix_fmt", "yuv420p"': "4:2:0 chroma, required by all three",
     }
     missing = [f"{flag} - {why}" for flag, why in REQUIRED.items()
@@ -1921,6 +1924,27 @@ def check_the_output_is_postable() -> str:
 
     return (f"{len(REQUIRED)} required flags present; frame rate held to "
             f"23-60")
+
+    # EVERY ENCODER, not just this machine's. `_video_args` chooses by
+    # capability, so the profile has to be asked for in all of them --
+    # a hardware branch that forgot it would encode Main and nothing
+    # here would notice on a machine without that card.
+    from app import render as rnd
+    for encoder in ("libx264", "h264_nvenc", "h264_qsv"):
+        args = (rnd._video_args("ffmpeg", 20) if encoder == "libx264"
+                else rnd._hardware_args(encoder, 20))       # noqa: SLF001
+        if encoder != "libx264" and not args:
+            raise Failed(f"{encoder} builds no arguments at all")
+        if "-profile:v" not in args or "high" not in args:
+            raise Failed(f"the {encoder} encode does not ask for H.264 "
+                         f"High, which YouTube asks for by name")
+        if encoder == "libx264" and "-crf" not in args:
+            raise Failed("the cpu encode lost its quality setting")
+        if encoder == "h264_nvenc" and "-cq" not in args:
+            raise Failed("the nvenc encode has no constant-quality setting; "
+                         "it would run at the driver's default bitrate")
+        if encoder == "h264_qsv" and "-global_quality" not in args:
+            raise Failed("the qsv encode has no quality setting")
 
 
 def check_the_choices_survive_the_request() -> str:

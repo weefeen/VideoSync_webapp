@@ -891,6 +891,118 @@ def _band_inset(layout: Layout) -> tuple[int, int]:
     return _even_at(layout.band.w * 0.022), _MARK_FOOT_PX
 
 
+# THE GPU DOES THE COMPRESSION WHERE THERE IS ONE.
+#
+# The encode is the long pole of a render: 15,699 frames of 1920x1080 for
+# a ten-minute piece, each composited from five layers and then
+# compressed. `libx264 -preset medium` runs that at about 0.7x real time
+# on a laptop CPU, so a ten-minute performance spends seven minutes being
+# compressed while the machine's own video encoder sits idle.
+#
+# NOT A SWITCH, A CAPABILITY. The laptop that takes most jobs has an
+# NVIDIA card; a cloud compute node has no GPU at all and must keep using
+# libx264. So this asks the machine rather than the configuration, and a
+# machine that cannot do it is not a machine that fails -- it encodes on
+# the CPU exactly as it did before.
+_ENCODER_LOCK = threading.Lock()
+_ENCODER_FOUND: "str | None" = None
+
+
+def _hardware_args(name: str, crf: int) -> list:
+    """Constant-quality arguments for a hardware encoder.
+
+    NEITHER TAKES `-crf`. Both have their own constant-quality control,
+    and passing crf to them is silently ignored -- the encode then runs at
+    the driver's default bitrate, which is most of how hardware encoding
+    earned its reputation for looking worse.
+
+    `-b:v 0` matters for NVENC: without it `-cq` is treated as a ceiling
+    on a bitrate-targeted encode and the quality setting does almost
+    nothing.
+    """
+    if name == "h264_nvenc":
+        return ["-c:v", name, "-preset", "p5", "-tune", "hq",
+                "-rc", "vbr", "-cq", str(crf + 1), "-b:v", "0",
+                "-profile:v", "high"]
+    if name == "h264_qsv":
+        return ["-c:v", name, "-global_quality", str(crf + 1),
+                "-preset", "medium", "-profile:v", "high"]
+    return []
+
+
+def _encoder_here(ffmpeg: str) -> str:
+    """Which h264 encoder this machine should use. Asked once, then kept.
+
+    LISTED IS NOT WORKING. `ffmpeg -encoders` names everything the build
+    was compiled with, whether or not the driver, the card, or a free
+    encoding session actually exists -- a VM with the library and no
+    device lists it and then fails at the first frame. So each candidate
+    is given one real frame to encode and has to produce a file.
+    """
+    global _ENCODER_FOUND
+    with _ENCODER_LOCK:
+        if _ENCODER_FOUND is not None:
+            return _ENCODER_FOUND
+
+        wanted = (settings.video_encoder or "auto").strip().lower()
+        if wanted not in ("auto", "", "libx264", "h264_nvenc", "h264_qsv"):
+            logger.warning("unknown VIDEO_ENCODER %r; using the cpu encoder",
+                           wanted)
+            wanted = "libx264"
+        if wanted == "libx264":
+            _ENCODER_FOUND = "libx264"
+            return _ENCODER_FOUND
+
+        order = (["h264_nvenc", "h264_qsv"]
+                 if wanted in ("auto", "") else [wanted])
+        try:
+            listed = subprocess.run([ffmpeg, "-hide_banner", "-encoders"],
+                                    capture_output=True, text=True,
+                                    timeout=30).stdout
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("could not ask ffmpeg what it can encode: %s", exc)
+            _ENCODER_FOUND = "libx264"
+            return _ENCODER_FOUND
+
+        for name in order:
+            if name not in listed:
+                continue
+            with tempfile.TemporaryDirectory() as tmp:
+                probe = pathlib.Path(tmp) / "probe.mp4"
+                cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                       "-f", "lavfi", "-i", "color=c=black:s=320x240:r=25",
+                       "-frames:v", "1"]
+                cmd += _hardware_args(name, 20) + [str(probe)]
+                try:
+                    done = subprocess.run(cmd, capture_output=True,
+                                          text=True, timeout=60)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    logger.info("%s could not be tried: %s", name, exc)
+                    continue
+                if (done.returncode == 0 and probe.is_file()
+                        and probe.stat().st_size):
+                    logger.info("encoding on the %s hardware encoder", name)
+                    _ENCODER_FOUND = name
+                    return _ENCODER_FOUND
+                logger.info("%s is listed but does not work here: %s",
+                            name, (done.stderr or "").strip()[-160:])
+
+        logger.info("no working hardware encoder; encoding on the cpu")
+        _ENCODER_FOUND = "libx264"
+        return _ENCODER_FOUND
+
+
+def _video_args(ffmpeg: str, crf: int) -> list:
+    """The codec arguments for the final encode, on this machine."""
+    name = _encoder_here(ffmpeg)
+    if name == "libx264":
+        # High profile explicitly: YouTube asks for it by name, and
+        # letting x264 pick means the profile depends on the build.
+        return ["-c:v", "libx264", "-crf", str(crf), "-preset", "medium",
+                "-profile:v", "high"]
+    return _hardware_args(name, crf)
+
+
 def _logo_placement(style: "Style", layout: Layout,
                     workdir: pathlib.Path):
     """Where the mark goes for this layout, or None.
@@ -1295,11 +1407,8 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         partial = output.with_suffix(f".part-{uuid.uuid4().hex[:8]}"
                                      + output.suffix)
         partial.unlink(missing_ok=True)
-        cmd += ["-c:v", "libx264", "-crf", str(style.crf), "-preset", "medium",
-                "-pix_fmt", "yuv420p", "-t", f"{info['duration']:.3f}",
-                # High profile explicitly: YouTube asks for it by name, and
-                # letting x264 pick means the profile depends on the build.
-                "-profile:v", "high",
+        cmd += _video_args(settings.ffmpeg, style.crf)
+        cmd += ["-pix_fmt", "yuv420p", "-t", f"{info['duration']:.3f}",
                 # THE MOOV ATOM AT THE FRONT. Instagram and Facebook both
                 # require "no edit lists, moov atom at the front of the
                 # file"; YouTube lists it under recommended settings as

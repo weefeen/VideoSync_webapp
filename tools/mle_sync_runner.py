@@ -194,12 +194,17 @@ def align(args: argparse.Namespace) -> dict:
     # built. Given a package without it the harness parses into the
     # scratch directory instead, so this is an optimisation and not a
     # requirement.
-    prepared = package / "score" / "prepared"
+    # THE `score` FOLDER, NOT `score/prepared`. The harness appends
+    # `prepared/prepared_score.pkl` to whatever it is given, so pointing at
+    # the prepared folder made it look one level too deep, find nothing,
+    # and re-parse the whole score on EVERY job -- leaving a stray
+    # `score/prepared/prepared/` behind as the evidence.
+    score_dir = package / "score"
     result = harness.run(
         score, wav,
         cache_dir=work / "cache",
         out_dir=out_dir,
-        score_prepared_root=prepared if prepared.is_dir() else None,
+        score_prepared_root=score_dir if score_dir.is_dir() else None,
         progress=lambda m: print(m, flush=True))
     aligned = time.time()
 

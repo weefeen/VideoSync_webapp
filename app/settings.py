@@ -153,6 +153,12 @@ class Settings:
     ffmpeg: str
     ffprobe: str
     work_dir: pathlib.Path
+    # WHICH VIDEO ENCODER. "auto" asks the machine: the laptop that
+    # takes most jobs has an NVIDIA card and encodes several times
+    # faster on it, while a cloud compute node has no GPU and must use
+    # the cpu encoder. Name one explicitly to pin it, or "libx264" to
+    # refuse hardware encoding entirely.
+    video_encoder: str = "auto"
     # music_line_extractor supplies auto-synchronisation. It is invoked as
     # a subprocess through its own CLI and its own interpreter, never
     # imported — so its repo is untouched and its dependencies stay its own.
@@ -610,6 +616,8 @@ def load() -> Settings:
         score_roots=roots,
         video_roots=_paths("VIDEO_ROOT"),
         ffmpeg=_tool("FFMPEG_EXE", "ffmpeg"),
+        video_encoder=(os.getenv("VIDEO_ENCODER", "auto").strip().lower()
+                       or "auto"),
         ffprobe=_tool("FFPROBE_EXE", "ffprobe"),
         work_dir=pathlib.Path(work) if work else REPO_ROOT / "var",
         background_static=_one("BACKGROUND_STATIC"),
