@@ -365,6 +365,48 @@ def api_wanted():
     return jsonify(out)
 
 
+@bp.post("/api/wanted/dismiss")
+def api_wanted_dismiss():
+    """Close a request nobody is going to engrave. Not for the public.
+
+    A held request waits for a score, and some of them wait for one that
+    will never exist -- an edition nobody has, a piece outside what this
+    is for. Left alone it sits on the operator's list for ever, which is
+    how a list stops being read.
+
+    IT IS CLOSED, NOT DELETED. The visitor asked for something and is
+    entitled to know the answer, so the job becomes a failure with a
+    reason, and the page they bookmarked says so instead of claiming a
+    render is still coming. The recording stays where it is.
+
+    Guarded like its neighbours: Apache proxies from 127.0.0.1, so
+    `remote_addr` is local for the whole internet and the discriminator is
+    the ABSENCE of X-Forwarded-For.
+    """
+    if request.headers.get("X-Forwarded-For"):
+        return jsonify({"error": "Not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    job_id = str(body.get("job", "")).strip()
+    job = store.get_job(job_id) if job_id else None
+    if job is None:
+        return jsonify({"error": "Unknown job."}), 404
+    # Only a HELD one. A queued, running or finished job is not this
+    # list's business, and closing one from here would cancel work that is
+    # already under way.
+    if job["state"] in (store.QUEUED, store.RUNNING, store.DONE, store.ERROR):
+        return jsonify({"error": f"That job is {job['state']}, not held."}), 409
+
+    store.update_job(
+        job_id, state=store.ERROR, finished=time.time(),
+        error=("We are not going to be able to make this one — the score it "
+               "needs has not been engraved, and is not planned. Nothing was "
+               "charged. Your recording is still here if you would like to "
+               "try another piece."))
+    logger.info("held request %s dismissed by the operator", job_id)
+    return jsonify({"dismissed": job_id})
+
+
 @bp.post("/api/limits/forget")
 def api_limits_forget():
     """Clear every rate-limit counter. NOT for the public, and guarded.

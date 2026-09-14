@@ -4894,6 +4894,25 @@ def check_a_wanted_score_reaches_the_operator() -> str:
                      "confirmed, so an operator cannot tell which requests "
                      "can actually be delivered")
 
+    # A REQUEST CAN BE CLOSED, and closing it is not deleting it. Some
+    # requests wait on a score nobody will ever engrave; left alone they
+    # sit on the list for ever, which is how a list stops being read. The
+    # person who asked is told, because they asked.
+    if "/api/wanted/dismiss" not in routes_src:
+        raise Failed("a held request cannot be closed, so one waiting on a "
+                     "score nobody will engrave stays on the list for ever")
+    j = routes_src.find("def api_wanted_dismiss")
+    drop = routes_src[j:j + 2200]
+    if "X-Forwarded-For" not in drop:
+        raise Failed("the dismiss endpoint is not guarded; anyone could "
+                     "cancel somebody else's request")
+    if "store.ERROR" not in drop or "error=" not in drop:
+        raise Failed("dismissing does not leave a reason, so the page the "
+                     "visitor bookmarked still promises a render")
+    if "QUEUED" not in drop or "RUNNING" not in drop:
+        raise Failed("dismiss does not refuse a job that is queued or "
+                     "running; it would cancel work already under way")
+
     # The refusal keeps the address, or the loop cannot be closed.
     src = (ROOT / "app" / "jobs.py").read_text(encoding="utf-8")
     i = src.find("def say_a_score_is_wanted")

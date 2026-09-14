@@ -222,6 +222,32 @@ class Panel:
             return (done.stderr or "").strip()[-200:] or "the change was refused"
         return ""
 
+    def dismiss(self, job: str) -> str:
+        """Close a request that will never be engraved. '' or a reason.
+
+        The job id is checked against our own list before it becomes an
+        argument to anything, the same rule `render_now` follows.
+        """
+        with self._lock:
+            rows = list(self._wanted)
+        if not any(r.get("job") == job for r in rows):
+            return "that request is not in the list any more"
+        try:
+            done = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+                 SERVER,
+                 "curl -fsS -m 20 -X POST -H 'Content-Type: application/json' "
+                 f"-d '{json.dumps({'job': job})}' "
+                 "http://127.0.0.1:5000/api/wanted/dismiss"],
+                capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"could not reach the server: {exc}"
+        if done.returncode != 0:
+            return ((done.stderr or done.stdout or "").strip()[-200:]
+                    or "the server refused it")
+        self.read_wanted()
+        return ""
+
     def forget_limits(self) -> tuple[str, int]:
         """Clear the site's rate limits. Returns (problem, keys cleared).
 
@@ -316,6 +342,11 @@ def serve(panel: Panel, port: int = 5055) -> str:
                     self._json({"problem": "no state given"}, code=400)
                     return
                 problem = panel.set_working(bool(body.get("on")))
+                if problem:
+                    self._json({"problem": problem}, code=400)
+                    return
+            elif path == "/dismiss":
+                problem = panel.dismiss(str(body.get("job") or ""))
                 if problem:
                     self._json({"problem": problem}, code=400)
                     return
@@ -677,11 +708,17 @@ function drawAsks(rows){
     const ready = (r.ready || []).length ? r.ready[0] : '';
     const folders = (r.editions || []).map(e =>
       '<span class="fold">' + e + '</span>').join(' ');
-    const act = ready
+    const act = (ready
       ? '<button class="plain" data-job="' + r.job + '" data-score="' + ready
         + '">Make it now</button>'
       : '<span class="mt">Engrave one of these and publish it, then this '
-        + 'turns into a button.</span>';
+        + 'turns into a button.</span>')
+      // NOT A DELETE. Somebody asked for this and is entitled to the
+      // answer, so closing it tells them rather than making the request
+      // disappear silently.
+      + ' <button class="plain" data-drop="' + r.job
+      + '" title="Tell them we will not be making this one">Not this one'
+      + '</button>';
     return '<div class="ask' + (ready ? ' ready' : '') + '">'
       + '<span class="pc">' + (r.piece || 'an unnamed piece') + '</span>'
       + '<span class="mt">' + ago(r.at) + (r.country ? ' · ' + r.country : '')
@@ -697,6 +734,9 @@ function drawAsks(rows){
   box.querySelectorAll('button[data-job]').forEach(b => {
     b.onclick = () => send('/render-now',
                            {job: b.dataset.job, score: b.dataset.score});
+  });
+  box.querySelectorAll('button[data-drop]').forEach(b => {
+    b.onclick = () => send('/dismiss', {job: b.dataset.drop});
   });
 }
 
