@@ -374,6 +374,21 @@ def say_a_score_is_wanted(job: Job, score: str, address: str) -> None:
     except Exception:                                # noqa: BLE001
         logger.debug("no recognition row for job %s", job.id)
 
+    # KEEP THE ADDRESS ON THE ROW. It was sent to the operator in a mail
+    # and nowhere else, so finishing the request days later meant reading
+    # it back out of that mail and retyping it into a command. The column
+    # already exists and the job already exists; what was missing was
+    # writing one to the other.
+    #
+    # It is not a new thing held about somebody: the same address is in the
+    # operator's mailbox either way. On the row it is deletable with the
+    # rest of the job when they ask, which the mailbox copy is not.
+    try:
+        store.update_job(job.id, email=address or "", score=score)
+    except Exception:                                # noqa: BLE001
+        logger.warning("could not record who asked for %r on job %s",
+                       score, job.id, exc_info=True)
+
     def work() -> None:
         try:
             notify.send_wanted(job_id=job.id, score=score, title=title,

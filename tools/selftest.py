@@ -4815,6 +4815,89 @@ def check_the_page_promises_only_what_we_do() -> str:
             "allowance and window are read from the server")
 
 
+def check_a_wanted_score_reaches_the_operator() -> str:
+    """A piece somebody asked for and could not have is not lost.
+
+    The demand loop was a mail and nothing else: a request for a piece with
+    no score is refused, the operator is told once, and that message waits
+    in an inbox with everything else. Nothing listed what was outstanding,
+    and finishing a request days later meant reading the address back out
+    of that mail and retyping it into a command.
+
+    Three things have to hold, and each was missing:
+
+      * the address survives the refusal, so the person who asked can be
+        told when it is finally made. The column existed; nothing wrote it.
+      * the list is reachable ONLY from the box, because it carries
+        visitors' addresses -- guarded like the limit reset, by the absence
+        of X-Forwarded-For, since Apache proxies from 127.0.0.1 and
+        `remote_addr` reads as local for the whole internet.
+      * nothing but a published score can be started, and only for a job
+        actually on the list. Both become arguments to a command that runs
+        on the server.
+    """
+    import json as _json
+    sys.path.insert(0, str(ROOT / "tools"))
+    import lend_panel                                       # noqa: PLC0415
+    from app import routes
+
+    app = routes.create_app()
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    # From outside: the same answer as a path that does not exist.
+    got = client.get("/api/wanted",
+                     headers={"X-Forwarded-For": "203.0.113.9"})
+    if got.status_code != 404:
+        raise Failed(f"/api/wanted answered {got.status_code} to a proxied "
+                     f"request; it carries visitors' addresses")
+    # From the box: a list, even when empty.
+    got = client.get("/api/wanted")
+    if got.status_code != 200 or not isinstance(got.get_json(), list):
+        raise Failed(f"/api/wanted did not answer locally "
+                     f"({got.status_code})")
+
+    # The refusal keeps the address, or the loop cannot be closed.
+    src = (ROOT / "app" / "jobs.py").read_text(encoding="utf-8")
+    i = src.find("def say_a_score_is_wanted")
+    if i < 0:
+        raise Failed("nothing reports that a score is wanted any more")
+    if "update_job" not in src[i:i + 2600]:
+        raise Failed("a refused request does not keep the address, so the "
+                     "person who asked cannot be told when the score is "
+                     "finally engraved")
+
+    # And the panel starts only what it was told about.
+    panel = lend_panel.Panel(lambda: {"taking": True}, lambda: None,
+                             lambda: None, lambda: None)
+    panel._wanted = [{                                       # noqa: SLF001
+        "job": "j1", "piece": "P", "editions": ["Good"], "ready": ["Good"],
+        "at": 0, "address": True, "country": "", "minutes": None,
+        "state": "uploaded", "recording": True}]
+    for job, score, why in (
+            ("unknown", "Good", "a job that is not on the list"),
+            ("j1", "NotPublished", "a score that is not published"),
+            ("j1", "", "no score at all"),
+            ("j1", "Good; rm -rf /", "a shell fragment")):
+        if panel.render_now(job, score) == "":
+            raise Failed(f"the panel would start {why}, and both halves "
+                         f"become arguments to a command on the server")
+
+    page = lend_panel.PAGE
+    if "Asked for, not engraved" not in page:
+        raise Failed("the panel never shows what was asked for")
+    if "function bip" not in page or "knownAsks" not in page:
+        raise Failed("a new request makes no sound, so it is only seen by "
+                     "somebody already looking at the page")
+    if "knownAsks !== null" not in page:
+        raise Failed("the sound would play for the backlog on every load, "
+                     "which teaches somebody to ignore it")
+
+    return ("refused requests keep the address; the list is 404 from "
+            "outside; only a published score for a listed job can start; "
+            "a new one makes a sound and a backlog does not")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -4878,6 +4961,7 @@ def main() -> int:
         check_a_fetched_score_lands_where_it_was_told,
         check_the_lending_panel_is_local_and_narrow,
         check_the_limit_reset_cannot_be_reached_from_outside,
+        check_a_wanted_score_reaches_the_operator,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_the_page_promises_only_what_we_do,

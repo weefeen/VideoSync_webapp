@@ -254,6 +254,59 @@ def api_visitors():
     return jsonify(visitors.everything())
 
 
+@bp.get("/api/wanted")
+def api_wanted():
+    """Pieces somebody asked for and we could not make. Not for the public.
+
+    THE DEMAND LOOP, which until now existed only as mail. A request for a
+    piece with no score is refused and nothing is parked -- deliberately --
+    but the trace is worth acting on: the recogniser named the piece, so it
+    is a work nobody has engraved rather than a name somebody invented.
+
+    What comes back is what an operator needs to decide what to engrave
+    next and to finish the request afterwards: the piece, when it was
+    asked, how often, the edition folder names the recogniser offered, and
+    which of those are now published. `ready` is the interesting column --
+    it means the score has since been made, and the render can be started
+    on the visitor's behalf.
+
+    Loopback only, guarded the same way as the limit reset: Apache proxies
+    from 127.0.0.1, so `remote_addr` reads as local for the whole internet
+    and the discriminator is the ABSENCE of X-Forwarded-For. It carries
+    visitors' addresses, which is reason enough on its own.
+    """
+    if request.headers.get("X-Forwarded-For"):
+        return jsonify({"error": "Not found"}), 404
+
+    try:
+        published = set(scorestore.catalogue())
+    except Exception:                                # noqa: BLE001
+        published = set()
+
+    out = []
+    for row in store.query(
+            "SELECT job_id, at, piece_id, title, duration, country"
+            " FROM recognitions WHERE outcome = ? ORDER BY at DESC LIMIT 60",
+            ("unavailable",)):
+        editions = sorted(_editions_offered(row["job_id"]))
+        job = store.get_job(row["job_id"])
+        out.append({
+            "job": row["job_id"],
+            "at": int((row["at"] or 0) * 1000),
+            "piece": row["title"] or row["piece_id"] or "",
+            "minutes": round((row["duration"] or 0) / 60.0, 1) or None,
+            "country": row["country"] or "",
+            "editions": editions,
+            # Published since they asked: the render can be started now.
+            "ready": [e for e in editions if e in published],
+            # Whether we can tell them, which decides what the button does.
+            "address": bool(job and (job["email"] or "").strip()),
+            "state": (job["state"] if job else ""),
+            "recording": bool(job and job["upload"]),
+        })
+    return jsonify(out)
+
+
 @bp.post("/api/limits/forget")
 def api_limits_forget():
     """Clear every rate-limit counter. NOT for the public, and guarded.

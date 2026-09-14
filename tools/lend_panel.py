@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import pathlib
 import subprocess
 import sys
@@ -78,6 +79,7 @@ class Panel:
         # `asked` False means the first look at the server has not come
         # back yet, which is not a problem and must not be drawn as one.
         self._server = {"mode": "", "problem": "", "asked": False}
+        self._wanted: list = []
         self._lock = threading.Lock()
         # A LOOK THAT FAILS IS WEATHER. This reaches another machine over
         # the internet every few minutes, so it will fail sometimes -- and
@@ -89,7 +91,9 @@ class Panel:
 
     def full(self) -> dict:
         """Everything the page draws."""
-        return {**self.state(), "server": self.server()}
+        with self._lock:
+            wanted = list(self._wanted)
+        return {**self.state(), "server": self.server(), "wanted": wanted}
 
     def server(self) -> dict:
         with self._lock:
@@ -115,6 +119,71 @@ class Panel:
                 return
             mode = self._read_mode() or HELD_AT
         self._set(mode, "")
+
+    def read_wanted(self) -> None:
+        """Pieces somebody asked for and we cannot make yet. Never raises.
+
+        THE DEMAND LOOP, which existed only as mail: a request for a piece
+        with no score is refused, the operator is told, and the message
+        waits in an inbox with everything else. This is the same fact where
+        the work happens -- and the page can make a sound, which an inbox
+        cannot.
+        """
+        try:
+            done = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+                 SERVER, "curl -fsS -m 20 http://127.0.0.1:5000/api/wanted"],
+                capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.debug("could not read what is wanted: %s", exc)
+            return
+        if done.returncode != 0:
+            return
+        try:
+            rows = json.loads(done.stdout)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(rows, list):
+            return
+        with self._lock:
+            self._wanted = rows
+
+    def render_now(self, job: str, score: str) -> str:
+        """Finish a request whose score now exists. '' or a reason.
+
+        Runs `tools/retrigger.py`, which is where this has always lived --
+        it writes the job row and the janitor publishes it. The address is
+        on the row now, so nothing has to be retyped.
+
+        The job id and score come back from our own `/api/wanted`, never
+        from anything typed, and both are checked against it again here:
+        they are about to be arguments to a command on the server.
+        """
+        with self._lock:
+            rows = list(self._wanted)
+        match = next((r for r in rows if r.get("job") == job), None)
+        if match is None:
+            return "that request is not in the list any more"
+        if score not in (match.get("ready") or []):
+            return f"{score!r} is not a published score for that request"
+
+        command = (
+            "cd /srv/vsw/current && sudo -u vsw /srv/vsw/venv/bin/python "
+            f"tools/retrigger.py {shlex.quote(job)} "
+            f"--score {shlex.quote(score)}")
+        try:
+            done = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+                 SERVER, command],
+                capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"could not reach the server: {exc}"
+        if done.returncode != 0:
+            return ((done.stderr or done.stdout or "").strip()[-240:]
+                    or "the server refused it")
+        logger.info("started the held render for job %s as %r", job, score)
+        self.read_wanted()
+        return ""
 
     def _read_mode(self) -> str | None:
         try:
@@ -250,6 +319,12 @@ def serve(panel: Panel, port: int = 5055) -> str:
                 if problem:
                     self._json({"problem": problem}, code=400)
                     return
+            elif path == "/render-now":
+                problem = panel.render_now(str(body.get("job") or ""),
+                                           str(body.get("score") or ""))
+                if problem:
+                    self._json({"problem": problem}, code=400)
+                    return
             elif path == "/stop":
                 panel.stop_after()
             elif path == "/forget-limits":
@@ -370,6 +445,17 @@ button.plain:focus-visible{outline:3px solid var(--mag);outline-offset:2px}
 
 .hint{color:var(--soft);font-size:14px;margin:0 0 12px}
 h2{font-family:var(--serif);font-size:17px;font-weight:600;margin:34px 0 12px}
+.ask{background:var(--surface);border:1.5px solid var(--line);
+  border-radius:8px;padding:14px 16px;margin-bottom:9px}
+.ask.ready{border-color:var(--good)}
+.ask .pc{font-weight:600;font-size:15.5px}
+.ask .mt{display:block;color:var(--soft);font-size:13.5px;margin-top:2px}
+.ask .row{display:flex;align-items:center;gap:10px;margin-top:11px;
+  flex-wrap:wrap}
+.ask .fold{font-family:var(--mono);font-size:11.5px;color:var(--soft);
+  background:var(--line-2);padding:3px 7px;border-radius:3px;
+  word-break:break-all}
+.none{color:var(--soft);margin:0}
 .facts{display:flex;flex-wrap:wrap;gap:24px;padding:16px 18px;
   background:var(--surface);border:1px solid var(--line);border-radius:8px}
 .fact .n{font-family:var(--serif);font-size:20px;font-weight:600;
@@ -396,6 +482,12 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
     <span id="knobsub"></span></span>
 </div>
 <p class="problem" id="problem"></p>
+
+<h2>Asked for, not engraved</h2>
+<p class="hint" id="askhint">Pieces somebody uploaded that we recognised and
+  have no score for. Once you publish the score, the render starts from
+  here — the person who asked is still on the job.</p>
+<div id="asks"></div>
 
 <h2>What this computer can take</h2>
 <div class="facts" id="facts"></div>
@@ -505,6 +597,8 @@ function paint(s){
     (s.server && s.server.asked && s.server.problem)
       ? 'The server could not be reached: ' + s.server.problem : '';
 
+  drawAsks(s.wanted || []);
+
   document.getElementById('facts').innerHTML = [
     [s.free_gb == null ? '—' : s.free_gb.toFixed(1) + ' GB', 'memory free now'],
     [s.longest_min == null ? '—' : Math.floor(s.longest_min) + ' min',
@@ -527,6 +621,81 @@ document.getElementById('forget').onclick = async function(){
   }catch(e){ note.textContent = e.message; }
   this.disabled = false;
 };
+
+/* A SOUND, because this is the one thing on the page worth interrupting
+ * somebody for: a person uploaded a piece, was told we cannot make it, and
+ * went away. Everything else here can wait until the page is looked at.
+ *
+ * Synthesised rather than a file: the panel has no build step and no
+ * assets, and a two-note figure is six lines of Web Audio. Browsers refuse
+ * to make noise before the page has been interacted with, which is correct
+ * and also means the first one may be silent -- the list is still right. */
+let knownAsks = null;
+function bip(){
+  try{
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.16].forEach((at, i) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine';
+      o.frequency.value = i ? 1174.66 : 880;      // A5 then D6
+      g.gain.setValueAtTime(0.0001, ac.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.22, ac.currentTime + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + at + 0.14);
+      o.connect(g); g.connect(ac.destination);
+      o.start(ac.currentTime + at); o.stop(ac.currentTime + at + 0.16);
+    });
+  }catch(e){}
+}
+
+function ago(ms){
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if(s < 90) return 'just now';
+  if(s < 5400) return Math.round(s / 60) + ' min ago';
+  if(s < 172800) return Math.round(s / 3600) + ' h ago';
+  return Math.round(s / 86400) + ' days ago';
+}
+
+function drawAsks(rows){
+  const box = document.getElementById('asks');
+  if(!box) return;
+
+  // NEW ONES ONLY, and never on the first draw -- otherwise opening the
+  // page plays a sound for a backlog somebody already knows about.
+  const ids = rows.map(r => r.job);
+  if(knownAsks !== null){
+    if(ids.some(id => !knownAsks.includes(id))) bip();
+  }
+  knownAsks = ids;
+
+  if(!rows.length){
+    box.innerHTML = '<p class="none">Nothing waiting. Every piece anybody '
+      + 'uploaded, we had the score for.</p>';
+    return;
+  }
+  box.innerHTML = rows.map(r => {
+    const ready = (r.ready || []).length ? r.ready[0] : '';
+    const folders = (r.editions || []).map(e =>
+      '<span class="fold">' + e + '</span>').join(' ');
+    const act = ready
+      ? '<button class="plain" data-job="' + r.job + '" data-score="' + ready
+        + '">Make it now</button>'
+      : '<span class="mt">Engrave one of these and publish it, then this '
+        + 'turns into a button.</span>';
+    return '<div class="ask' + (ready ? ' ready' : '') + '">'
+      + '<span class="pc">' + (r.piece || 'an unnamed piece') + '</span>'
+      + '<span class="mt">' + ago(r.at) + (r.country ? ' · ' + r.country : '')
+      + (r.minutes ? ' · ' + r.minutes.toFixed(1) + ' min' : '')
+      + (r.address ? ' · they left an address' : ' · no address')
+      + '</span>'
+      + '<div class="row">' + folders + '</div>'
+      + '<div class="row">' + act + '</div></div>';
+  }).join('');
+
+  box.querySelectorAll('button[data-job]').forEach(b => {
+    b.onclick = () => send('/render-now',
+                           {job: b.dataset.job, score: b.dataset.score});
+  });
+}
 
 document.getElementById('knob').onclick = function(){
   send('/working', {on: this.getAttribute('aria-checked') !== 'true'});

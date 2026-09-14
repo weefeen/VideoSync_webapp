@@ -443,7 +443,18 @@ def _watch_mode(panel, stop: threading.Event) -> None:
         except Exception:                              # noqa: BLE001
             logger.warning("could not read the server's settings",
                            exc_info=True)
-        stop.wait(300.0)
+        # WHAT SOMEBODY ASKED FOR AND COULD NOT HAVE, on its own clock.
+        # More often than the mode, which only this page ever changes: this
+        # one is the reason to look at the panel at all, and a piece
+        # requested is a person who has already gone away.
+        for _ in range(5):
+            if stop.is_set():
+                break
+            try:
+                panel.read_wanted()
+            except Exception:                          # noqa: BLE001
+                logger.debug("could not read what is wanted", exc_info=True)
+            stop.wait(60.0)
 
 
 def _handle(task, ack) -> None:
