@@ -5297,6 +5297,78 @@ def check_each_library_does_its_own_job() -> str:
             f"ignored; one measures parser between them")
 
 
+def check_the_share_card_is_the_card_that_ships() -> str:
+    """What a share shows is this site's own cover, at the shape asked for.
+
+    TWO WAYS THIS GOES WRONG SILENTLY, and both did.
+
+    The cover was cropped from the Op.39 Scherzo and stayed there after
+    the landing page changed to the Op.1 Rondo, so every share advertised
+    a piece the site no longer features, played by somebody else. Nothing
+    noticed, because a stale jpeg is a perfectly valid jpeg.
+
+    And Facebook caches BY URL. Replacing the file changes what the server
+    sends and nothing at all about what Facebook shows: the card in the
+    wild still carried a page title this site had not used for days. So
+    the url carries the image's own fingerprint, and this check is what
+    makes that true rather than aspirational -- change the picture without
+    changing the url and the version no longer matches the bytes.
+    """
+    import hashlib
+    import re
+
+    web = ROOT / "app" / "static" / "svs"
+    cover = web / "og-cover.jpg"
+    if not cover.is_file():
+        raise Failed("there is no og-cover.jpg to share")
+
+    tag = hashlib.sha1(cover.read_bytes()).hexdigest()[:8]
+    page = (web / "index.html").read_text(encoding="utf-8")
+
+    urls = re.findall(r'og-cover\.jpg(\?v=[0-9a-f]+)?', page)
+    if len(urls) < 2:
+        raise Failed(f"the cover is named {len(urls)} time(s); both the "
+                     f"Open Graph and the Twitter image need it")
+    for version in urls:
+        if not version:
+            raise Failed("the cover url carries no version, so Facebook "
+                         "will keep showing whatever it cached the first "
+                         "time and a new picture will never appear")
+        if version != f"?v={tag}":
+            raise Failed(
+                f"the cover url says {version} and the file fingerprints "
+                f"as ?v={tag}. The picture changed and the url did not, so "
+                f"every share will keep the old card.")
+
+    # The shape Facebook and Twitter both lay out. Wrong here means a
+    # cropped or letterboxed card, decided by them and not by us.
+    try:
+        from PIL import Image
+    except ImportError:
+        return f"cover versioned ?v={tag}; no PIL here to check its shape"
+    with Image.open(cover) as im:
+        w, h = im.size
+    if w < 1200 or h < 630:
+        raise Failed(f"the cover is {w}x{h}; 1200x630 is the stated "
+                     f"minimum and below it the card falls back to a "
+                     f"thumbnail beside the text")
+    if abs(w / h - 1.91) > 0.03:
+        raise Failed(f"the cover is {w / h:.2f}:1 and 1.91:1 is what is "
+                     f"laid out; the difference is cropped off")
+
+    # And the page must not promise a size it does not have.
+    said = dict(re.findall(r'og:image:(width|height)" content="(\d+)"', page))
+    if said:
+        if int(said.get("width", 0)) != w or int(said.get("height", 0)) != h:
+            raise Failed(
+                f"the page declares og:image {said.get('width')}x"
+                f"{said.get('height')} and the file is {w}x{h}; the card is "
+                f"laid out from the declaration, before the image arrives")
+
+    return (f"{w}x{h} at {w / h:.2f}:1, declared honestly, url versioned "
+            f"?v={tag} so a new picture reaches a cache")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5326,6 +5398,7 @@ def main() -> int:
         check_the_scaler_cannot_run_away,
         check_the_recogniser_is_marked_right_or_wrong,
         check_the_page_is_actually_styled,
+        check_the_share_card_is_the_card_that_ships,
         check_no_backtick_hides_in_a_stylesheet,
         check_a_failure_is_never_mailed_to_the_visitor,
         check_nothing_is_mailed_to_an_unproved_address,
