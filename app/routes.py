@@ -320,10 +320,13 @@ def api_wanted():
     if request.headers.get("X-Forwarded-For"):
         return jsonify({"error": "Not found"}), 404
 
-    try:
-        published = set(scorestore.catalogue())
-    except Exception:                                # noqa: BLE001
-        published = set()
+    # RENDERABLE, not catalogued. `ready` is what turns into a button and
+    # into an automatic start, so it has to mean the package loads here --
+    # bands present, alignment readable -- and not merely that an object of
+    # that name exists in the bucket. A half-finished upload is in the
+    # catalogue too, and starting against one spends a machine's minutes
+    # producing nothing.
+    published = {p.name for p in library.packages()}
 
     # HELD JOBS, NOT RECOGNITIONS. This read the `unavailable` recognition
     # rows, which are written when somebody UPLOADS and we listen -- so
@@ -341,10 +344,13 @@ def api_wanted():
             " AND state NOT IN (?, ?, ?, ?) ORDER BY created DESC LIMIT 60",
             (store.QUEUED, store.RUNNING, store.DONE, store.ERROR)):
         score = (job["score"] or "").strip()
-        # Already renderable: it is not waiting on an engraving, so it is
-        # not this list's business.
-        if library.find(score) is not None:
-            continue
+        # A HELD JOB STAYS LISTED once its score arrives. This used to drop
+        # any request whose score had become renderable -- which is exactly
+        # the moment it becomes actionable, so installing the Ballade made
+        # the request for the Ballade vanish from the operator's list while
+        # it sat there, still held, still waiting. A request leaves this
+        # list by being STARTED, which the state filter above already
+        # handles, and never by being hidden.
         editions = sorted(_editions_offered(job["id"]) or {score})
         address = (job["email"] or "").strip()
         piece = ""

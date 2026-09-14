@@ -25,9 +25,17 @@ Usage:
     python tools/retrigger.py <job_id>              # run a failed job again
     python tools/retrigger.py --failed              # every failed job again
 
-Nothing here runs on its own. A render costs real minutes on a machine
-somebody is paying for, and the person who built the package is the one who
-knows whether it is finished.
+A held request is different, and `--waiting` is for it. Somebody asked for
+a piece we had not engraved; the row kept their recording, their address
+and the folder name, and it waits. Nothing can tell that row the engraving
+has arrived, so the question is asked from the package's side instead:
+after `check_score.py --install` has published a score AND confirmed the
+server loads it, this starts every held request that score unblocks.
+
+That is the one thing here that runs without being asked for job by job,
+and it runs only behind that confirmation -- a render costs real minutes on
+a machine somebody is paying for, and a half-uploaded package would spend
+them producing nothing. Everything else still needs a job id.
 
 This writes the job row and stops there. It never talks to the broker: the
 web process already sweeps for queued work that was never handed over and
@@ -195,6 +203,32 @@ def start(row, score: str | None, address: str | None) -> bool:
     return True
 
 
+def waiting() -> list:
+    """Held requests whose score has since been installed.
+
+    A request for a piece with no package is HELD rather than refused: the
+    row carries the recording, the chosen folder name and the address, and
+    waits. What it waits for is the engraving, and there is no way for the
+    row to learn that the engraving arrived -- so this asks the question
+    the other way round, from the package's side.
+
+    Only jobs that are held. A queued or running one is already on its way,
+    and a finished one is finished; re-queueing either would render twice
+    and mail twice.
+    """
+    out = []
+    for row in store.query(
+            "SELECT * FROM jobs WHERE score IS NOT NULL AND score != ''"
+            " AND state NOT IN (?, ?, ?, ?) ORDER BY created",
+            (store.QUEUED, store.RUNNING, store.DONE, store.ERROR)):
+        # RENDERABLE, not merely present. `find_package` returns a package
+        # only when the bands are there and it loads, which is the whole
+        # point of asking here rather than trusting that an upload finished.
+        if pipeline.find_package(row["score"]) is not None:
+            out.append(row)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Start a render on a visitor's behalf, or run a failed "
@@ -208,9 +242,14 @@ def main() -> int:
                                         "reported the request.")
     parser.add_argument("--failed", action="store_true",
                         help="run every failed job again")
+    parser.add_argument("--waiting", action="store_true",
+                        help="start every held request whose score has since "
+                             "been installed. Run by check_score.py after an "
+                             "install, so publishing a score finishes the "
+                             "requests that were waiting for it.")
     args = parser.parse_args()
 
-    if not (args.job_id or args.failed):
+    if not (args.job_id or args.failed or args.waiting):
         show()
         return 0
 
@@ -228,6 +267,11 @@ def main() -> int:
         rows = list(store.query(
             "SELECT * FROM jobs WHERE state = ? ORDER BY finished",
             (store.ERROR,)))
+    elif args.waiting:
+        rows = waiting()
+        if not rows:
+            print("no held request is waiting for a score we now have")
+            return 0
 
     if not rows:
         print("nothing to do")

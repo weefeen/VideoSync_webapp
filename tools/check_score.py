@@ -492,7 +492,25 @@ def install(root: pathlib.Path) -> int:
 
     # Installed is not the same as usable: ask the server's own loader, on
     # the server, rather than trusting that a copy succeeded.
-    _remote_python(PROBE, name)
+    if _remote_python(PROBE, name) != 0:
+        print()
+        print("    the server cannot render it yet, so nothing was started.")
+        print("    Re-run this once it can; requests keep waiting until then.")
+        return 1
+
+    # THE REQUESTS THAT WERE WAITING FOR THIS SCORE NOW GO. A request for a
+    # piece we had not engraved is held, not refused: the row keeps the
+    # recording, the address and the folder name. Nothing can tell that row
+    # the engraving has arrived, so publishing the score is what starts it.
+    #
+    # Deliberately after the probe and not before: the check above is the
+    # assurance that the score is complete and loadable on the server, and
+    # it is the only thing standing between a half-finished upload and a
+    # render against it.
+    print()
+    print("    starting the requests that were waiting for this score")
+    _remote_shell("cd /srv/vsw/current && sudo -u vsw /srv/vsw/venv/bin/python"
+                  " tools/retrigger.py --waiting")
     return 0
 
 
@@ -515,12 +533,24 @@ sys.path.insert(0, '.')
 from app import library, scorestore
 name = sys.argv[1]
 m = [p for p in library.packages() if p.name == name]
-if m:
-    print('    the server loads it:', m[0].display_name, '|', m[0].edition)
-else:
-    print('    THE SERVER CANNOT SEE IT')
 print('    the bucket now holds %d score(s)' % len(scorestore.catalogue()))
+if not m:
+    # `library.packages()` is the RENDERABLE ones, so this is not "the
+    # object arrived" but "the server can make a video out of it". A
+    # non-zero exit because what follows -- starting the requests that
+    # were waiting for this score -- must not run on a half-arrived
+    # package: it would spend a machine's minutes producing nothing.
+    print('    THE SERVER CANNOT SEE IT')
+    raise SystemExit(1)
+print('    the server loads it:', m[0].display_name, '|', m[0].edition)
 """
+
+
+def _remote_shell(command: str) -> int:
+    """Run a command on the server. The caller composes it; nothing here
+    interpolates a package name into a shell string."""
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", SERVER, command]).returncode
 
 
 def _remote_python(script: str, *args: str) -> int:
