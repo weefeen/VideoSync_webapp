@@ -120,6 +120,12 @@ section[data-s].on{display:block}
 .dropzone.filled h2{color:var(--soft);font-size:20px}
 .dropbtn{font:inherit;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:#fff;background:var(--b1);border:0;border-radius:2px;padding:15px 26px;cursor:pointer;white-space:nowrap;transition:background .18s}
 .dropbtn:hover{background:var(--b2)}
+/* Quiet, but not hidden: it has to be read before a file is chosen, and it
+   is the one condition a visitor can fall foul of without doing anything
+   wrong. Sits under the dropzone rather than inside it, so choosing and
+   clearing a file cannot take it away. */
+.dropnote{margin:13px 2px 0;font-size:12.5px;line-height:1.65;color:var(--soft);max-width:62ch}
+.dropnote b{color:var(--ink);font-weight:500}
 .filename{font-family:Fraunces,serif;font-size:25px;font-weight:400}
 .filename i{font-style:normal;color:var(--faint);font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.15em;text-transform:uppercase;margin-left:14px}
 .linkbtn{font:inherit;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;background:none;border:0;border-bottom:1px solid var(--hair);color:var(--soft);padding:5px 0;cursor:pointer;white-space:nowrap}
@@ -665,6 +671,17 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;bac
         <button class="dropbtn" type="button" id="browse">Choose a file</button>
         <input type="file" id="file" accept="video/*"/>
       </label>
+      <!-- SAID BEFORE THEY UPLOAD, not after they are refused. The score
+           is aligned against the whole work, so a recording of part of a
+           piece is declined -- correctly, and with a clear reason, but
+           only once somebody has waited through an upload and a
+           transcription to hear it. Outside the dropzone because the
+           dropzone's contents are rebuilt whenever a file is chosen or
+           cleared, and a warning that disappears when you look at it is
+           not a warning. -->
+      <p class="dropnote"><b>Please upload the complete piece.</b> The score
+        is followed from the first bar to the last, so an excerpt or a
+        single movement cannot be matched yet.</p>
 
     </div>
 

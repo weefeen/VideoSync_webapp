@@ -1329,6 +1329,8 @@ document.addEventListener('DOMContentLoaded', foldScoreSources);
  * who has asked for less motion — the same courtesy the drawn version
  * paid with its prefers-reduced-motion rule.
  */
+/* The standfirst names what the site does; this names the one condition
+ * it cannot meet. Kept beside the sample so the two read as one claim. */
 const SAMPLE = 'assets/sample.mp4';
 const SAMPLE_CAPTION = 'Rondo in C minor, Op. 1';
 
