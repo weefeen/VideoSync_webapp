@@ -484,9 +484,10 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 <p class="problem" id="problem"></p>
 
 <h2>Asked for, not engraved</h2>
-<p class="hint" id="askhint">Pieces somebody uploaded that we recognised and
-  have no score for. Once you publish the score, the render starts from
-  here — the person who asked is still on the job.</p>
+<p class="hint" id="askhint">Videos somebody asked for that we cannot make
+  yet. Each one is a real request — a piece chosen and an address left —
+  waiting on an engraving. Publish the score and the render starts from
+  here, for the person who asked.</p>
 <div id="asks"></div>
 
 <h2>What this computer can take</h2>
@@ -685,7 +686,9 @@ function drawAsks(rows){
       + '<span class="pc">' + (r.piece || 'an unnamed piece') + '</span>'
       + '<span class="mt">' + ago(r.at) + (r.country ? ' · ' + r.country : '')
       + (r.minutes ? ' · ' + r.minutes.toFixed(1) + ' min' : '')
-      + (r.address ? ' · they left an address' : ' · no address')
+      + (r.confirmed ? ' · confirmed address'
+         : r.address ? ' · address not confirmed yet'
+         : ' · no address')
       + '</span>'
       + '<div class="row">' + folders + '</div>'
       + '<div class="row">' + act + '</div></div>';

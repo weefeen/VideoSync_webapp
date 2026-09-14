@@ -4875,6 +4875,25 @@ def check_a_wanted_score_reaches_the_operator() -> str:
         raise Failed(f"/api/wanted did not answer locally "
                      f"({got.status_code})")
 
+    # A FILE SOMEBODY DROPPED IS NOT A REQUEST. This listed `unavailable`
+    # recognitions, which are written when somebody uploads and we listen
+    # -- so dropping a file in and wandering off put a piece on the
+    # operator's list with no address and nobody waiting, under a heading
+    # promising "the person who asked is still on the job".
+    routes_src = (ROOT / "app" / "routes.py").read_text(encoding="utf-8")
+    i = routes_src.find("def api_wanted")
+    body = routes_src[i:i + 4000]
+    if "FROM recognitions" in body:
+        raise Failed("the wanted list reads recognitions, which exist as "
+                     "soon as somebody uploads. A request is a job with a "
+                     "score chosen and an address left")
+    if "FROM jobs" not in body:
+        raise Failed("the wanted list does not read held jobs")
+    if "confirmed" not in body:
+        raise Failed("the list does not say whether the address was ever "
+                     "confirmed, so an operator cannot tell which requests "
+                     "can actually be delivered")
+
     # The refusal keeps the address, or the loop cannot be closed.
     src = (ROOT / "app" / "jobs.py").read_text(encoding="utf-8")
     i = src.find("def say_a_score_is_wanted")

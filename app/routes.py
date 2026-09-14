@@ -317,26 +317,50 @@ def api_wanted():
     except Exception:                                # noqa: BLE001
         published = set()
 
+    # HELD JOBS, NOT RECOGNITIONS. This read the `unavailable` recognition
+    # rows, which are written when somebody UPLOADS and we listen -- so
+    # dropping a file in and wandering off put a piece on the operator's
+    # list, with no address, no submission and nothing waiting. Two of the
+    # first three entries were exactly that.
+    #
+    # The panel promises "the person who asked is still on the job", and
+    # that is only true of a request somebody actually made: a job with a
+    # score chosen, an address given, and no package to render it with. It
+    # is the row `jobs.registry.hold` writes.
     out = []
-    for row in store.query(
-            "SELECT job_id, at, piece_id, title, duration, country"
-            " FROM recognitions WHERE outcome = ? ORDER BY at DESC LIMIT 60",
-            ("unavailable",)):
-        editions = sorted(_editions_offered(row["job_id"]))
-        job = store.get_job(row["job_id"])
+    for job in store.query(
+            "SELECT * FROM jobs WHERE score IS NOT NULL AND score != ''"
+            " AND state NOT IN (?, ?, ?, ?) ORDER BY created DESC LIMIT 60",
+            (store.QUEUED, store.RUNNING, store.DONE, store.ERROR)):
+        score = (job["score"] or "").strip()
+        # Already renderable: it is not waiting on an engraving, so it is
+        # not this list's business.
+        if library.find(score) is not None:
+            continue
+        editions = sorted(_editions_offered(job["id"]) or {score})
+        address = (job["email"] or "").strip()
+        piece = ""
+        row = store.recognition_for(job["id"])
+        if row is not None:
+            piece = row["title"] or row["piece_id"] or ""
         out.append({
-            "job": row["job_id"],
-            "at": int((row["at"] or 0) * 1000),
-            "piece": row["title"] or row["piece_id"] or "",
-            "minutes": round((row["duration"] or 0) / 60.0, 1) or None,
-            "country": row["country"] or "",
+            "job": job["id"],
+            "at": int((job["created"] or 0) * 1000),
+            "piece": piece or score,
+            "minutes": round((job["duration"] or 0) / 60.0, 1) or None,
+            "country": (row["country"] if row is not None else "") or "",
             "editions": editions,
             # Published since they asked: the render can be started now.
             "ready": [e for e in editions if e in published],
-            # Whether we can tell them, which decides what the button does.
-            "address": bool(job and (job["email"] or "").strip()),
-            "state": (job["state"] if job else ""),
-            "recording": bool(job and job["upload"]),
+            "address": bool(address),
+            # WHETHER THEY CAN BE TOLD. An address nobody has confirmed can
+            # be typed by anyone, so a render started for it would mail a
+            # stranger; `_tell_them` holds the link back until it is
+            # confirmed either way. Shown so the operator knows which
+            # requests will actually reach somebody.
+            "confirmed": bool(address) and store.may_mail(address),
+            "state": job["state"],
+            "recording": bool(job["upload"]),
         })
     return jsonify(out)
 
