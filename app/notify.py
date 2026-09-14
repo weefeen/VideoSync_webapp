@@ -481,7 +481,7 @@ def send_queued(job_id: str, address: str, piece: str = "",
 
     named = f" of {_pretty(piece)}" if piece else ""
     message = _compose(
-        "We are making your score video", address,
+        f"We are making your score video{named}", address,
         f"We have your recording{named} and it is being made into a video.\n\n"
         f"{line}{when}\n\n"
         f"You can also follow it here, or come back to it later:\n\n"
@@ -515,9 +515,16 @@ def send_ready(job_id: str, address: str, piece: str = "",
                   f"video is made.")
 
     # `piece` comes from our own library, never from the uploader.
+    # THE PIECE GOES IN THE SUBJECT, not only the body. Every one of these
+    # carried the same nine words, so a mailbox showed a column of
+    # identical lines from one sender -- which is what bulk mail looks
+    # like, and is read that way by both the filter and the person. It is
+    # also simply more useful: the subject says which video arrived.
+    #
+    # From our own library, never from anything the visitor typed.
     named = f" of {_pretty(piece)}" if piece else ""
     message = _compose(
-        "Your score video is ready", address,
+        f"Your score video{named} is ready", address,
         f"Your video{named} has finished rendering.\n\n"
         f"{_link(job_id)}\n\n"
         f"{window}\n\n"
