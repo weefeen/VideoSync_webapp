@@ -80,6 +80,13 @@ class Event:
     seq: int = 0
     at: float = dataclasses.field(default_factory=time.time)
     worker: str = ""
+    # WHERE THIS RAN AND WITH WHAT, carried rather than inferred. A
+    # hostname does not say whether a machine is a lent laptop or a rented
+    # node, and nothing on the web box can see which video encoder the
+    # renderer picked -- that is decided on the machine, by asking the
+    # machine. Both end up as labels on the metrics.
+    place: str = ""
+    encoder: str = ""
     stage: str | None = None
     detail: str = ""
     # What the work has cost so far, measured where it happens and carried

@@ -59,6 +59,12 @@ import webbrowser
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+# THIS MACHINE IS A LENT ONE, and it is the only thing that knows so.
+# A hostname does not say whether a renderer is somebody's laptop or
+# a rented node, and the web box cannot tell from outside. Set before
+# the worker is imported, so the first event already carries it.
+os.environ.setdefault("VSW_PLACE", "local")
+
 from app import render as rnd                   # noqa: E402
 from app import scorestore, storage, store      # noqa: E402
 from app import svg as appsvg                   # noqa: E402

@@ -39,6 +39,33 @@ def name() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
+def place() -> str:
+    """local | cloud | web -- where this render is happening.
+
+    REPORTED, NOT INFERRED. A hostname does not say whether a machine is a
+    lent laptop or a rented node, and the web box cannot tell from the
+    outside. `tools/volunteer.py` sets this to `local`; the compute image
+    sets `cloud`; the web box's own worker leaves it alone and is `web`.
+    """
+    said = os.environ.get("VSW_PLACE", "").strip().lower()
+    return said if said in ("local", "cloud", "web") else "web"
+
+
+def encoder() -> str:
+    """Which video encoder this machine will use. Cheap after the first ask.
+
+    On the metrics this is the difference between a render taking three
+    minutes and thirteen, and nothing on the web box can see it: the
+    choice is made here, by asking this machine what it can actually do.
+    """
+    try:
+        from .. import render as rnd
+        from ..settings import settings
+        return rnd._encoder_here(settings.ffmpeg)       # noqa: SLF001
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
 def usage() -> tuple[float | None, int | None]:
     """CPU seconds burned and the high-water mark of memory, so far.
 
@@ -117,6 +144,10 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
     """
     seq = itertools.count(1)
     me = name()
+    # Asked once per task rather than per event. `encoder()` probes
+    # the machine the first time and caches after, but a task sends
+    # many events and none of them need it asked again.
+    where, enc = place(), encoder()
 
     def say(kind: str, **fields) -> None:
         # Every event carries the running cost, so a stage boundary is
@@ -138,6 +169,7 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
         try:
             publish(Event(job_id=task.job_id, type=kind, attempt=task.attempt,
                           seq=next(seq), worker=me,
+                          place=where, encoder=enc,
                           cpu_seconds=cpu, peak_rss=rss, **fields))
         except Exception:                              # noqa: BLE001
             logger.warning("job %s: could not publish %s event (the outcome "

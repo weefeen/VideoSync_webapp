@@ -85,7 +85,15 @@ def _started(event: Event, row) -> bool:
     store.stage_begin(event.job_id, WHOLE, attempt=event.attempt,
                       inputs=[row["upload"]], bytes_in=row["size_bytes"],
                       media_seconds=row["duration"],
-                      cpu_at_open=event.cpu_seconds)
+                      cpu_at_open=event.cpu_seconds,
+                      # KEPT HERE BECAUSE `jobs.worker` DOES NOT KEEP IT.
+                      # That column doubles as "who holds the lease" and is
+                      # cleared to NULL when a job finishes, so the finished
+                      # record forgot which machine did the work: one job in
+                      # forty-eight had a worker, and it was the one still
+                      # running.
+                      worker=event.worker, place=event.place,
+                      encoder=event.encoder)
     return True
 
 
@@ -224,7 +232,8 @@ def _turn_stage(event: Event, row, stage: str) -> None:
                         peak_rss=event.peak_rss)
     store.stage_begin(event.job_id, stage, attempt=event.attempt,
                       media_seconds=row["duration"],
-                      cpu_at_open=event.cpu_seconds)
+                      cpu_at_open=event.cpu_seconds,
+                      worker=event.worker, place=event.place, encoder=event.encoder)
 
 
 def _close_open_run(event: Event, *, state: str = store.ERROR,

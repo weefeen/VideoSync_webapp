@@ -122,6 +122,19 @@ CREATE TABLE IF NOT EXISTS stage_runs (
     stderr_tail   TEXT,
     bytes_in      INTEGER,
     media_seconds REAL,
+    -- WHERE IT RAN AND WITH WHAT. `jobs.worker` cannot answer this: it
+    -- doubles as "who holds the lease" and is cleared to NULL the moment a
+    -- job finishes, so the finished record forgot the machine that did the
+    -- work. One job in forty-eight had a worker, and it was the one still
+    -- running.
+    --
+    -- `place` is local | cloud | web, reported by the worker rather than
+    -- guessed from a hostname. `encoder` is the ffmpeg video encoder the
+    -- machine chose, which is the difference between a render taking three
+    -- minutes and thirteen.
+    worker        TEXT,
+    place         TEXT,
+    encoder       TEXT,
     -- CPU seconds this stage actually burned, the worker AND the ffmpeg it
     -- spawned. Wall time says how long you waited; this says whether the
     -- machine was working or blocked, and the ratio between them is how
@@ -368,6 +381,9 @@ _ADDED = (
     ("compute", "machine_label", "TEXT"),
     ("compute", "alarm", "TEXT"),
     ("compute", "alarm_at", "REAL"),
+    ("stage_runs", "worker", "TEXT"),
+    ("stage_runs", "place", "TEXT"),
+    ("stage_runs", "encoder", "TEXT"),
     ("stage_runs", "cpu_seconds", "REAL"),
     ("stage_runs", "cpu_at_open", "REAL"),
     ("stage_runs", "peak_rss", "INTEGER"),
@@ -607,15 +623,20 @@ def stage_begin(job_id: str, stage: str, *, attempt: int = 1,
                 inputs: list[str] | None = None,
                 bytes_in: int | None = None,
                 media_seconds: float | None = None,
-                cpu_at_open: float | None = None) -> int:
+                cpu_at_open: float | None = None,
+                worker: str | None = None,
+                place: str | None = None,
+                encoder: str | None = None) -> int:
     """Record that a stage started. Returns the row id to finish with."""
     with write() as conn:
         cur = conn.execute(
             "INSERT INTO stage_runs (job_id, stage, attempt, state, started,"
-            " inputs, bytes_in, media_seconds, cpu_at_open)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
+            " inputs, bytes_in, media_seconds, cpu_at_open,"
+            " worker, place, encoder)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (job_id, stage, attempt, RUNNING, time.time(),
-             json.dumps(inputs or []), bytes_in, media_seconds, cpu_at_open))
+             json.dumps(inputs or []), bytes_in, media_seconds, cpu_at_open,
+             worker or None, place or None, encoder or None))
         return int(cur.lastrowid)
 
 

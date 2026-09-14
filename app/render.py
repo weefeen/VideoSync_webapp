@@ -858,6 +858,20 @@ def _logo_png(kind: str, surface: str, width_px: int, opacity: float,
     height_px = max(8, round(width_px * img.height / img.width))
     img = img.resize((width_px, height_px), Image.LANCZOS)
 
+    # TRIMMED TO THE INK, before the opacity is applied -- afterwards a
+    # faint mark still has alpha everywhere it had any, and the bounding
+    # box would be the whole square again.
+    #
+    # The source is a square canvas with the disc inset inside it, so the
+    # file's edge is not the mark's edge. Placing the FILE a few pixels off
+    # the band's floor therefore left the visible disc much further up than
+    # the credit beside it, and the two did not sit on the same line. This
+    # is the same correction the credit already makes for its own padding;
+    # the logo simply never made it.
+    box = img.getbbox()
+    if box:
+        img = img.crop(box)
+
     if opacity < 1.0:
         alpha = img.getchannel("A").point(lambda a: round(a * opacity))
         img.putalpha(alpha)
@@ -876,11 +890,17 @@ def _logo_png(kind: str, surface: str, width_px: int, opacity: float,
 # height off its floor, reading as afloat in the stave rather than set
 # under it.
 #
+# Two pixels, because the ask was for them at the limit of the band and
+# the band's own paper already carries a margin below the lowest stave.
+# Measured from the INK on both sides: the credit subtracts its
+# transparent padding and the logo is cropped to its bounding box, so this
+# figure means the same thing for each and they sit on one line.
+#
 # Every canvas this renders is on the same 1080 scale (16/9 is 1920x1080,
 # 1/1 is 1080x1080, 9/16 is 1080x1920), so a pixel means the same thing in
 # all three and a proportion buys nothing. If an output at a different
 # scale is ever added, this is the line that has to become a ratio of it.
-_MARK_FOOT_PX = 5
+_MARK_FOOT_PX = 2
 
 
 def _band_inset(layout: Layout) -> tuple[int, int]:

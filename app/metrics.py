@@ -127,13 +127,29 @@ def render() -> str:
     # ── what each stage costs ───────────────────────────────────────────
     # Sums and counts rather than an average, so Prometheus can average over
     # whatever window is being looked at instead of over all history.
+    # BROKEN OUT BY WHERE IT RAN AND WITH WHAT. Renders got three times
+    # slower on 09-13 and the dashboard could not say why, because every
+    # stage looked the same whichever machine did it: the figures moved
+    # when work shifted from rented multi-core nodes onto a laptop, and
+    # nothing recorded that it had. `place` and `encoder` are reported by
+    # the worker rather than guessed here -- a hostname does not say
+    # whether a machine is lent or rented, and only the renderer knows
+    # which video encoder it found.
+    #
+    # COALESCE rather than a filter: rows written before this existed have
+    # neither, and dropping them would make the totals shrink the day this
+    # shipped.
     rows = store.query(
-        "SELECT stage, state, COUNT(*) AS n,"
+        "SELECT stage, state,"
+        "       COALESCE(NULLIF(place, ''), 'unknown') AS place,"
+        "       COALESCE(NULLIF(encoder, ''), 'unknown') AS encoder,"
+        "       COUNT(*) AS n,"
         "       COALESCE(SUM(elapsed), 0) AS wall,"
         "       COALESCE(SUM(cpu_seconds), 0) AS cpu,"
         "       COALESCE(MAX(peak_rss), 0) AS rss,"
         "       COALESCE(SUM(media_seconds), 0) AS media"
-        " FROM stage_runs WHERE ended IS NOT NULL GROUP BY stage, state")
+        " FROM stage_runs WHERE ended IS NOT NULL"
+        " GROUP BY stage, state, place, encoder")
 
     family("vsw_stage_runs_total", "counter",
            "Finished stage runs, by stage and how they ended.")
@@ -148,12 +164,21 @@ def render() -> str:
            "Cumulative for the process, so the rise between stages is what "
            "that stage cost.")
     for row in rows:
-        labels = {"stage": row["stage"], "state": row["state"]}
+        # `hardware` rather than the encoder's own name, because that is
+        # the question being asked of the chart: whether this machine used
+        # its video card or its processor. The exact encoder is beside it
+        # for anyone who needs to know which card.
+        encoder = row["encoder"]
+        labels = {"stage": row["stage"], "state": row["state"],
+                  "place": row["place"], "encoder": encoder,
+                  "hardware": ("unknown" if encoder == "unknown"
+                               else "cpu" if encoder == "libx264" else "gpu")}
         out.append(_line("vsw_stage_runs_total", row["n"], labels))
         out.append(_line("vsw_stage_seconds_total", round(row["wall"], 3), labels))
         out.append(_line("vsw_stage_cpu_seconds_total", round(row["cpu"], 3), labels))
         out.append(_line("vsw_stage_peak_rss_bytes", int(row["rss"]),
-                         {"stage": row["stage"]}))
+                         {"stage": row["stage"], "place": row["place"],
+                          "encoder": encoder}))
 
     # ── the pipeline as a whole ─────────────────────────────────────────
     whole = store.query(
