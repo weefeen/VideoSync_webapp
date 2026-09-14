@@ -206,6 +206,43 @@ def check(root: pathlib.Path) -> Report:
         r.bad("no measures.data -- this score has never been aligned to a "
               "reference recording")
 
+    # -- WHY the alignment is missing, which is the useful half -------------
+    #
+    # Three blockers -- no chroma, no measures.data, an empty alignment --
+    # have one cause often enough that saying it is worth more than listing
+    # them: the reference was saved with no recording attached. Measured on
+    # the Ballade, whose `reference.json` recorded `video_file_path: null`
+    # and whose reference/ held nothing but that file. Without this the
+    # three symptoms send somebody looking for three problems.
+    # EITHER FOLDER, like every other check here: a project keeps this in
+    # `performance/` and an installed package in `reference/`, and looking
+    # in only one of them is how this check silently did nothing the first
+    # time it ran.
+    ref = next((root / d / "reference.json" for d in ("reference", "performance")
+                if (root / d / "reference.json").is_file()), None)
+    if ref is not None:
+        try:
+            snapshot = json.loads(ref.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            r.note(f"reference/reference.json could not be read: {exc}")
+            snapshot = {}
+        if snapshot.get("is_reference"):
+            recording = snapshot.get("video_file_path")
+            audio = [n for n in ("reference/audio.wav", "performance/audio.wav")
+                     if (root / n).is_file()]
+            if not recording and not audio:
+                r.bad("a reference was saved with NO RECORDING attached "
+                      "(reference.json says video_file_path: null, and there "
+                      "is no audio.wav). That is why there is no chroma and "
+                      "no alignment: point the reference step at a recording "
+                      "of this piece and run it again. The engraving is "
+                      "finished and is not the problem.")
+            elif recording and not audio:
+                r.note(f"the reference names a recording that is not in the "
+                       f"package: {str(recording)[:70]}. It is not shipped, "
+                       f"so this only matters if the alignment is missing "
+                       f"too.")
+
     # -- metadata, which the licence depends on -----------------------------
     source = root / "score" / "source.krn"
     if source.is_file():
