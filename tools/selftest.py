@@ -309,9 +309,27 @@ def _a_package_on_disk() -> pathlib.Path:
             "no score package on this machine's disk. These checks tar and "
             "load a real package, so one has to be installed under "
             "SCORE_ROOT_DIGITAL or SCORE_ROOT_RASTER.")
+
+    # NOT ONE THAT IS STILL BEING WRITTEN. A score root can be an
+    # exporter's working folder, and these checks tar a package and count
+    # what came out -- so a package half-exported while the check runs
+    # reports "28 band images arrived, 29 were published" and looks like a
+    # transfer bug. Measured: 33 bands, then 34 five seconds later.
+    import time as _t
+    settled = []
+    for root in found:
+        newest = max((f.stat().st_mtime for f in root.rglob("*")
+                      if f.is_file()), default=0)
+        if _t.time() - newest > 60:
+            settled.append(root)
+    if not settled:
+        raise Failed("every score package on this disk was written in the "
+                     "last minute; something is exporting into a score root "
+                     "and these checks cannot read a moving folder")
+
     # The smallest, because the caller tars it for real.
-    return min(found, key=lambda r: sum(f.stat().st_size
-                                        for f in r.rglob("*") if f.is_file()))
+    return min(settled, key=lambda r: sum(f.stat().st_size
+                                          for f in r.rglob("*") if f.is_file()))
 
 
 def _queued(job_id: str, **over) -> None:

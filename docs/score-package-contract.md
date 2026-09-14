@@ -134,6 +134,77 @@ codepoint, because the embedded font is the only one we can guarantee.
 
 ---
 
+## Shipping a package from music_line_extractor
+
+MLE writes these packages, so MLE is the right place to ship one from — a
+button there beats an operator finding the folder and running a tool in
+another repository. What that button must **not** do is grow a second copy
+of what a package has to be. This file exists because three programs have
+already drifted apart twice reading the same folder; a second
+implementation of the export target would be the third.
+
+**Call the checker. Do not reimplement the transfer.**
+
+```
+python tools/check_score.py "<exported package>" --json            # verify
+python tools/check_score.py "<exported package>" --install --json  # ship it
+```
+
+`--json` prints nothing but JSON on stdout:
+
+```json
+{"ok": true, "blocking": 0,
+ "publish_as": "Op.23_BALLADE_(Breitkopf)__023-1-BH",
+ "recogniser_knows": true,
+ "corrected_on_install": 1,
+ "problems": [{"level": "BAD|fix|note", "text": "..."}],
+ "installed": true}
+```
+
+Show `problems` and act on `ok`. Nothing on the MLE side needs to know what
+a band filename means, that the reference audio is excluded, or that
+`performance/` is renamed on the way up.
+
+### Two reasons it goes over ssh and not straight to the bucket
+
+**Credentials.** `--install` streams a tar to the web box and publishes
+from there, so a desktop application needs no bucket key. `scorestore
+.publish` states the trade outright: *"Tarring locally and uploading from
+an operator's laptop would mean shipping the bucket key to the laptop,
+which is not a trade worth making to save one hop."*
+
+**bsdtar.** The `performance/` → `reference/` rename happens on the server
+because Windows ships bsdtar, which has no `--transform` **and does not
+fail loudly** — the first hand-install produced a package with both
+folders and looked like it had worked.
+
+### `publish_as` is the field that decides whether anyone reaches the score
+
+A package is found by its folder name, exactly. `recogniser_knows` says
+whether that name is one the recogniser can actually offer, and a request
+for a missing score is matched to a published one by string equality on
+that name — see `/api/wanted`. A flawless package under a name nobody asks
+for is a score no visitor will ever reach, and nothing will report it as
+wrong.
+
+### What the export must contain
+
+Read by `app/package.py`; the first path that exists wins.
+
+| | |
+|---|---|
+| `score/lines/<first_measure>.svg` | one per system, and **the filename is the measure it starts at** |
+| `score/export.json` | `band_w`, `band_h`, `options` |
+| `score/source.krn` | metadata: `COM`, `OTL`, `OPS`, `PPR`, `PPP` |
+| `score/chroma.npy` | the reference chroma — without it nothing can align |
+| `reference/measures.data` | the alignment of the reference recording |
+| `reference/audio.wav` | may be present; never shipped (111 MB, read by nothing) |
+
+`performance/` is accepted in place of `reference/` and renamed on the
+server. `score/measures.data` is created empty by the exporter and is never
+read: an alignment belongs to a *performance*, not to a score.
+
+
 ## Why this repo does not reuse VSS's renderer
 
 VSS has `services/overlay_video_encoding_service_dynamic.py`. It is not

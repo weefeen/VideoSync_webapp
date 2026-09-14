@@ -494,17 +494,69 @@ def _remote_python(script: str, *args: str) -> int:
     return subprocess.run(["ssh", "-o", "BatchMode=yes", SERVER, cmd]).returncode
 
 
+def verdict(root: pathlib.Path, report: "Report") -> dict:
+    """The same answer, for a program rather than a person.
+
+    FOR THE BUTTON IN music_line_extractor. That application produces these
+    packages, so it is the right place to ship one from -- but it must not
+    grow its own copy of what a package has to be. This checker is the one
+    copy, and `docs/score-package-contract.md` exists because these three
+    programs have already drifted apart twice reading the same folder.
+
+    So the interface is this: run the checker, read `ok`, show `problems`.
+    Nothing over there needs to know what a band filename means, that the
+    reference audio is excluded, or that `performance/` is renamed on the
+    server -- and nothing over there needs bucket credentials, because
+    `--install` streams a tar over ssh and publishes on the box.
+
+    `publish_as` is the field worth acting on: a package is findable by the
+    EXACT folder name, and `recogniser_knows` says whether that name is one
+    the recogniser can offer. A perfect package under a name nobody asks
+    for is a score no visitor will ever reach.
+    """
+    return {
+        "ok": report.blocking == 0,
+        "blocking": report.blocking,
+        "publish_as": root.name,
+        "recogniser_knows": any(
+            "recogniser knows this folder name" in text
+            for kind, text in report.lines if kind == "ok"),
+        "corrected_on_install": sum(1 for kind, _ in report.lines
+                                    if kind == "fix"),
+        "problems": [{"level": kind, "text": text}
+                     for kind, text in report.lines
+                     if kind in ("BAD", "fix", "note")],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Check a score package, and optionally install it.")
     parser.add_argument("folder", help="the music_line_extractor project")
     parser.add_argument("--install", action="store_true",
                         help="install it too, if nothing is blocking")
+    parser.add_argument("--json", action="store_true",
+                        help="report as JSON, for another program to read")
     args = parser.parse_args()
 
     root = pathlib.Path(args.folder)
-    print()
+    if not args.json:
+        print()
     report = check(root)
+    if args.json:
+        # Nothing but JSON on stdout, so a caller can parse it without
+        # knowing anything about how this prints for a person.
+        answer = verdict(root, report)
+        if args.install and answer["ok"]:
+            code = install(root)
+            answer["installed"] = code == 0
+            if code != 0:
+                answer["ok"] = False
+        elif args.install:
+            answer["installed"] = False
+        print(json.dumps(answer, ensure_ascii=False, indent=1))
+        return 0 if answer["ok"] else 1
+
     report.show()
     print()
 
