@@ -68,6 +68,13 @@ esac
 # `/api/library` and not `/api/health`, because there is no `/api/health`
 # -- deploy.sh has always health-checked the library, and a check against
 # a path that does not exist reports every good deploy as a failure.
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$SITE/api/library"         || echo 000)"
-echo "  $SITE/api/library -> $code"
-[ "$code" = "200" ] || { echo "  the site is not answering"; exit 1; }
+#
+# By EXIT CODE, not `-w '%{http_code}'`: the curl in Git Bash on Windows
+# exits 43 on that format string and prints `000`, so every good deploy
+# ended by announcing the site was down. `-f` already makes any status
+# outside 2xx a non-zero exit, which is the whole question being asked.
+if curl -fsS -o /dev/null --max-time 25 "$SITE/api/library"; then
+    echo "  $SITE/api/library answers"
+else
+    echo "  the site is not answering"; exit 1
+fi
