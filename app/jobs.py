@@ -260,6 +260,32 @@ class Registry:
             return held
         return Job.from_row(row)
 
+    def hold(self, job: Job, score: str, style: rnd.Style, meta: dict,
+             proved: bool = True) -> None:
+        """Accept a request whose score has not been engraved yet.
+
+        Everything `start` does except hand the work to the queue. The row
+        carries the score, the style, the metadata and the address, so when
+        the engraving is published the render needs no second conversation
+        with anybody -- `tools/retrigger.py` moves it to `queued` and the
+        janitor publishes it.
+
+        IT IS NOT QUEUED, and that is the whole difference: a worker that
+        took this would fetch a package that does not exist and fail in
+        front of somebody. The state stays whatever it was -- `uploaded` --
+        which is exactly what it is.
+        """
+        job.score = score
+        job.mode = None
+        job.stage, job.detail, job.error = None, "", None
+        job.save(style, meta)
+        with self._lock:
+            self._live.pop(job.id, None)
+        # The same message anybody else gets. It promises no time, because
+        # this one depends on somebody engraving a score, and a made-up
+        # estimate is worse than none.
+        _say_it_is_queued(job, proved, held=True)
+
     def all(self) -> list[Job]:
         return [Job.from_row(r) for r in store.query(
             "SELECT * FROM jobs ORDER BY created DESC LIMIT 200")]
@@ -401,7 +427,8 @@ def say_a_score_is_wanted(job: Job, score: str, address: str) -> None:
     threading.Thread(target=work, name=f"wanted-{job.id}", daemon=True).start()
 
 
-def _say_it_is_queued(job: Job, proved: bool = True) -> None:
+def _say_it_is_queued(job: Job, proved: bool = True,
+                      held: bool = False) -> None:
     """Tell the visitor we have it, roughly how long, and where to look.
 
     A render can take the better part of an hour and silence for that long
@@ -442,8 +469,11 @@ def _say_it_is_queued(job: Job, proved: bool = True) -> None:
         logger.warning("daily mail cap reached; no queued notice to %s", address)
         return
 
-    eta = _eta_for(job)
-    ahead = store.position(job.id) or 0
+    # A HELD REQUEST HAS NO ESTIMATE. It waits on a score being engraved,
+    # which is a person's afternoon and not a queue position, so the
+    # message carries no number rather than an invented one.
+    eta = None if held else _eta_for(job)
+    ahead = 0 if held else (store.position(job.id) or 0)
 
     def work() -> None:
         try:

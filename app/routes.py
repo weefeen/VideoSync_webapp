@@ -1179,18 +1179,17 @@ def api_render(job_id: str):
     # does not need the score to accept a job for it -- the machine that
     # renders fetches the package itself.
     package = library.find(score)
-    if package is None:
-        # The request dies here, as it always did. Nothing is parked and the
-        # visitor is told plainly that the score is not in the library.
-        #
-        # What is new is that it leaves a trace worth acting on: if the
-        # recogniser itself offered this edition for this recording, then it
-        # is a piece nobody has engraved rather than a name somebody
-        # invented, and the operator is told so — with the folder name to
-        # produce, and with the address, so the render can be started on the
-        # visitor's behalf once the score exists.
-        if score in _editions_offered(job.id):
-            jobs.say_a_score_is_wanted(job, score, address)
+    # TAKEN, NOT REFUSED, when the recogniser itself offered this edition
+    # for this recording. That makes it a piece nobody has engraved yet
+    # rather than a name somebody invented -- and the score gets made FROM
+    # requests like this one, so refusing it threw away the recording, the
+    # address, and the reason to engrave anything.
+    #
+    # A name the recogniser never offered is still refused outright, which
+    # is what stops anything at all being posted as a score and sitting in
+    # the list for ever waiting for a package that cannot exist.
+    held = package is None
+    if held and score not in _editions_offered(job.id):
         return jsonify({"error": f"No score package named {score!r}."}), 400
 
     try:
@@ -1212,10 +1211,11 @@ def api_render(job_id: str):
         return jsonify({"error": str(exc)}), 429, {"Retry-After": str(exc.retry_after)}
 
     mode = body.get("mode") or None
-    try:
-        mode = pipeline.choose_mode(package, mode)
-    except (rnd.RenderError, pipeline.PipelineError) as exc:
-        return jsonify({"error": str(exc)}), 400
+    if not held:
+        try:
+            mode = pipeline.choose_mode(package, mode)
+        except (rnd.RenderError, pipeline.PipelineError) as exc:
+            return jsonify({"error": str(exc)}), 400
 
     job.email = address
     # PROVED HERE, not merely proved once. `may_mail` says the address has
@@ -1234,8 +1234,16 @@ def api_render(job_id: str):
         # touched for six months lapses.
         store.saw_address(address)
 
-    jobs.registry.start(job, package.name, mode, style,
-                        _panel_meta(body.get("meta")), proved=proved)
+    if held:
+        # Recorded for the operator -- the folder to engrave, and who is
+        # waiting -- and parked. Nothing reaches the broker: a worker that
+        # took it would fetch a package that does not exist.
+        jobs.say_a_score_is_wanted(job, score, address)
+        jobs.registry.hold(job, score, style,
+                           _panel_meta(body.get("meta")), proved=proved)
+    else:
+        jobs.registry.start(job, package.name, mode, style,
+                            _panel_meta(body.get("meta")), proved=proved)
     # WHETHER A CONFIRMATION WAS ACTUALLY ASKED FOR. The page used to show
     # "open the email we just sent and click the link" to everyone whose
     # install can send mail at all -- including people whose address was

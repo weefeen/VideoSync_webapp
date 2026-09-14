@@ -249,11 +249,17 @@ recognise = function(){
     fileBar('<span class="ok">recognised</span>');
     $('#piecelab').textContent = 'Recognised';
     $('#piecehint').textContent = '';
+    // Reached only when the recogniser named a piece and offered no
+    // edition folder for it, which it does for a work nobody has published
+    // an engraving of at all. There is no request to take, so this is the
+    // one case that still has to say something -- without sending anybody
+    // to a list of other people's pieces.
     $('#recogbody').innerHTML = `
-      <p class="heard">We heard <b>${esc(heard || 'this piece')}</b>, but that
-      score is not in the library yet.<br>It is being added one at a time —
-      until then, pick something else below.</p>
-      <div class="manual"><span class="lab">What we can do today</span>
+      <p class="heard">We heard <b>${esc(heard || 'this piece')}</b>. We
+      cannot make a video of it yet &mdash; the engraving it needs does not
+      exist anywhere we can reach.<br>Try another recording, or come back:
+      the library grows every week.</p>
+      <div class="manual"><span class="lab">Ready now</span>
         <div class="pieces" id="pieces"></div></div>`;
     manualList();
     return;
@@ -523,6 +529,44 @@ function applyAnswer(a){
     return;
   }
   if(a.outcome === 'unavailable'){
+    // WE RECOGNISED IT AND HAVE NOT ENGRAVED IT YET, which is our problem
+    // and not theirs. It used to be shown as a refusal -- "that score is
+    // not in the library yet, pick something else" -- so somebody who
+    // uploaded the piece they actually play was sent away to choose one
+    // they did not. The score is made from this request; saying so gains
+    // nobody anything and loses the recording.
+    //
+    // So the piece is entered into the library this page holds and chosen
+    // like any other. The design step needs no score: the preview has
+    // always been a schematic, `realBand()` returns nothing without band
+    // dimensions, and `staveHTML` falls back to the drawn staves. What the
+    // server does with the request is the server's half.
+    const c = cands[0] || {};
+    const folder = (c.editions || [])[0] || '';
+    if(folder){
+      const label = c.label || S.heardLabel || 'this piece';
+      // `_readable` composes "Op.23 · Ballade" when the name has both.
+      const bits = label.split('\u00b7').map(x => x.trim()).filter(Boolean);
+      const named = bits.length > 1
+        ? {t: bits.slice(1).join(' \u00b7 '), op: bits[0]}
+        : {t: label, op: ''};
+      if(!W(folder)){
+        WORKS = WORKS.concat([{
+          id: folder, t: named.t, op: named.op, bars: 0,
+          // No band and no dimensions, so `realBand()` declines and the
+          // preview draws its schematic -- which is what it draws for
+          // every piece anyway.
+          art: {image: false, video: false}, src: '', ref: true,
+        }]);
+      }
+      CANDS = [[folder, c.confidence || 0]];
+      S.recog = 'heard';
+      choose(folder);
+      fileRow(S.file, 'recognised');
+      draw();
+      centerOn('#pieceblock', 240);
+      return;
+    }
     S.recog = 'unavailable';
     S.piece = null;
     draw();
