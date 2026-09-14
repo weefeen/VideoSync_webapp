@@ -5077,6 +5077,56 @@ def check_a_piece_we_have_not_engraved_still_looks_real() -> str:
             f"this fixture")
 
 
+def check_no_backtick_hides_in_a_stylesheet() -> str:
+    """A CSS template literal ends at the first backtick, comments included.
+
+    The page's stylesheets are template literals assigned to the
+    textContent of a <style> the script creates. A backtick anywhere inside
+    one -- including inside a CSS comment, which is where it is natural to
+    quote an identifier -- CLOSES THE STRING. Everything after it stops
+    being CSS and becomes JavaScript, so the page loses every rule below
+    that point and the script itself stops parsing.
+
+    This happened: a comment reading "the upload's own progress event"
+    quoted the handler name in backticks, and the stylesheet was truncated
+    from 4338 characters to 1828. The styling check found it, but reported
+    it as two unstyled classes -- true, and three steps from the cause.
+
+    Checked by measuring: the text between the opening backtick and the one
+    the JavaScript would actually stop at must reach the closing `;` of the
+    assignment. Anything shorter means a backtick got in.
+    """
+    import re
+
+    web = ROOT / "app" / "static" / "svs"
+    hurt = []
+    for path in sorted(web.glob("*.js")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for name in re.findall(
+                r"""(?:const|let|var)\s+(\w+)\s*=\s*document\."""
+                r"""createElement\(['"]style['"]\)""", text):
+            start = re.search(name + r"\.textContent\s*=\s*`", text)
+            if not start:
+                continue
+            body = text[start.end():]
+            stop = body.find("`")
+            if stop < 0:
+                hurt.append(f"{path.name}: {name} never closes")
+                continue
+            # What follows the backtick the engine stops at must be the end
+            # of the statement. A stray backtick leaves CSS sitting there.
+            after = body[stop + 1:stop + 40].lstrip()
+            if not after.startswith(";"):
+                hurt.append(
+                    f"{path.name}: {name} is cut short after {stop} chars by "
+                    f"a backtick -- everything below it is lost, and what "
+                    f"follows is {after[:40]!r}")
+    if hurt:
+        raise Failed("a backtick closed a stylesheet early: " + "; ".join(hurt))
+
+    return "every script stylesheet runs to the end of its assignment"
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5106,6 +5156,7 @@ def main() -> int:
         check_the_scaler_cannot_run_away,
         check_the_recogniser_is_marked_right_or_wrong,
         check_the_page_is_actually_styled,
+        check_no_backtick_hides_in_a_stylesheet,
         check_a_failure_is_never_mailed_to_the_visitor,
         check_nothing_is_mailed_to_an_unproved_address,
         check_a_portrait_video_keeps_the_picture,

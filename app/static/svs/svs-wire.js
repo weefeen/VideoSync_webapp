@@ -120,7 +120,21 @@ function setBar(fraction){
 }
 
 function listenTick(){
-  if(!uploadDone) return setBar(uploadFraction * UPLOAD_SHARE);
+  // WHICH OF THE TWO WAITS THIS IS. Sending the file and listening to it
+  // are different lengths of wait for different reasons, and one label
+  // covering both -- "this takes a few seconds" -- was wrong for a 400 MB
+  // upload and told nobody anything while it ran.
+  const word = $('#upword'), pct = $('#uppct');
+  if(!uploadDone){
+    if(word) word.textContent = 'sending your video';
+    // The real figure, from bytes that have actually gone out. It is the
+    // one thing on this screen that cannot advance while nothing happens.
+    if(pct) pct.textContent = uploadFraction > 0
+      ? Math.round(uploadFraction * 100) + '%' : '';
+    return setBar(uploadFraction * UPLOAD_SHARE);
+  }
+  if(word) word.textContent = 'listening for the piece';
+  if(pct) pct.textContent = '';
   const gone = (Date.now() - listenStarted) / 1000;
   setBar(UPLOAD_SHARE + (1 - UPLOAD_SHARE) * Math.min(1, gone / LISTEN_ESTIMATE));
 }
@@ -243,8 +257,9 @@ recognise = function(){
     if(copy) copy.innerHTML = `
       <h2>Uploading and checking your <em>video</em></h2>
       <span class="uprail"><i id="listenbar" style="width:0%"></i></span>
-      <span class="lab"><i class="live"></i>${esc(S.file || '')}
-        &middot; please wait, this takes a few seconds</span>`;
+      <span class="lab"><i class="live"></i><span id="upword">sending your
+        video</span> <span class="pct" id="uppct"></span>
+        &middot; ${esc(S.file || '')}</span>`;
     listenTick();
     return;
   }
@@ -348,10 +363,30 @@ bandCSS.textContent = `
   .dropzone.busy{cursor:default}
   .dropzone.busy:hover{border-color:var(--hair-2);background:linear-gradient(#fdfbf7,#f9f5ee)}
   .dropzone.busy .dropbtn{opacity:.35;pointer-events:none}
-  .uprail{display:block;position:relative;height:2px;border-radius:2px;
+  /* 5px, not 2px. A 2px hairline at 0% width is an empty line, and an
+     empty line is what a stopped page looks like. Height is most of what
+     makes a bar read as a bar. */
+  .uprail{display:block;position:relative;height:5px;border-radius:3px;
     background:var(--hair);overflow:hidden;margin:14px 0 10px}
-  .uprail i{position:absolute;left:0;top:0;height:100%;border-radius:2px;
-    background:var(--mag);transition:width .25s linear}
+  .uprail i{position:absolute;left:0;top:0;height:100%;border-radius:3px;
+    background:var(--mag);transition:width .25s linear;
+    /* A floor, so the bar is a BAR from the first frame. At 0% the visitor
+       sees an empty track and has nothing to judge movement against. */
+    min-width:6px}
+  /* MOTION THAT DOES NOT DEPEND ON PROGRESS. The upload's own progress
+     event is the only thing that widens the fill, and a browser buffering
+     a large file can go many seconds between events -- and a determinate
+     bar that has not moved for ten seconds
+     is indistinguishable from a dead one. This stripe sweeps the whole
+     track on its own clock, so the answer to "is it stuck" never depends
+     on whether a progress event happened to arrive. */
+  .uprail::after{content:'';position:absolute;inset:0;border-radius:3px;
+    background:linear-gradient(90deg,
+      rgba(255,255,255,0) 0%, rgba(255,255,255,.85) 50%,
+      rgba(255,255,255,0) 100%);
+    width:38%;animation:upsweep 1.25s linear infinite}
+  @keyframes upsweep{from{transform:translateX(-100%)}
+                     to{transform:translateX(363%)}}
 
   /* SOMETHING THAT IS OBVIOUSLY ALIVE. Recognition is the better part of a
      minute, and the only sign of it was a 2px rail advancing on a time
@@ -360,19 +395,28 @@ bandCSS.textContent = `
      has to judge whether a bar has moved.
      It also pulses the RAIL itself, so the two agree rather than one
      looking alive and the other stuck. */
-  .lab .live{display:inline-block;width:8px;height:8px;border-radius:50%;
-    background:#e0a92b;box-shadow:0 0 0 0 rgba(224,169,43,.55);
+  /* 11px, not 8px. At 8px beside 9px letter-spaced caps this read as
+     punctuation rather than as a light. */
+  .lab .live{display:inline-block;width:11px;height:11px;border-radius:50%;
+    background:#e0a92b;box-shadow:0 0 0 0 rgba(224,169,43,.6);
     margin-right:9px;vertical-align:middle;
     animation:liveblink 1.1s ease-in-out infinite}
   @keyframes liveblink{
-    0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(224,169,43,.55)}
-    50%{opacity:.3;box-shadow:0 0 0 5px rgba(224,169,43,0)}}
+    0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(224,169,43,.6)}
+    50%{opacity:.25;box-shadow:0 0 0 7px rgba(224,169,43,0)}}
+  /* A NUMBER THAT CHANGES. The strongest evidence that an upload is moving
+     is a figure that differs from the one read a moment ago -- better than
+     any animation, because an animation loops whether or not anything is
+     happening. */
+  .lab .pct{font-variant-numeric:tabular-nums;color:var(--ink);
+    font-weight:600;letter-spacing:.02em}
   .dropzone.busy .uprail{animation:railbreathe 1.6s ease-in-out infinite}
   @keyframes railbreathe{0%,100%{opacity:1}50%{opacity:.55}}
   /* Somebody who asked for less motion still gets the words, and a light
      that is simply on rather than blinking. */
   @media (prefers-reduced-motion:reduce){
     .lab .live{animation:none}
+    .uprail::after{animation:none;display:none}
     .dropzone.busy .uprail{animation:none}}
 `;
 document.head.appendChild(bandCSS);

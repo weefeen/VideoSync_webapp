@@ -10,6 +10,7 @@ the messages. No `store`, no `notify`, no `limits`.
 """
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import logging
 import os
@@ -24,6 +25,7 @@ from .. import pipeline
 from .. import render as rnd
 from .. import scorestore
 from .. import storage
+from ..settings import settings
 from . import attempt
 from .messages import Event, RenderTask
 
@@ -64,6 +66,45 @@ def usage() -> tuple[float | None, int | None]:
     # Linux reports kilobytes; macOS reports bytes. Only Linux runs this.
     peak = max(me.ru_maxrss, kids.ru_maxrss) * 1024
     return round(cpu, 3), peak
+
+
+def _backdrop_here(style):
+    """Point the backdrop at THIS machine's copy of the artwork.
+
+    The backdrop path is resolved on the web box, where the file lives at
+    `/srv/vsw/shared/art/...`. A render does not necessarily happen there:
+    a compute node has its own copy, and a lent laptop has the original the
+    artwork was made on, at a Windows path. The carried path is then a name
+    for a file that does not exist here, and `Style.validate` refuses the
+    whole render with "Background not found" -- a job that would have
+    rendered anywhere except where it was actually sent.
+
+    So the KIND travels and the path is resolved locally. The kind is one
+    of our own -- `static`, `dynamic`, `none` -- chosen by `_style_from`
+    from a fixed table and never from the request, so this cannot be
+    steered into reading an arbitrary file. That is the property the web
+    box already relies on, kept rather than widened.
+
+    A carried path that DOES exist here is left alone, so a single-machine
+    install behaves exactly as it did.
+    """
+    if style is None or style.background in (None, "", rnd.NONE):
+        return style
+    carried = style.background_path
+    if carried and pathlib.Path(carried).is_file():
+        return style
+    mine = settings.background_for(style.background)
+    if not mine:
+        # Nothing configured here. A plain backdrop rather than a failed
+        # render: the visitor gets their video with a colour behind it
+        # instead of an error and no video at all.
+        logger.warning(
+            "no %s backdrop is configured on this machine; rendering with a "
+            "plain backdrop instead of failing the job", style.background)
+        return dataclasses.replace(
+            style, background=rnd.NONE, background_path=None)
+    logger.info("backdrop %s resolved locally to %s", style.background, mine)
+    return dataclasses.replace(style, background_path=mine)
 
 
 def handle_task(task: RenderTask, publish: Publish) -> bool:
@@ -165,6 +206,7 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
             storage.get(task.input_key, video)
 
         style = rnd.Style(**task.style) if task.style else None
+        style = _backdrop_here(style)
         result = pipeline.run(
             package, video, task.job_id, style,
             task.mode, task.meta,
