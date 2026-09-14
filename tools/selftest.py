@@ -4791,6 +4791,20 @@ def check_the_page_promises_only_what_we_do() -> str:
                      "finished video has none, so it shows a different "
                      "composition from the one being rendered")
 
+    # WHERE ELSE TO LOOK, BEFORE THEY WONDER. The confirmation screen said
+    # "check the spam folder" only inside the note that appears after
+    # somebody clicks "Resend" -- by which point they have already waited,
+    # concluded nothing arrived, and acted on it. Automated mail from a
+    # low-volume domain lands in spam often enough that this is the
+    # ordinary case; it belongs in the copy that is there on arrival.
+    verify = page[page.find('data-s="verify"'):]
+    verify = verify[:verify.find("</section>")]
+    visible = _re.sub(r"<p[^>]*hidden[^>]*>.*?</p>", "", verify, flags=_re.S)
+    if not _re.search(r"junk|spam", visible, _re.I):
+        raise Failed("the confirmation screen never says to look in the junk "
+                     "or spam folder without clicking something first, which "
+                     "is where the message most often is")
+
     # And one copy for the rendering screen, since two of them disagreed.
     if wire_copy.count("It's <em>rendering</em>") != 1:
         raise Failed("more than one place writes the rendering heading; that "
