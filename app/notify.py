@@ -527,12 +527,36 @@ def send_ready(job_id: str, address: str, piece: str = "",
         f"Your score video{named} is ready", address,
         f"Your video{named} has finished rendering.\n\n"
         f"{_link(job_id)}\n\n"
-        f"{window}\n\n"
+        f"{window}\n"
+        f"{_invitation()}\n"
         f"— Weefeen\n",
         unsubscribe=unsubscribe)
 
     _send(message, address)
     logger.info("told %s that job %s is ready", address, job_id)
+
+
+def _invitation() -> str:
+    """An invitation to post the video, or nothing.
+
+    ASKED ONCE, AT THE ONE MOMENT IT IS WELCOME. Somebody has just been
+    handed a video of their own playing; that is when a request to share
+    it is a compliment rather than an imposition. It is not repeated, it
+    is not a condition of anything, and it is absent entirely unless an
+    operator has configured somewhere for it to point.
+
+    Phrased as permission rather than as a favour asked. The video IS
+    theirs -- the site says so on the page where they upload -- and the
+    sentence has to match that, or it reads as a licence being granted
+    after the fact.
+    """
+    where = (settings.share_group_url or "").strip()
+    if not where:
+        return ""
+    name = (settings.share_group_name or "").strip()
+    at = f" in {name}" if name else ""
+    return (f"\nThe video is yours. If you would like to post it{at}, "
+            f"people there would enjoy hearing it:\n{where}\n")
 
 
 def send_wanted(*, job_id: str, score: str, title: str = "",

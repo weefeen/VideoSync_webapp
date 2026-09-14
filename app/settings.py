@@ -159,6 +159,14 @@ class Settings:
     # the cpu encoder. Name one explicitly to pin it, or "libx264" to
     # refuse hardware encoding entirely.
     video_encoder: str = "auto"
+    # WHERE A FINISHED VIDEO IS WELCOME. An admin's own post reaches a few
+    # thousand of a group and then stops; a member posting their own
+    # performance reaches a different few thousand and arrives as proof
+    # rather than as an announcement. The delivery mail is the one moment
+    # somebody is pleased with what they have, so it is where the
+    # invitation belongs. Empty means no invitation is made.
+    share_group_url: str = ""
+    share_group_name: str = ""
     # music_line_extractor supplies auto-synchronisation. It is invoked as
     # a subprocess through its own CLI and its own interpreter, never
     # imported — so its repo is untouched and its dependencies stay its own.
@@ -618,6 +626,8 @@ def load() -> Settings:
         ffmpeg=_tool("FFMPEG_EXE", "ffmpeg"),
         video_encoder=(os.getenv("VIDEO_ENCODER", "auto").strip().lower()
                        or "auto"),
+        share_group_url=os.getenv("SHARE_GROUP_URL", "").strip(),
+        share_group_name=os.getenv("SHARE_GROUP_NAME", "").strip(),
         ffprobe=_tool("FFPROBE_EXE", "ffprobe"),
         work_dir=pathlib.Path(work) if work else REPO_ROOT / "var",
         background_static=_one("BACKGROUND_STATIC"),
