@@ -4010,9 +4010,20 @@ def check_the_edition_is_credited() -> str:
     made = rnd._credit_png(pkg.edition, (1920, 1080), style, work)
     if made is None:
         raise Failed("no credit image was produced")
-    path, w, h = made
+    path, w, h, pad = made
     if not path.is_file() or Image.open(path).getbbox() is None:
         raise Failed("the credit image is empty; nothing was drawn")
+
+    # THE INK, NOT THE FILE. The credit is placed by where the letters end,
+    # so the transparent margin it reports has to be the real one -- a pad
+    # that does not match the image would set the line at the wrong height
+    # and nothing else would notice.
+    seen = Image.open(path).getbbox()
+    below = h - seen[3]
+    if abs(below - pad) > 1:
+        raise Failed(f"the credit reports {pad}px of padding under the "
+                     f"letters and the image has {below}px; the line would "
+                     f"sit at the wrong height above the band")
 
     # It follows the band, and is neither the ink nor the paper.
     ink = rnd._blend(style.band_fg, style.band_bg, 0.55)

@@ -66,7 +66,12 @@ async function loadLibrary(){
                // out of WORKS on purpose: the library is what can be
                // MADE, and these cannot -- they only have to look right
                // while somebody waits for the engraving.
-               previews: data.previews || {} };
+               previews: data.previews || {},
+               // Where to fetch the backdrop artwork the design step is
+               // asking the visitor to choose between. Absent when the
+               // operator configured none, and the frame then falls back
+               // to the hatched panel that names it.
+               backdrop: data.backdrop || {} };
     if(Array.isArray(data.works) && data.works.length) WORKS = data.works;
   }catch(err){
     // No server: keep the shipped library so the whole interface still
@@ -359,6 +364,11 @@ bandCSS.textContent = `
   /* A bitmap band already has its paper burnt in: the most that can be
      done is let the band colour show through the white. */
   .frame .realband.raster{mix-blend-mode:multiply}
+  /* The backdrop artwork, filling its panel the way the render will crop
+     it. Behind everything in the frame: the performance, the band and the
+     title panel all sit on top of it. */
+  .frame .artvid{position:absolute;inset:0;width:100%;height:100%;
+    object-fit:cover;display:block;z-index:0;pointer-events:none}
   /* Step one keeps the wait: a rail across the dropzone it started from. */
   .dropzone.busy{cursor:default}
   .dropzone.busy:hover{border-color:var(--hair-2);background:linear-gradient(#fdfbf7,#f9f5ee)}
@@ -456,6 +466,67 @@ staveHTML = function(bars, k, a){
 };
 
 /* Mark the band so the stylesheet above applies only when it is real. */
+/* THE ARTWORK ITSELF, NOT A LABEL FOR IT.
+ *
+ * Choosing a backdrop showed a hatched grey box with the words LOOPING
+ * ARTWORK written across it, because nothing served the artwork to the
+ * browser -- the library reported only whether one existed. The one thing
+ * the visitor is asked to decide was the one thing they could not see.
+ *
+ * The still is painted as a background image; the moving one gets a real
+ * <video>, muted and looping, which is what it will be in the render.
+ * `playsinline` because iOS otherwise takes any playing video full screen,
+ * and the element is built once and moved rather than recreated on every
+ * repaint -- a <video> that is replaced restarts from black each time the
+ * frame is redrawn, which is several times a second while a slider moves.
+ */
+let artVideo = null;
+
+function paintBackdrop(){
+  const where = SERVER.backdrop || {};
+  const url = S.bd === 'image' ? where.image
+            : S.bd === 'video' ? where.video : '';
+  // Every hatched panel in the frame, still and centred layouts alike.
+  const boxes = $$('.frame .bd.art, .frame .ctr-art');
+  if(!url || !boxes.length){
+    if(artVideo && artVideo.parentNode) artVideo.remove();
+    return;
+  }
+  boxes.forEach(box => {
+    box.style.backgroundImage = 'none';   // drop the hatching underneath
+    box.style.overflow = 'hidden';
+  });
+  // The label is the placeholder's caption and has nothing to say once the
+  // artwork is on screen.
+  $$('.frame .artlab').forEach(el => { el.style.display = 'none'; });
+
+  const first = boxes[0];
+  if(S.bd === 'image'){
+    if(artVideo && artVideo.parentNode) artVideo.remove();
+    boxes.forEach(box => {
+      box.style.backgroundImage = `url('${url}')`;
+      box.style.backgroundSize = 'cover';
+      box.style.backgroundPosition = 'center';
+    });
+    return;
+  }
+  if(!artVideo){
+    artVideo = document.createElement('video');
+    artVideo.className = 'artvid';
+    artVideo.muted = true; artVideo.loop = true;
+    artVideo.autoplay = true; artVideo.playsInline = true;
+    artVideo.setAttribute('muted', '');
+    artVideo.setAttribute('playsinline', '');
+    artVideo.src = url;
+  }
+  if(artVideo.parentNode !== first) first.appendChild(artVideo);
+  // Autoplay can be refused; muted playback is allowed everywhere, so this
+  // is a retry rather than a fallback. A rejection is not an error worth
+  // showing: the frame still reads as artwork, simply not moving.
+  const started = artVideo.play();
+  if(started && started.catch) started.catch(() => {});
+}
+
 const basePaint = paint;
 paint = function(){
   const out = basePaint.apply(this, arguments);
@@ -464,6 +535,7 @@ paint = function(){
     el.classList.toggle('real', real));
   applyRealLayout();
   applyMarks();
+  paintBackdrop();
   return out;
 };
 

@@ -867,6 +867,30 @@ def _logo_png(kind: str, surface: str, width_px: int, opacity: float,
     return out, img.width, img.height
 
 
+# How far the INK of a mark sits above the band's bottom edge, in pixels.
+#
+# A FIXED FIGURE, not a fraction. Both the edition credit and the weefeen
+# mark used one margin of 2.2% of the band's WIDTH for x and y alike, and a
+# band is about five and a half times wider than it is tall -- so a margin
+# that is right at the sides lifted both marks roughly 12% of the band's
+# height off its floor, reading as afloat in the stave rather than set
+# under it.
+#
+# Every canvas this renders is on the same 1080 scale (16/9 is 1920x1080,
+# 1/1 is 1080x1080, 9/16 is 1080x1920), so a pixel means the same thing in
+# all three and a proportion buys nothing. If an output at a different
+# scale is ever added, this is the line that has to become a ratio of it.
+_MARK_FOOT_PX = 5
+
+
+def _band_inset(layout: Layout) -> tuple[int, int]:
+    """The side margin, and how far the ink sits off the band's floor.
+
+    The horizontal figure is unchanged, because nothing was wrong with it.
+    """
+    return _even_at(layout.band.w * 0.022), _MARK_FOOT_PX
+
+
 def _logo_placement(style: "Style", layout: Layout,
                     workdir: pathlib.Path):
     """Where the mark goes for this layout, or None.
@@ -894,9 +918,9 @@ def _logo_placement(style: "Style", layout: Layout,
     if made is None:
         return None
     path, w, h = made
-    margin = _even_at(layout.band.w * 0.022)
-    x = layout.band.x + layout.band.w - w - margin
-    y = layout.band.y + layout.band.h - h - margin
+    side_margin, foot = _band_inset(layout)
+    x = layout.band.x + layout.band.w - w - side_margin
+    y = layout.band.y + layout.band.h - h - foot
     return path, max(0, x), max(0, y), w, h
 
 
@@ -984,7 +1008,8 @@ def _blend(a: str, b: str, towards_b: float) -> tuple[int, int, int]:
 
 
 def _credit_png(text: str, canvas: tuple[int, int], style: "Style",
-                workdir: pathlib.Path) -> tuple[pathlib.Path, int, int] | None:
+                workdir: pathlib.Path
+                ) -> tuple[pathlib.Path, int, int, int] | None:
     """The edition line, in a muted shade of the band's own ink.
 
     NOT a fixed grey. The band's colours are chosen per video, and a credit
@@ -1015,7 +1040,11 @@ def _credit_png(text: str, canvas: tuple[int, int], style: "Style",
 
     out = workdir / "credit.png"
     img.save(out, "PNG")
-    return out, img.width, img.height
+    # THE PADDING IS RETURNED, because the caller places this by where the
+    # LETTERS are, not where the file's edge is. The image is the text's
+    # tight bounding box plus `pad` of transparency on every side, so
+    # setting the file 5px off the floor would set the ink at 10.
+    return out, img.width, img.height, pad
 
 
 def _band_strip(pkg: ScorePackage, images: dict[int, pathlib.Path],
@@ -1141,11 +1170,14 @@ def render(pkg: ScorePackage, video: pathlib.Path, output: pathlib.Path,
         if style.score_credit:
             made = _credit_png(pkg.edition, layout.canvas, style, workdir)
             if made:
-                cpath, cw_, ch_ = made
-                margin = _even_at(layout.band.w * 0.022)
+                cpath, cw_, ch_, cpad = made
+                side_margin, foot = _band_inset(layout)
+                # Placed so the BOTTOM OF THE LETTERS lands `foot` pixels
+                # above the band's edge: the file's own transparent margin
+                # is subtracted rather than added to it.
                 credit = (cpath,
-                          layout.band.x + margin,
-                          layout.band.y + layout.band.h - ch_ - margin,
+                          layout.band.x + side_margin,
+                          layout.band.y + layout.band.h - ch_ + cpad - foot,
                           cw_, ch_)
 
         # Inputs: 0 = backdrop, 1 = performance, 2 = band strip, then the

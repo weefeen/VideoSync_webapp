@@ -10,6 +10,7 @@ import os
 import pathlib
 import re
 import shutil
+import subprocess
 import threading
 import time
 from urllib.parse import quote, urlsplit
@@ -214,6 +215,10 @@ def api_library():
                     # renderable, and anything that treats the library as
                     # "what can be made" must not start seeing them.
                     "previews": _previews_offered(),
+                    # Where the design step fetches the artwork it is
+                    # asking the visitor to choose between.
+                    "backdrop": {"image": "/api/backdrop/static",
+                                 "video": "/api/backdrop/dynamic"},
                     "page_rule": _PAGE_RULE})
 
 
@@ -247,6 +252,94 @@ def _previews_offered() -> dict:
                      "band_w": w, "band_h": h,
                      "title": meta.get("title") or ""}
     return out
+
+
+# The backdrop, shrunk once for the browser. The artwork is made for the
+# render -- ours is 39 MB of HD video -- and the design step needs it only
+# as a thumbnail behind a half-width frame. Serving the master to every
+# visitor would spend a gigabyte on twenty-five people looking at a page.
+_PREVIEW_SECONDS = 12
+_backdrop_lock = threading.Lock()
+_backdrop_made: dict[str, pathlib.Path | None] = {}
+
+
+def _backdrop_preview(kind: str) -> pathlib.Path | None:
+    """A small copy of the configured artwork, made once and kept.
+
+    Returns the original for a still image, which is already small, and a
+    short muted 720-wide loop for a video. `None` when nothing is
+    configured or the shrink fails -- the page then draws what it drew
+    before, which is a labelled placeholder rather than a broken frame.
+    """
+    original = settings.background_for(kind)
+    if not original:
+        return None
+    source = pathlib.Path(original)
+    if kind == "static":
+        return source
+
+    with _backdrop_lock:
+        if kind in _backdrop_made:
+            made = _backdrop_made[kind]
+            # Remade if it was cleared off the disk under us.
+            if made is None or made.is_file():
+                return made
+        out = settings.cache_dir / "backdrop-preview.mp4"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.is_file() and out.stat().st_mtime >= source.stat().st_mtime:
+            _backdrop_made[kind] = out
+            return out
+        cmd = [settings.ffmpeg, "-y", "-loglevel", "error",
+               "-t", str(_PREVIEW_SECONDS), "-i", str(source),
+               "-an",                       # no sound; it plays muted anyway
+               "-vf", "scale=720:-2",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+               # `faststart` so the browser can begin before the whole file
+               # has arrived; without it the moov atom is at the end and the
+               # frame stays blank until the last byte.
+               "-movflags", "+faststart",
+               str(out)]
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=180)
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("could not shrink the backdrop: %s", exc)
+            _backdrop_made[kind] = None
+            return None
+        if done.returncode != 0 or not out.is_file():
+            logger.warning("could not shrink the backdrop: %s",
+                           (done.stderr or "")[-300:])
+            _backdrop_made[kind] = None
+            return None
+        logger.info("backdrop preview made: %.1f MB",
+                    out.stat().st_size / 1e6)
+        _backdrop_made[kind] = out
+        return out
+
+
+@bp.get("/api/backdrop/<kind>")
+def api_backdrop(kind: str):
+    """The artwork the render will put behind the score.
+
+    THE DESIGN STEP USED TO DRAW A GREY BOX LABELLED "looping artwork".
+    Nothing served the artwork to the browser -- there was no endpoint at
+    all -- so the one thing the visitor is being asked to choose was the
+    one thing they could not see.
+
+    `kind` is matched against our own two names before it reaches the
+    filesystem, so this cannot be asked for an arbitrary file; the path
+    comes from configuration exactly as the renderer's does.
+    """
+    if kind not in ("static", "dynamic"):
+        return jsonify({"error": "Unknown backdrop."}), 404
+    made = _backdrop_preview(kind)
+    if made is None:
+        return jsonify({"error": "No backdrop is configured."}), 404
+    response = send_file(made, conditional=True)
+    # It changes when the operator changes the artwork, which is rare, and
+    # it is fetched on every visit to the design step.
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
 
 
 @bp.get("/metrics")
