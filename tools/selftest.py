@@ -5346,6 +5346,22 @@ def check_the_share_card_is_the_card_that_ships() -> str:
                 f"the cover url says og-cover{version}.png and the file "
                 f"fingerprints as -{tag}. The picture changed and the name "
                 f"did not, so every share keeps the old card.")
+    # EVERY OLDER NAME STILL RESOLVES. A cache that holds a previous url
+    # and gets a 404 can decide the card has no image and show a white box
+    # -- which is what happened, after I deleted two of them. Keeping the
+    # files costs half a megabyte each and removes the failure entirely.
+    stale = [q for q in web.glob("og-cover*")
+             if q.stat().st_size == 0]
+    if stale:
+        raise Failed(f"empty cover file(s): {[q.name for q in stale]}")
+    for older in ("og-cover.jpg", "og-cover.png"):
+        if not (web / older).is_file():
+            raise Failed(
+                f"{older} is gone. Facebook and every other cache still "
+                f"hold urls pointing at it, and a 404 there shows as a card "
+                f"with no picture. Old names are kept, pointing at the "
+                f"current card.")
+
     named = web / f"og-cover-{tag}.png"
     if not named.is_file():
         raise Failed(f"the page asks for {named.name} and it is not there")
