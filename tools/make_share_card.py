@@ -47,6 +47,17 @@ PAPER = (246, 241, 232)
 INK = (28, 22, 34)
 MAGENTA = (204, 35, 126)
 
+# How much of the engraved band to show. The renderer cuts roughly nine
+# bars to a frame; a share card is read at a quarter that size, so it
+# shows a third of them at three times the scale.
+# How much of the card the engraving takes. The bars that fit follow from
+# it -- about seven at this share -- rather than the other way round.
+BAND_SHARE = 0.40
+
+# The shape of a band as the engraver cuts it: wide and short, with its ink
+# filling it. Measured on a rasterised band, 3493x605.
+BAND_ASPECT = 5.77
+
 HEADLINE = "Your Chopin,\nwith the score\nplaying along"
 KICKER = "CHOPIN.WEEFEEN.COM"
 NOTE = "Free"
@@ -121,7 +132,8 @@ def _font(size: int, which: str = "display"):
     return ImageFont.truetype(str(local), size)
 
 
-def draw(frame: pathlib.Path, out: pathlib.Path) -> None:
+def draw(frame: pathlib.Path, out: pathlib.Path,
+         band_png: "pathlib.Path | None" = None) -> None:
     from PIL import Image, ImageDraw, ImageFilter
 
     src = Image.open(frame).convert("RGB")
@@ -138,6 +150,47 @@ def draw(frame: pathlib.Path, out: pathlib.Path) -> None:
     if (card.width, card.height) != (WIDTH, height):
         card = card.resize((WIDTH, height), Image.LANCZOS)
 
+    # THE MUSIC IS ENLARGED, because the card is READ AT 500 PIXELS. A feed
+    # shows it at roughly a quarter of its width, and the band the renderer
+    # cuts carries about nine bars across the frame -- which at that size
+    # is 55 pixels a bar, where staff lines and noteheads dissolve into
+    # grey. That is the whole reason this card looked soft beside cards
+    # built from large flat shapes. It is SCALE, not compression, and no
+    # format or quality setting reaches it.
+    #
+    # THE HEIGHT FOLLOWS FROM THE MUSIC, not the other way round. A band is
+    # about 5.8:1 and its ink fills it, so there is no slack to reclaim:
+    # how many bars you want at full width fixes how tall the band must be,
+    # and the photograph takes what is left. Six bars makes an even split.
+    # THE WORDS DECIDE, AND THE MUSIC TAKES THE REST. Choosing a number of
+    # bars instead fixed the band's height, and at six bars that height ate
+    # the headline -- "playing along" sheared off and "Free" gone
+    # altogether. The text block is the thing that must not be cut, so the
+    # band gets the remaining share and however many bars fit in it.
+    band_h = round(height * BAND_SHARE)
+    band_from = height - band_h
+    bars = WIDTH * 9.0 / (band_h * BAND_ASPECT)
+    band = card.crop((0, band_from, card.width, height))
+    band = band.crop((0, 0, max(1, int(band.width * bars / 9.0)),
+                      band.height))
+    band = band.resize((WIDTH, band_h), Image.LANCZOS)
+
+    # FROM VECTOR WHERE THERE IS ONE. The band inside a video frame is a
+    # raster the encoder has already been through, so enlarging it
+    # magnifies what was thrown away. The engraving exists as SVG in every
+    # score package: rasterised well above the target and reduced, it lands
+    # crisp, which is the difference between notation you can read at feed
+    # size and a grey texture.
+    if band_png is not None and band_png.is_file():
+        v = Image.open(band_png)
+        paper = Image.new("RGB", v.size, PAPER)
+        paper.paste(v, (0, 0), v if v.mode == "RGBA" else None)
+        cut = paper.crop((0, 0, max(1, int(v.width * bars / 9.0)),
+                          v.height))
+        band = cut.resize((WIDTH, band_h), Image.LANCZOS)
+
+    card.paste(band, (0, band_from))
+
     # Restore the edge contrast compression flattened. Light on purpose:
     # the detail is not there to recover, and a heavier hand buys halos
     # that look worse than the softness they replace.
@@ -148,7 +201,7 @@ def draw(frame: pathlib.Path, out: pathlib.Path) -> None:
     # the photograph darkened under it -- but a rectangle would read as a
     # sticker laid on top. This is a horizontal ramp: opaque at the left
     # edge where the words are, gone by the middle where the piano is.
-    band_top = int(height * 0.66)
+    band_top = band_from
     scrim = Image.new("L", (WIDTH, band_top), 0)
     ramp = ImageDraw.Draw(scrim)
     for x in range(WIDTH):
@@ -173,18 +226,18 @@ def draw(frame: pathlib.Path, out: pathlib.Path) -> None:
     left = int(WIDTH * 0.055)
 
     # The kicker, letter-spaced by hand because PIL has no tracking.
-    small = _font(round(WIDTH * 0.0155), "body")
+    small = _font(round(WIDTH * 0.017), "body")
     x = left
     for ch in KICKER:
-        pen.text((x, int(height * 0.105)), ch, font=small,
+        pen.text((x, int(height * 0.075)), ch, font=small,
                  fill=(233, 226, 240))
         x += pen.textlength(ch, font=small) + WIDTH * 0.002
 
-    big = _font(round(WIDTH * 0.0465), "display")
-    y = int(height * 0.20)
+    big = _font(round(WIDTH * 0.052), "display")
+    y = int(height * 0.155)
     for line in HEADLINE.split("\n"):
         pen.text((left, y), line, font=big, fill=PAPER)
-        y += round(WIDTH * 0.053)
+        y += round(WIDTH * 0.059)
 
     # The one piece of colour, and the word that matters most.
     rule_y = y + round(WIDTH * 0.0155)
@@ -212,6 +265,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("video", help="a rendered score-video to take the frame from")
     ap.add_argument("--out", default="app/static/svs/og-cover.png")
+    ap.add_argument("--band", help="a rasterised band SVG; the engraving is "
+                                   "taken from this rather than from the "
+                                   "video frame, which is the difference "
+                                   "between readable notation and a texture")
     ap.add_argument("--seconds", type=int, default=240,
                     help="how far into the video to look for a frame")
     args = ap.parse_args()
@@ -230,7 +287,8 @@ def main() -> int:
         best, score = sharpest(frames)
         print(f"  {len(frames)} keyframes, sharpest scores {score:.0f}")
         out = pathlib.Path(args.out)
-        draw(pathlib.Path(best), out)
+        draw(pathlib.Path(best), out,
+             pathlib.Path(args.band) if args.band else None)
         size = out.stat().st_size
         print(f"  wrote {out} ({size / 1000:.0f} KB)")
         print("  now bump the version in index.html: the url carries the "
