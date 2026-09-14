@@ -230,8 +230,16 @@ def _previews_offered() -> dict:
     except Exception:                                # noqa: BLE001
         logger.warning("could not read the preview bands", exc_info=True)
         return {}
+    # A PACKAGED WORK IS NOT A PREVIEW. The index is engraved from the
+    # whole corpus, so a work we later package appears in both -- and the
+    # page would then hold two entries for one piece, one renderable and
+    # one not, with nothing to say which wins. `works` is the answer
+    # whenever there is one; a preview only covers what has no package.
+    packaged = {p.name for p in library.packages()}
     out = {}
     for name, meta in found.items():
+        if name in packaged:
+            continue
         w, h = int(meta.get("w") or 0), int(meta.get("h") or 0)
         if not (w and h):
             continue
@@ -659,9 +667,28 @@ def api_band(name: str):
     preferred where the package has it — the preview is scaled to whatever
     the frame is, and an svg survives that.
     """
+    # A PACKAGE IS NOT REQUIRED. 373 works have a published `band.svg`
+    # engraved straight from the corpus and no package at all, and this
+    # route refused every one of them -- so `/api/library` advertised a
+    # band url for each and the url answered 404. The design screen fell
+    # back to generic staves for exactly the visitor whose piece we had not
+    # engraved yet, which is the case the previews exist to cover.
+    #
+    # The name is still checked against a list we published rather than
+    # being passed to the bucket as typed: either the catalogue, or the
+    # preview index.
     package = library.find(name)
+    vector = bool(package and package.has_vector)
     if package is None or not package.bands:
-        return jsonify({"error": f"No score package named {name!r}."}), 404
+        try:
+            offered = name in scorestore.previews()
+        except Exception:                              # noqa: BLE001
+            logger.warning("could not read the preview bands", exc_info=True)
+            offered = False
+        if not offered:
+            return jsonify({"error": f"No score package named {name!r}."}), 404
+        # Engraved by `tools/make_preview_bands.py`, which emits svg only.
+        vector = True
 
     # THE OPENING BAND, always. One band per score is published for the
     # preview; the rest live only inside the package tar, and reaching a
@@ -684,7 +711,7 @@ def api_band(name: str):
     # size, which makes it an unreliable mask and paints a solid block over
     # the band's paper instead of ink on it.
     ink = _hex_colour(request.args.get("ink", ""))
-    if not (ink and package.has_vector):
+    if not (ink and vector):
         response = Response(raw, mimetype="image/svg+xml")
         response.headers["Cache-Control"] = "public, max-age=3600"
         response.set_etag(tag)

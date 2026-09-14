@@ -5039,8 +5039,42 @@ def check_a_piece_we_have_not_engraved_still_looks_real() -> str:
         raise Failed("the page takes a preview's url without its size, and "
                      "`realBand()` declines without both")
 
-    return (f"offered separately from works, all three fields or none, and "
-            f"the page reads them; {len(offered)} usable in this fixture")
+    # 4. THE URL IT ADVERTISES ACTUALLY SERVES. This is the join that broke
+    #    in the field: 373 bands were engraved and published, `/api/library`
+    #    listed a url for every one, and each url answered 404 -- because
+    #    `/band` opened with `library.find(name)` and refused anything
+    #    without a PACKAGE. Advertising an asset and refusing it is worse
+    #    than not having it, so the two are checked together.
+    name = "Selftest_Preview_Only__zzz-0-XX"
+    was_p, was_b = routes.scorestore.previews, routes.scorestore.preview_bytes
+    try:
+        routes.scorestore.previews = lambda: {
+            name: {"w": 1280, "h": 231, "title": "fixture"}}
+        routes.scorestore.preview_bytes = lambda n, rel: (
+            b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 231"/>'
+            if n == name else None)
+        client = app.test_client()
+        url = routes._previews_offered()[name]["band"]   # noqa: SLF001
+        got = client.get(url)
+        if got.status_code != 200:
+            raise Failed(
+                f"the library advertises {url} and it answers "
+                f"{got.status_code}; a work with a band but no package is "
+                f"refused by its own band endpoint")
+        if "svg" not in got.headers.get("Content-Type", ""):
+            raise Failed("a preview band is not served as svg")
+        # And a name nobody published is still refused, so the route did not
+        # become a way to probe the bucket with whatever is in the url.
+        astray = client.get("/api/library/Nobody_Published_This__x/band")
+        if astray.status_code != 404:
+            raise Failed("an unpublished name is served; the band route must "
+                         "answer only for names we listed")
+    finally:
+        routes.scorestore.previews, routes.scorestore.preview_bytes = was_p, was_b
+
+    return (f"offered separately from works, all three fields or none, the "
+            f"page reads them and the url serves; {len(offered)} usable in "
+            f"this fixture")
 
 
 def main() -> int:
