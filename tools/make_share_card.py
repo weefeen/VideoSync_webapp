@@ -32,10 +32,15 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-# The shape Facebook, Twitter and LinkedIn all lay out. Below 1200x630 the
-# card degrades to a thumbnail beside the text, which is their decision
-# and not ours.
-WIDTH, ASPECT = 1920, 1.91
+# 1200x630 EXACTLY, because that is what Facebook renders. Handing it
+# 1920 does not buy detail: it buys a downscale done by them, badly, after
+# the file leaves us. Below 1200x630 the card degrades to a thumbnail
+# beside the text, so this is a floor as well as a target.
+#
+# The card is DRAWN at this size rather than drawn large and shrunk. Type
+# reduced after the fact is soft type; type set at the size it will be
+# read at is not.
+WIDTH, ASPECT = 1200, 1200 / 630
 
 # The site's own palette, from app/static/svs/index.html.
 PAPER = (246, 241, 232)
@@ -121,10 +126,16 @@ def draw(frame: pathlib.Path, out: pathlib.Path) -> None:
 
     src = Image.open(frame).convert("RGB")
     height = round(WIDTH / ASPECT)
-    # Cropped off the TOP: the engraved band runs along the bottom and is
-    # the whole point of the picture.
-    card = src.crop((0, src.height - height, src.width, src.height))
-    if card.width != WIDTH:
+    # CROPPED IN THE SOURCE'S OWN SCALE, then resized. Cropping to the
+    # card's pixel height first takes that many pixels off a 1920-wide
+    # frame, which is a different share of the picture entirely -- it cut
+    # away the performer and left almost nothing but the score.
+    #
+    # Off the TOP, because the engraved band runs along the bottom and is
+    # the whole point.
+    keep = round(src.width / ASPECT)
+    card = src.crop((0, max(0, src.height - keep), src.width, src.height))
+    if (card.width, card.height) != (WIDTH, height):
         card = card.resize((WIDTH, height), Image.LANCZOS)
 
     # Restore the edge contrast compression flattened. Light on purpose:
@@ -162,37 +173,45 @@ def draw(frame: pathlib.Path, out: pathlib.Path) -> None:
     left = int(WIDTH * 0.055)
 
     # The kicker, letter-spaced by hand because PIL has no tracking.
-    small = _font(26, "body")
+    small = _font(round(WIDTH * 0.0155), "body")
     x = left
     for ch in KICKER:
         pen.text((x, int(height * 0.105)), ch, font=small,
                  fill=(233, 226, 240))
-        x += pen.textlength(ch, font=small) + 3.4
+        x += pen.textlength(ch, font=small) + WIDTH * 0.002
 
-    big = _font(78, "display")
+    big = _font(round(WIDTH * 0.0465), "display")
     y = int(height * 0.20)
     for line in HEADLINE.split("\n"):
         pen.text((left, y), line, font=big, fill=PAPER)
-        y += 89
+        y += round(WIDTH * 0.053)
 
     # The one piece of colour, and the word that matters most.
-    rule_y = y + 26
-    pen.rounded_rectangle([left, rule_y, left + 58, rule_y + 5], radius=3,
+    rule_y = y + round(WIDTH * 0.0155)
+    pen.rounded_rectangle([left, rule_y, left + WIDTH * 0.034,
+                           rule_y + max(2, WIDTH * 0.003)], radius=3,
                           fill=MAGENTA)
-    free = _font(34, "body")
-    pen.text((left + 78, rule_y - 13), NOTE, font=free, fill=PAPER)
+    free = _font(round(WIDTH * 0.0202), "body")
+    pen.text((left + WIDTH * 0.046, rule_y - WIDTH * 0.0077), NOTE,
+             font=free, fill=PAPER)
 
-    # 4:4:4 rather than the default 4:2:0: this is a dark piano against a
-    # pale hall and cream type on near-black, and colour subsampling shows
-    # on exactly those edges.
-    card.save(out, quality=95, subsampling=0, optimize=True,
-              progressive=True)
+    # PNG, NOT JPEG. This card is mostly crisp things -- set type, a
+    # magenta rule, engraved notation -- and lossy compression smears
+    # exactly those, which is why a JPEG card looks fuzzy next to one that
+    # is flat colour and lettering. The photograph costs more bytes as PNG
+    # and the total still lands near half a megabyte, well inside the 8 MB
+    # Facebook allows and the 1 MB that is reliable everywhere.
+    if out.suffix.lower() in (".jpg", ".jpeg"):
+        card.save(out, quality=95, subsampling=0, optimize=True,
+                  progressive=True)
+    else:
+        card.save(out, optimize=True)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("video", help="a rendered score-video to take the frame from")
-    ap.add_argument("--out", default="app/static/svs/og-cover.jpg")
+    ap.add_argument("--out", default="app/static/svs/og-cover.png")
     ap.add_argument("--seconds", type=int, default=240,
                     help="how far into the video to look for a frame")
     args = ap.parse_args()

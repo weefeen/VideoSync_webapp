@@ -5318,9 +5318,9 @@ def check_the_share_card_is_the_card_that_ships() -> str:
     import re
 
     web = ROOT / "app" / "static" / "svs"
-    cover = web / "og-cover.jpg"
+    cover = web / "og-cover.png"
     if not cover.is_file():
-        raise Failed("there is no og-cover.jpg to share")
+        raise Failed("there is no og-cover.png to share")
 
     tag = hashlib.sha1(cover.read_bytes()).hexdigest()[:8]
     page = (web / "index.html").read_text(encoding="utf-8")
@@ -5329,7 +5329,7 @@ def check_the_share_card_is_the_card_that_ships() -> str:
     # about image urls carrying one -- and since the whole point of the
     # version is to make a cache fetch again, an url it might treat oddly
     # is the wrong place to be clever.
-    urls = re.findall(r'og-cover(-[0-9a-f]{8})?\.jpg(\?[^"]*)?', page)
+    urls = re.findall(r'og-cover(-[0-9a-f]{8})?\.png(\?[^"]*)?', page)
     if len(urls) < 2:
         raise Failed(f"the cover is named {len(urls)} time(s); both the "
                      f"Open Graph and the Twitter image need it")
@@ -5343,14 +5343,14 @@ def check_the_share_card_is_the_card_that_ships() -> str:
                          "new picture will never appear")
         if version != f"-{tag}":
             raise Failed(
-                f"the cover url says og-cover{version}.jpg and the file "
+                f"the cover url says og-cover{version}.png and the file "
                 f"fingerprints as -{tag}. The picture changed and the name "
                 f"did not, so every share keeps the old card.")
-    named = web / f"og-cover-{tag}.jpg"
+    named = web / f"og-cover-{tag}.png"
     if not named.is_file():
         raise Failed(f"the page asks for {named.name} and it is not there")
     if named.read_bytes() != cover.read_bytes():
-        raise Failed(f"{named.name} and og-cover.jpg differ; the versioned "
+        raise Failed(f"{named.name} and og-cover.png differ; the versioned "
                      f"copy is what ships and it is not the current picture")
 
     # The shape Facebook and Twitter both lay out. Wrong here means a
@@ -5361,6 +5361,18 @@ def check_the_share_card_is_the_card_that_ships() -> str:
         return f"cover versioned ?v={tag}; no PIL here to check its shape"
     with Image.open(cover) as im:
         w, h = im.size
+    # PNG, NOT JPEG, and checked. The card is mostly set type, a rule and
+    # engraved notation; lossy compression smears exactly those, which is
+    # why a JPEG card reads as fuzzy beside one that is lettering. Facebook
+    # accepts both, so nothing else would ever complain.
+    if cover.suffix.lower() != ".png":
+        raise Failed("the cover is not a PNG; the type and the notation on "
+                     "it are precisely what JPEG blurs")
+    # 1200x630 is what Facebook renders. Larger is not sharper -- it is a
+    # downscale done by them, after the file leaves us.
+    if (w, h) != (1200, 630):
+        raise Failed(f"the cover is {w}x{h}; 1200x630 is what is rendered, "
+                     f"and anything else is resized by them")
     if w < 1200 or h < 630:
         raise Failed(f"the cover is {w}x{h}; 1200x630 is the stated "
                      f"minimum and below it the card falls back to a "
