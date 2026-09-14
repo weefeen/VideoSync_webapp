@@ -1324,6 +1324,24 @@ document.addEventListener('DOMContentLoaded', removeScreenSwitcher);
  */
 const deliverCSS = document.createElement('style');
 deliverCSS.textContent = `
+  /* THE RECAP THUMBNAIL IS A PICTURE OF THE FINISHED VIDEO, not a place to
+     click. It is painted with the same markup as the design frame, so it
+     inherited that frame's editing affordances: "No title panel / click to
+     add one" written across the composition, "Video file / your video.mp4
+     / Click to replace" over the picture, "still artwork" over the
+     backdrop. On the screen that says the render is under way there is
+     nothing left to edit, and every one of those labels is an instruction
+     to do something that is no longer possible -- and none of them will be
+     in the video.
+
+     The ghost panel goes entirely rather than being emptied: with no panel
+     the finished video has none, so a dashed box occupying a quarter of
+     the frame is not a faint version of the truth, it is a different
+     composition. */
+  #miniFrame .ghostlab, #miniFrame .vidlab, #miniFrame .vswap,
+  #miniFrame .artlab{display:none!important}
+  #miniFrame .pnl.ghost{display:none!important}
+
   .delivery{margin:22px 0 0;padding:16px 18px;background:var(--surface);
     border:1px solid var(--hair);border-left:2px solid var(--mag);
     border-radius:3px;max-width:52ch}

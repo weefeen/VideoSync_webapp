@@ -4760,15 +4760,36 @@ def check_the_page_promises_only_what_we_do() -> str:
                      "so somebody has no reason to close the tab")
 
     # THE NUMBERS COME FROM THE SERVER, not from whatever the mockup said.
-    if _re.search(r"free videos? (left )?this month", both, _re.I):
-        raise Failed("the page still says the free allowance is monthly; it "
-                     "is weekly, and it is reported by /api/library")
+    # ANY monthly claim, not one phrasing of it. The first version of this
+    # looked for "free videos ... this month" and passed while the landing
+    # page said "Three videos a month" four hundred lines above -- the same
+    # falsehood, worded differently, on the screen more people read.
+    monthly = _re.search(r"(video|free)[^.<]{0,40}a month"
+                         r"|this month", both, _re.I)
+    if monthly:
+        raise Failed(f"the page says the free allowance is monthly "
+                     f"({monthly.group(0)!r}); it is weekly, and the number "
+                     f"is reported by /api/library")
     if _re.search(r"(two|three|2|3) of your", both, _re.I):
         raise Failed("the page states how many free videos a visitor has "
                      "left. That is not knowable in the page")
     if "SERVER.videosPerWeek" not in wire or "SERVER.retentionHours" not in wire:
         raise Failed("the allowance and the delivery window are not read "
                      "from the server, so they will drift again")
+
+    # THE RECAP THUMBNAIL IS A PICTURE, NOT A CONTROL. It is painted with
+    # the design frame's own markup, so it arrived carrying that frame's
+    # instructions -- "click to add one", "Click to replace" -- on a screen
+    # where the render has already started and nothing can be changed.
+    for hint in (".ghostlab", ".vidlab", ".vswap", ".artlab"):
+        if f"#miniFrame {hint}" not in wire and f", #miniFrame {hint}" not in wire:
+            raise Failed(f"the recap thumbnail still shows {hint}, which "
+                         f"tells somebody to click something that is no "
+                         f"longer there and is not in their video")
+    if "#miniFrame.pnl.ghost{display:none" not in wire.replace(" ", ""):
+        raise Failed("the recap thumbnail draws a ghost panel where the "
+                     "finished video has none, so it shows a different "
+                     "composition from the one being rendered")
 
     # And one copy for the rendering screen, since two of them disagreed.
     if wire_copy.count("It's <em>rendering</em>") != 1:
