@@ -5325,20 +5325,33 @@ def check_the_share_card_is_the_card_that_ships() -> str:
     tag = hashlib.sha1(cover.read_bytes()).hexdigest()[:8]
     page = (web / "index.html").read_text(encoding="utf-8")
 
-    urls = re.findall(r'og-cover\.jpg(\?v=[0-9a-f]+)?', page)
+    # A VERSIONED FILENAME, not a query string. Facebook is inconsistent
+    # about image urls carrying one -- and since the whole point of the
+    # version is to make a cache fetch again, an url it might treat oddly
+    # is the wrong place to be clever.
+    urls = re.findall(r'og-cover(-[0-9a-f]{8})?\.jpg(\?[^"]*)?', page)
     if len(urls) < 2:
         raise Failed(f"the cover is named {len(urls)} time(s); both the "
                      f"Open Graph and the Twitter image need it")
-    for version in urls:
+    for version, query in urls:
+        if query:
+            raise Failed(f"the cover url carries a query string {query!r}; "
+                         f"the version belongs in the filename")
         if not version:
-            raise Failed("the cover url carries no version, so Facebook "
-                         "will keep showing whatever it cached the first "
-                         "time and a new picture will never appear")
-        if version != f"?v={tag}":
+            raise Failed("the cover filename carries no version, so a cache "
+                         "will keep showing whatever it fetched first and a "
+                         "new picture will never appear")
+        if version != f"-{tag}":
             raise Failed(
-                f"the cover url says {version} and the file fingerprints "
-                f"as ?v={tag}. The picture changed and the url did not, so "
-                f"every share will keep the old card.")
+                f"the cover url says og-cover{version}.jpg and the file "
+                f"fingerprints as -{tag}. The picture changed and the name "
+                f"did not, so every share keeps the old card.")
+    named = web / f"og-cover-{tag}.jpg"
+    if not named.is_file():
+        raise Failed(f"the page asks for {named.name} and it is not there")
+    if named.read_bytes() != cover.read_bytes():
+        raise Failed(f"{named.name} and og-cover.jpg differ; the versioned "
+                     f"copy is what ships and it is not the current picture")
 
     # The shape Facebook and Twitter both lay out. Wrong here means a
     # cropped or letterboxed card, decided by them and not by us.
