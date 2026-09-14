@@ -441,12 +441,29 @@ def install(root: pathlib.Path) -> int:
             excludes.append("--exclude")
             excludes.append(rel)
 
+    # THE ENGRAVED PLATES SHIP TOO. `pages/page_NNN.svg` is the whole plate
+    # as engraved, and the site uses it as page furniture -- the score that
+    # sits behind the text. It was never in this tar, so every installed
+    # package arrived with no plates: the catalogue recorded `pages: 0`,
+    # `_put_preview` published none, `/api/library/<name>/page` answered
+    # 404, and the score behind the page quietly disappeared.
+    #
+    # Optional, because a package without plates is still renderable -- the
+    # video is cut from `score/lines`, not from these.
+    sending = ["score", which]
+    plates = sorted(root.glob("pages/page_*.svg"))
+    if plates:
+        sending.append("pages")
+
     print()
     print(f"  installing {name} ...")
     print(f"    sending score/ and {which}/"
+          + (f" and {len(plates)} engraved plate(s)" if plates else
+             " -- NO pages/ folder, so this score will not appear behind "
+             "the text on the site")
           + (" (without the reference audio)" if excludes else ""))
 
-    tar = subprocess.Popen(["tar", "-cf", "-", *excludes, "score", which],
+    tar = subprocess.Popen(["tar", "-cf", "-", *excludes, *sending],
                            cwd=str(root), stdout=subprocess.PIPE)
 
     remote = f"""
@@ -543,6 +560,9 @@ if not m:
     print('    THE SERVER CANNOT SEE IT')
     raise SystemExit(1)
 print('    the server loads it:', m[0].display_name, '|', m[0].edition)
+print('    engraved plates on the server: %d' % m[0].pages)
+if not m[0].pages:
+    print('    (none, so this score will not appear behind the text)')
 """
 
 

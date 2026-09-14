@@ -165,6 +165,12 @@ def api_library():
             "t": p.title or p.display_name,
             "op": p.opus,
             "bars": p.last_measure,
+            # HOW MANY ENGRAVED PLATES. The drifting backdrop is built from
+            # one, and it used to ask the first work in the list for one
+            # without knowing whether that work had any -- so a single
+            # package published without plates turned the backdrop off for
+            # the whole site, with a 404 as the only sign.
+            "pages": p.pages,
             "ref": True,
             # The real strip, so the preview shows this score at its own
             # shape instead of a drawn approximation of one.
@@ -216,9 +222,18 @@ def api_library():
                     # "what can be made" must not start seeing them.
                     "previews": _previews_offered(),
                     # Where the design step fetches the artwork it is
-                    # asking the visitor to choose between.
-                    "backdrop": {"image": "/api/backdrop/static",
-                                 "video": "/api/backdrop/dynamic"},
+                    # asking the visitor to choose between. ONLY WHAT IS
+                    # ACTUALLY CONFIGURED: a url advertised for artwork
+                    # nobody installed is a url that answers 404, and the
+                    # page would spend a request per visit finding that
+                    # out. `art` above already says the same thing, and
+                    # the two must not be able to disagree.
+                    "backdrop": {
+                        name: url for name, url in (
+                            ("image", "/api/backdrop/static"),
+                            ("video", "/api/backdrop/dynamic"))
+                        if settings.background_for(
+                            "static" if name == "image" else "dynamic")},
                     "page_rule": _PAGE_RULE})
 
 

@@ -57,7 +57,17 @@
       const data = await (await fetch('/api/library')).json();
       const works = data.works || [];
       if (!works.length) return;
-      name = works[0].id;
+      // A WORK THAT HAS PLATES. This took works[0] and asked it for page
+      // one regardless, so the backdrop depended on whichever score
+      // happened to sort first also having been published with its
+      // engraved pages. One that was not turned the backdrop off for the
+      // whole site, and the only sign was a 404 in the console.
+      //
+      // `pages` is absent on an older server, and there `undefined > 0` is
+      // false -- so the fallback keeps the old behaviour rather than
+      // leaving the page with no backdrop at all.
+      const withPlates = works.filter(w => (w.pages || 0) > 0);
+      name = (withPlates[0] || works[0]).id;
       rule = data.page_rule || 1;
     } catch (err) { return; }        // offline: no backdrop, no complaint
     if (!name) return;

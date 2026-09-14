@@ -5138,6 +5138,65 @@ def check_no_backtick_hides_in_a_stylesheet() -> str:
     return "every script stylesheet runs to the end of its assignment"
 
 
+def check_the_drifting_backdrop_can_find_a_plate() -> str:
+    """The score behind the page is reachable, or the page knows it is not.
+
+    The landing page stands an engraved plate behind everything, tilted and
+    at six percent, drifting upward. It is fetched from
+    `/api/library/<work>/page`, and the work was whichever sorted FIRST --
+    asked for page one whether or not it had any pages at all.
+
+    Both halves failed at once. `check_score.py --install` tarred `score/`
+    and `performance/` and left `pages/` on the floor, so every installed
+    package arrived with no plates; and the backdrop asked the first of
+    them regardless, got a 404, and drew nothing. The site lost the score
+    behind its text and said so only in the browser console.
+
+    So: the installer must ship the plates, and the page must ask a work
+    that has them.
+    """
+    import re
+
+    # 1. The installer sends the folder the plates live in.
+    src = (ROOT / "tools" / "check_score.py").read_text(encoding="utf-8")
+    i = src.find("tar = subprocess.Popen")
+    if i < 0:
+        raise Failed("check_score.py no longer builds a tar to install with")
+    if "pages" not in src[max(0, i - 900):i + 200]:
+        raise Failed("the installer does not ship `pages/`, so every score "
+                     "arrives with no engraved plates and the drifting "
+                     "backdrop has nothing to draw")
+
+    # 2. The library says how many each work has, so the page can choose.
+    from app import routes
+    app = routes.create_app()
+    app.config["TESTING"] = True
+    body = app.test_client().get("/api/library").get_json()
+    for work in body.get("works", []):
+        if "pages" not in work:
+            raise Failed(f"{work['id']!r} is offered without a plate count; "
+                         f"the backdrop cannot tell which works it can use")
+
+    # 3. And the page picks by that count rather than taking the first.
+    motion = (ROOT / "app" / "static" / "svs" / "svs-motion.js").read_text(
+        encoding="utf-8")
+    j = motion.find("async function drift")
+    if j < 0:
+        raise Failed("the drifting backdrop is gone from svs-motion.js")
+    chunk = motion[j:j + 1800]
+    if ".pages" not in chunk:
+        raise Failed("the backdrop chooses a work without looking at "
+                     "whether it has plates; one score published without "
+                     "them turns the backdrop off for the whole site")
+    if not re.search(r"/page\?n=", chunk):
+        raise Failed("the backdrop no longer asks for a plate")
+
+    have = [w["id"] for w in body.get("works", []) if (w.get("pages") or 0)]
+    return (f"the installer ships pages/, the library counts them, and the "
+            f"page picks by that count; {len(have)} of "
+            f"{len(body.get('works', []))} work(s) can back the page here")
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5204,6 +5263,7 @@ def main() -> int:
         check_the_limit_reset_cannot_be_reached_from_outside,
         check_a_wanted_score_reaches_the_operator,
         check_a_piece_we_have_not_engraved_still_looks_real,
+        check_the_drifting_backdrop_can_find_a_plate,
         check_a_confirmation_is_bound_and_expires,
         check_no_confirmation_screen_without_a_confirmation,
         check_the_page_promises_only_what_we_do,
