@@ -429,9 +429,26 @@ def install(root: pathlib.Path) -> int:
     the shell is known.
     """
     name = root.name
-    which = "reference" if (root / "reference").is_dir() else "performance"
-    if not (root / which).is_dir():
-        print("  nothing to send: no reference/ or performance/",
+    # THE FOLDER THAT HOLDS THE ALIGNMENT, not the one that merely exists.
+    # This read `reference if (root / "reference").is_dir()`, and a project
+    # carrying an EMPTY reference/ beside a full performance/ therefore
+    # shipped the empty one. The package installed, the bands were all
+    # there, the server loaded it and the install reported success -- with
+    # no timeline at all, so `last_measure` was 0 and the first render
+    # would have failed with "the alignment doesn't cover this video".
+    #
+    # An empty directory is not an answer to "where is the alignment".
+    def _has_alignment(folder: pathlib.Path) -> bool:
+        return (folder / "measures.data").is_file()
+
+    which = ""
+    for candidate in ("reference", "performance"):
+        if _has_alignment(root / candidate):
+            which = candidate
+            break
+    if not which:
+        print("  nothing to send: neither reference/ nor performance/ holds "
+              "a measures.data, so this package has no alignment",
               file=sys.stderr)
         return 1
 
@@ -551,6 +568,15 @@ from app import library, scorestore
 name = sys.argv[1]
 m = [p for p in library.packages() if p.name == name]
 print('    the bucket now holds %d score(s)' % len(scorestore.catalogue()))
+if m and not m[0].last_measure:
+    # LOADED IS NOT RENDERABLE. A package with bands and no timeline loads
+    # perfectly, appears in the library, serves its band image -- and fails
+    # at the first render, because there is nothing to place the bands on.
+    # It shipped once exactly this way.
+    print('    THE SERVER SEES NO ALIGNMENT: last_measure is 0, so every')
+    print('    render against this score would fail. The measures.data did')
+    print('    not arrive -- check which folder it is in.')
+    raise SystemExit(1)
 if not m:
     # `library.packages()` is the RENDERABLE ones, so this is not "the
     # object arrived" but "the server can make a video out of it". A
