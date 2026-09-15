@@ -135,6 +135,10 @@ CREATE TABLE IF NOT EXISTS stage_runs (
     worker        TEXT,
     place         TEXT,
     encoder       TEXT,
+    -- The RENDERING machine's total RAM, so `peak_rss` can be read as a
+    -- share of the machine that actually did the work rather than of
+    -- whichever machine happens to be scraped.
+    memory_total  INTEGER,
     -- CPU seconds this stage actually burned, the worker AND the ffmpeg it
     -- spawned. Wall time says how long you waited; this says whether the
     -- machine was working or blocked, and the ratio between them is how
@@ -384,6 +388,7 @@ _ADDED = (
     ("stage_runs", "worker", "TEXT"),
     ("stage_runs", "place", "TEXT"),
     ("stage_runs", "encoder", "TEXT"),
+    ("stage_runs", "memory_total", "INTEGER"),
     ("stage_runs", "cpu_seconds", "REAL"),
     ("stage_runs", "cpu_at_open", "REAL"),
     ("stage_runs", "peak_rss", "INTEGER"),
@@ -626,17 +631,19 @@ def stage_begin(job_id: str, stage: str, *, attempt: int = 1,
                 cpu_at_open: float | None = None,
                 worker: str | None = None,
                 place: str | None = None,
-                encoder: str | None = None) -> int:
+                encoder: str | None = None,
+                memory_total: int | None = None) -> int:
     """Record that a stage started. Returns the row id to finish with."""
     with write() as conn:
         cur = conn.execute(
             "INSERT INTO stage_runs (job_id, stage, attempt, state, started,"
             " inputs, bytes_in, media_seconds, cpu_at_open,"
-            " worker, place, encoder)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " worker, place, encoder, memory_total)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (job_id, stage, attempt, RUNNING, time.time(),
              json.dumps(inputs or []), bytes_in, media_seconds, cpu_at_open,
-             worker or None, place or None, encoder or None))
+             worker or None, place or None, encoder or None,
+             memory_total or None))
         return int(cur.lastrowid)
 
 

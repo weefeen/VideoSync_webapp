@@ -39,6 +39,31 @@ def name() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
+def memory_total() -> int:
+    """This machine's total RAM in bytes, or 0 if it cannot be read.
+
+    REPORTED, BECAUSE NOTHING ELSE CAN SEE IT. Prometheus scrapes the web
+    box and nothing else, so the only memory figure it has is the web
+    box's -- and renders happen on a lent laptop with eight times as much.
+    Dividing one by the other said a render had used 87% of the machine
+    when it had used a tenth of it, and woke somebody at night for a
+    server that was idle.
+    """
+    try:
+        import psutil                                 # noqa: PLC0415
+        return int(psutil.virtual_memory().total)
+    except Exception:                                 # noqa: BLE001
+        pass
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return 0
+
+
 def place() -> str:
     """local | cloud | web -- where this render is happening.
 
@@ -147,7 +172,7 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
     # Asked once per task rather than per event. `encoder()` probes
     # the machine the first time and caches after, but a task sends
     # many events and none of them need it asked again.
-    where, enc = place(), encoder()
+    where, enc, ram = place(), encoder(), memory_total()
 
     def say(kind: str, **fields) -> None:
         # Every event carries the running cost, so a stage boundary is
@@ -169,7 +194,7 @@ def handle_task(task: RenderTask, publish: Publish) -> bool:
         try:
             publish(Event(job_id=task.job_id, type=kind, attempt=task.attempt,
                           seq=next(seq), worker=me,
-                          place=where, encoder=enc,
+                          place=where, encoder=enc, memory_total=ram,
                           cpu_seconds=cpu, peak_rss=rss, **fields))
         except Exception:                              # noqa: BLE001
             logger.warning("job %s: could not publish %s event (the outcome "

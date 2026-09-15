@@ -114,7 +114,8 @@ groups:
         for: 0m
         annotations:
           summary: >-
-            A single render's peak memory has passed 80% of the box. Measured
+            A single render's peak memory has passed 80% of THE MACHINE
+            THAT RENDERED IT, which is not necessarily this one. Measured
             at 2433 MB of 3915 on a 7.1-minute recording, and `align` is DTW
             — its cost is the product of the two sequence lengths, so it
             grows with the SQUARE of duration.
@@ -142,9 +143,17 @@ groups:
               editorMode: code
               instant: true
               range: false
-              expr: >-
-                vsw_peak_rss_bytes
-                / scalar(max(node_memory_MemTotal_bytes))
+              # NOT `vsw_peak_rss_bytes / node_memory_MemTotal_bytes`.
+              # Prometheus scrapes the web box and nothing else, so that
+              # divided a peak measured on the LAPTOP that renders by the
+              # SERVER's size -- 3.56 GB of a laptop read as 87% of a
+              # 4.1 GB box, and alerted for a machine sitting idle.
+              #
+              # `vsw_peak_rss_fraction` is computed where both numbers are
+              # known: the renderer reports its own total memory with the
+              # peak. Absent where a renderer did not say, which makes this
+              # alert do nothing rather than lie.
+              expr: max(vsw_peak_rss_fraction)
           - refId: over
             relativeTimeRange:
               from: 3600

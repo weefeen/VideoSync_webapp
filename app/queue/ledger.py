@@ -93,7 +93,8 @@ def _started(event: Event, row) -> bool:
                       # forty-eight had a worker, and it was the one still
                       # running.
                       worker=event.worker, place=event.place,
-                      encoder=event.encoder)
+                      encoder=event.encoder,
+                      memory_total=event.memory_total)
     return True
 
 

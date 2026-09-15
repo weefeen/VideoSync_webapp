@@ -87,6 +87,10 @@ class Event:
     # machine. Both end up as labels on the metrics.
     place: str = ""
     encoder: str = ""
+    # The rendering machine's total RAM. Without it a peak measured on one
+    # machine gets divided by another machine's size, which is how an idle
+    # server reported 87% memory use.
+    memory_total: int = 0
     stage: str | None = None
     detail: str = ""
     # What the work has cost so far, measured where it happens and carried

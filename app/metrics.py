@@ -159,6 +159,30 @@ def render() -> str:
     family("vsw_stage_cpu_seconds_total", "counter",
            "CPU seconds a stage burned, worker and ffmpeg together. Against "
            "wall time this is how many cores the stage actually uses.")
+    # THE SHARE OF THE MACHINE THAT DID THE WORK, computed here because it
+    # is the only place both numbers are known. Prometheus scrapes the web
+    # box and nothing else, so an alert dividing a peak by
+    # `node_memory_MemTotal_bytes` divides a LAPTOP's usage by the SERVER's
+    # size. A render using 3.56 GB of a 32 GB laptop was reported as 87% of
+    # a 4.1 GB server, and woke somebody for a machine that was idle.
+    #
+    # Absent rather than wrong where the renderer did not say how much
+    # memory it has: a missing series makes an alert do nothing, and a
+    # guessed one makes it lie.
+    family("vsw_peak_rss_fraction", "gauge",
+           "A stage's peak memory as a share of the RENDERING machine's own "
+           "RAM. Alert on this rather than on bytes over the scraped box's "
+           "size: the two are different machines.")
+    for row in store.query(
+            "SELECT stage,"
+            "       COALESCE(NULLIF(place, ''), 'unknown') AS place,"
+            "       MAX(CAST(peak_rss AS REAL) / memory_total) AS share"
+            "  FROM stage_runs"
+            " WHERE ended IS NOT NULL AND peak_rss > 0 AND memory_total > 0"
+            " GROUP BY stage, place"):
+        out.append(_line("vsw_peak_rss_fraction", round(row["share"], 4),
+                         {"stage": row["stage"], "place": row["place"]}))
+
     family("vsw_stage_peak_rss_bytes", "gauge",
            "Highest resident memory reached by the end of a stage, ever. "
            "Cumulative for the process, so the rise between stages is what "
