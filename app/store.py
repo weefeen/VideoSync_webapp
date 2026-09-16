@@ -45,6 +45,7 @@ import json
 import logging
 import math
 import pathlib
+import secrets
 import sqlite3
 import threading
 import time
@@ -296,6 +297,91 @@ CREATE TABLE IF NOT EXISTS meta (
     value  TEXT NOT NULL,
     made   REAL NOT NULL
 );
+
+-- ── v2: a performance is the thing, not the file it arrived in ───────────
+-- A visitor's upload and a pasted YouTube link are the same object seen from
+-- two sides: somebody played a Chopin work, and we know when each bar of it
+-- sounds. `jobs` keeps its meaning -- one render, start to finish -- and a
+-- job now belongs to a performance rather than being the whole story.
+CREATE TABLE IF NOT EXISTS performances (
+    id          TEXT PRIMARY KEY,
+    -- What a URL shows. Not the primary key and not sequential: a guessable
+    -- id lets anyone walk the whole library, including work not published.
+    public_id   TEXT NOT NULL UNIQUE,
+    created     REAL NOT NULL,
+    updated     REAL NOT NULL,
+    state       TEXT NOT NULL,
+    -- The package folder name, character for character, once recognition has
+    -- named one. NULL means we do not yet know what was played.
+    edition     TEXT,
+    title       TEXT NOT NULL DEFAULT '',
+    -- Only ever what a source states about itself. We do not infer a pianist.
+    performer   TEXT NOT NULL DEFAULT '',
+    error       TEXT
+);
+CREATE INDEX IF NOT EXISTS performances_state ON performances(state, created);
+CREATE INDEX IF NOT EXISTS performances_edition ON performances(edition, created);
+
+CREATE TABLE IF NOT EXISTS media_sources (
+    id            TEXT PRIMARY KEY,
+    performance_id TEXT,
+    provider      TEXT NOT NULL,              -- upload | youtube
+    external_id   TEXT NOT NULL DEFAULT '',   -- the YouTube video id
+    url           TEXT NOT NULL DEFAULT '',
+    storage_uri   TEXT,                       -- an upload's own bytes
+    title         TEXT NOT NULL DEFAULT '',
+    channel_id    TEXT NOT NULL DEFAULT '',
+    channel_name  TEXT NOT NULL DEFAULT '',
+    duration_ms   INTEGER,
+    thumbnail     TEXT NOT NULL DEFAULT '',
+    availability  TEXT NOT NULL DEFAULT 'unknown',
+    last_checked  REAL,
+    job_id        TEXT,                       -- the render, for an upload
+    created       REAL NOT NULL
+);
+-- The same video pasted twice is one performance, and the database says so
+-- rather than the code remembering to check. Partial, because every upload
+-- has no external id and they must not collide with each other.
+CREATE UNIQUE INDEX IF NOT EXISTS media_sources_external
+    ON media_sources(provider, external_id) WHERE external_id <> '';
+CREATE INDEX IF NOT EXISTS media_sources_perf ON media_sources(performance_id);
+
+CREATE TABLE IF NOT EXISTS synchronisations (
+    id             TEXT PRIMARY KEY,
+    performance_id TEXT NOT NULL,
+    edition        TEXT NOT NULL,
+    method         TEXT NOT NULL DEFAULT '',  -- which aligner said so
+    state          TEXT NOT NULL,
+    confidence     REAL,
+    bars           INTEGER,
+    created        REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS synchronisations_perf
+    ON synchronisations(performance_id, created);
+
+-- The alignment, one row per bar. measures.data stays the artefact of record;
+-- this is the same numbers where a page load can reach them without going to
+-- the bucket, and where "which performances reach bar 200" is a question that
+-- can be asked at all.
+CREATE TABLE IF NOT EXISTS sync_bars (
+    sync_id  TEXT NOT NULL,
+    measure  INTEGER NOT NULL,
+    at_ms    INTEGER NOT NULL,
+    PRIMARY KEY (sync_id, measure)
+) WITHOUT ROWID;
+
+-- Where each bar sits across its band, as fractions of the band's width.
+-- Read off the engraving by app/bars.py and cached per edition: the band SVG
+-- is a third of a megabyte and parsing one on a page load would be absurd.
+-- Keyed by edition and measure, because a measure sits on exactly one band.
+CREATE TABLE IF NOT EXISTS score_bars (
+    edition  TEXT NOT NULL,
+    measure  INTEGER NOT NULL,
+    band     INTEGER NOT NULL,          -- the band's own first measure
+    x0       REAL NOT NULL,
+    x1       REAL NOT NULL,
+    PRIMARY KEY (edition, measure)
+) WITHOUT ROWID;
 """
 
 # How close to the end of a paid hour a machine may be released. Linode
@@ -1414,3 +1500,172 @@ def suppress_by_unsub(token: str, now: float) -> str | None:
                      "confirmed = NULL, token_hash = NULL WHERE address = ?",
                      (now, row["address"]))
     return row["address"]
+
+
+# ── performances ─────────────────────────────────────────────────────────
+# A performance outlives the thing it arrived as. An upload has a job and a
+# file; a YouTube link has neither and is still the same kind of object, so
+# everything the player needs hangs off here rather than off `jobs`.
+
+# No l, 1, 0 or O: a public id gets read down a phone and typed back in.
+_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def _public_id(length: int = 10) -> str:
+    """An id that says nothing about how many there are.
+
+    Sequential ids would let anyone walk the library, including performances
+    that are still failing or were never meant to be seen.
+    """
+    return "".join(secrets.choice(_ALPHABET) for _ in range(length))
+
+
+def new_performance(state: str, *, edition: str | None = None,
+                    title: str = "", performer: str = "") -> sqlite3.Row:
+    """Start a performance and hand back the row, public id included."""
+    now = time.time()
+    for _ in range(8):                    # a collision is luck, not a bug
+        public = _public_id()
+        try:
+            with write() as conn:
+                conn.execute(
+                    "INSERT INTO performances (id, public_id, created, updated,"
+                    " state, edition, title, performer) VALUES (?,?,?,?,?,?,?,?)",
+                    (secrets.token_hex(12), public, now, now, state,
+                     edition, title, performer))
+            break
+        except sqlite3.IntegrityError:
+            continue
+    else:
+        raise RuntimeError("could not find a free public id")
+    row = performance(public)
+    assert row is not None
+    return row
+
+
+def performance(public_id: str) -> sqlite3.Row | None:
+    return one("SELECT * FROM performances WHERE public_id = ?", (public_id,))
+
+
+def performance_by_id(perf_id: str) -> sqlite3.Row | None:
+    return one("SELECT * FROM performances WHERE id = ?", (perf_id,))
+
+
+def set_performance(perf_id: str, **fields: Any) -> None:
+    """Change a performance. `updated` moves whether or not it is passed."""
+    fields.setdefault("updated", time.time())
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with write() as conn:
+        conn.execute(f"UPDATE performances SET {sets} WHERE id = ?",
+                     (*fields.values(), perf_id))
+
+
+def performances(state: str | None = None, limit: int = 200) -> list[sqlite3.Row]:
+    if state:
+        return query("SELECT * FROM performances WHERE state = ?"
+                     " ORDER BY created DESC LIMIT ?", (state, limit))
+    return query("SELECT * FROM performances ORDER BY created DESC LIMIT ?",
+                 (limit,))
+
+
+# ── media sources ────────────────────────────────────────────────────────
+
+def attach_media(performance_id: str, provider: str, **fields: Any) -> str:
+    """Record where a performance's media came from. Returns the row id."""
+    media_id = secrets.token_hex(12)
+    columns = {"id": media_id, "performance_id": performance_id,
+               "provider": provider, "created": time.time(), **fields}
+    names = ", ".join(columns)
+    marks = ", ".join("?" for _ in columns)
+    with write() as conn:
+        conn.execute(f"INSERT INTO media_sources ({names}) VALUES ({marks})",
+                     tuple(columns.values()))
+    return media_id
+
+
+def media_for(performance_id: str) -> list[sqlite3.Row]:
+    return query("SELECT * FROM media_sources WHERE performance_id = ?"
+                 " ORDER BY created", (performance_id,))
+
+
+def media_by_external(provider: str, external_id: str) -> sqlite3.Row | None:
+    """The one row for a provider's video, if we have seen it before.
+
+    This is the whole of deduplication: a link pasted by two visitors, found
+    in the group and named on a trusted channel is four discoveries of one
+    recording, and it must be aligned once.
+    """
+    if not external_id:
+        return None
+    return one("SELECT * FROM media_sources WHERE provider = ? AND external_id = ?",
+               (provider, external_id))
+
+
+def set_media(media_id: str, **fields: Any) -> None:
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with write() as conn:
+        conn.execute(f"UPDATE media_sources SET {sets} WHERE id = ?",
+                     (*fields.values(), media_id))
+
+
+# ── the alignment ────────────────────────────────────────────────────────
+
+def put_sync(performance_id: str, edition: str, *, state: str,
+             method: str = "", confidence: float | None = None,
+             timeline: list[tuple[int, float]] | None = None) -> str:
+    """Record an alignment and, with it, when each bar sounds.
+
+    `timeline` is what `package._read_measures` returns: (measure, seconds).
+    Seconds become milliseconds here because every consumer is a player.
+    """
+    sync_id = secrets.token_hex(12)
+    rows = [(sync_id, m, int(round(s * 1000))) for m, s in (timeline or [])]
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO synchronisations (id, performance_id, edition, method,"
+            " state, confidence, bars, created) VALUES (?,?,?,?,?,?,?,?)",
+            (sync_id, performance_id, edition, method, state, confidence,
+             len(rows) or None, time.time()))
+        if rows:
+            conn.executemany(
+                "INSERT OR REPLACE INTO sync_bars (sync_id, measure, at_ms)"
+                " VALUES (?,?,?)", rows)
+    return sync_id
+
+
+def latest_sync(performance_id: str) -> sqlite3.Row | None:
+    return one("SELECT * FROM synchronisations WHERE performance_id = ?"
+               " ORDER BY created DESC LIMIT 1", (performance_id,))
+
+
+def sync_timeline(sync_id: str) -> list[tuple[int, int]]:
+    """(measure, milliseconds) for one alignment, in bar order."""
+    return [(r["measure"], r["at_ms"]) for r in
+            query("SELECT measure, at_ms FROM sync_bars WHERE sync_id = ?"
+                  " ORDER BY measure", (sync_id,))]
+
+
+# ── where the bars are on the page ───────────────────────────────────────
+
+def put_score_bars(edition: str, rows: list[tuple[int, int, float, float]]) -> None:
+    """Cache one edition's bar geometry: (measure, band, x0, x1).
+
+    Replaces whatever was there: a re-published package may re-engrave, and
+    half of an old layout mixed with half of a new one would put highlights
+    on the wrong music without anything failing.
+    """
+    with write() as conn:
+        conn.execute("DELETE FROM score_bars WHERE edition = ?", (edition,))
+        conn.executemany(
+            "INSERT INTO score_bars (edition, measure, band, x0, x1)"
+            " VALUES (?,?,?,?,?)", [(edition, *r) for r in rows])
+
+
+def score_bars(edition: str) -> list[sqlite3.Row]:
+    return query("SELECT measure, band, x0, x1 FROM score_bars"
+                 " WHERE edition = ? ORDER BY measure", (edition,))
+
+
+def has_score_bars(edition: str) -> bool:
+    return bool(one("SELECT 1 AS yes FROM score_bars WHERE edition = ? LIMIT 1",
+                    (edition,)))

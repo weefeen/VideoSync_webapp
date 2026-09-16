@@ -5410,6 +5410,159 @@ def check_the_share_card_is_the_card_that_ships() -> str:
             f"?v={tag} so a new picture reaches a cache")
 
 
+def check_a_bar_is_found_where_the_engraving_puts_it() -> str:
+    """Bar positions come off the engraving, through its transforms.
+
+    The package says which measure a band starts at and nothing about where
+    the bars fall inside it, so a player could highlight a system but not a
+    bar. app/bars.py recovers that from the barlines Verovio leaves in the
+    band.
+
+    Reading the path data directly is wrong and quietly so: the engraving
+    sits inside a `page-margin` translate, inside a `definition-scale`
+    <svg> with its own viewBox, inside the root viewBox that the band
+    exporter re-crops. Skip any of those and every bar shifts by the margin
+    while nothing fails. This walks a real band and checks the three joins
+    that would hide such a shift:
+
+      * the bars found are numbered from the band's own first measure and
+        run on to where the NEXT band says it begins -- export.json is the
+        only independent statement of where a band ends;
+      * they ascend and touch, left to right, with no gap or overlap;
+      * they stay inside the band, because a fraction outside 0..1 is a
+        highlight drawn off the edge of the picture.
+    """
+    import json as _json
+    from app import bars as barmod
+    from app.settings import settings
+
+    package = None
+    for root in settings.score_roots:
+        for candidate in sorted(pathlib.Path(root.path).glob("*")):
+            if (candidate / "score" / "export.json").is_file() and \
+               (candidate / "score" / "lines").is_dir():
+                package = candidate
+                break
+        if package:
+            break
+    if package is None:
+        return "no engraved package installed here, nothing to measure"
+
+    export = _json.loads((package / "score" / "export.json").read_text(encoding="utf-8"))
+    starts = sorted(e["first_measure"] for e in export["entries"])
+    checked = 0
+    for index, first in enumerate(starts):
+        band = package / "score" / "lines" / f"{first}.svg"
+        if not band.is_file():
+            continue
+        found = barmod.bars_for(band, first)
+        if not found:
+            raise Failed(f"band {first} of {package.name}: no bars found")
+
+        if found[0].measure != first:
+            raise Failed(f"band {first}: numbering starts at {found[0].measure}")
+
+        following = starts[index + 1] if index + 1 < len(starts) else None
+        if following is not None and found[-1].measure + 1 != following:
+            raise Failed(
+                f"band {first} ends at measure {found[-1].measure}, but "
+                f"export.json says the next band begins at {following}")
+
+        previous = None
+        for bar in found:
+            if not (0.0 <= bar.x0 <= 1.0 and 0.0 <= bar.x1 <= 1.0):
+                raise Failed(f"bar {bar.measure} sits outside the band: "
+                             f"{bar.x0:.3f}..{bar.x1:.3f}")
+            if bar.x1 <= bar.x0:
+                raise Failed(f"bar {bar.measure} has no width")
+            if previous is not None and abs(bar.x0 - previous) > 1e-9:
+                raise Failed(f"bar {bar.measure} starts at {bar.x0:.4f} "
+                             f"where the one before ended at {previous:.4f}")
+            previous = bar.x1
+        checked += len(found)
+
+    return (f"{package.name}: {checked} bars across {len(starts)} bands, each "
+            f"numbered from its band and ending where the next one begins")
+
+
+def check_the_same_video_is_one_performance() -> str:
+    """A performance outlives the thing it arrived as, and is aligned once.
+
+    The seam under v2. An upload and a pasted YouTube link are the same
+    object -- somebody played a work, and we know when each bar sounds --
+    so the player reads a performance, not a job.
+
+    The joins that would fail silently, and so are checked here:
+
+      * a public id is not the primary key, because a sequential id in a
+        URL lets anyone walk the library including what is still failing;
+      * the SAME video discovered twice cannot become two performances.
+        That guard is the unique index, not code that remembers to look:
+        a link pasted by two visitors and found in the group besides is
+        three discoveries of one recording;
+      * two uploads, which have no external id, must still coexist;
+      * seconds become milliseconds exactly once on the way in, and the
+        timeline comes back in bar order.
+    """
+    import sqlite3
+    import tempfile as _tmp
+    from app import store
+
+    with _tmp.TemporaryDirectory() as folder:
+        # settings is frozen, so the database file is redirected instead of
+        # the working directory it is derived from.
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            perf = store.new_performance("IDENTIFYING", title="a test")
+            if perf["public_id"] == perf["id"]:
+                raise Failed("the public id is the primary key")
+            if len(perf["public_id"]) < 8:
+                raise Failed(f"public id {perf['public_id']!r} is short enough to guess")
+
+            store.attach_media(perf["id"], "youtube", external_id="abc123",
+                               url="https://youtu.be/abc123")
+            again = store.media_by_external("youtube", "abc123")
+            if again is None or again["performance_id"] != perf["id"]:
+                raise Failed("a video we have seen was not found by its id")
+
+            other = store.new_performance("DISCOVERED")
+            try:
+                store.attach_media(other["id"], "youtube", external_id="abc123")
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise Failed("the same video was accepted twice")
+
+            # uploads carry no external id and must not collide with each other
+            store.attach_media(other["id"], "upload", storage_uri="a.mp4")
+            store.attach_media(perf["id"], "upload", storage_uri="b.mp4")
+
+            sync_id = store.put_sync(perf["id"], "Op.39", state="READY",
+                                     method="score",
+                                     timeline=[(1, 3.425), (2, 3.744), (3, 4.362)])
+            back = store.sync_timeline(sync_id)
+            if back != [(1, 3425), (2, 3744), (3, 4362)]:
+                raise Failed(f"the timeline came back as {back}")
+            if store.latest_sync(perf["id"])["bars"] != 3:
+                raise Failed("the alignment did not record how many bars it has")
+
+            store.put_score_bars("Op.39", [(1, 1, 0.0, 0.2), (2, 1, 0.2, 0.5)])
+            store.put_score_bars("Op.39", [(1, 1, 0.0, 0.3)])
+            kept = store.score_bars("Op.39")
+            if len(kept) != 1 or abs(kept[0]["x1"] - 0.3) > 1e-9:
+                raise Failed("re-publishing an edition left old geometry behind")
+
+            return ("a performance carries its own public id; one video is one "
+                    "performance and the index says so; uploads coexist; "
+                    "seconds become milliseconds once")
+        finally:
+            store.close()
+            store._path = was
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5485,6 +5638,8 @@ def main() -> int:
         check_a_refusal_is_not_a_failed_recognition,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
+        check_a_bar_is_found_where_the_engraving_puts_it,
+        check_the_same_video_is_one_performance,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")
