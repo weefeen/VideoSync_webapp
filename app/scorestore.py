@@ -235,6 +235,13 @@ def publish(folder: pathlib.Path) -> int:
 # one engraved plate behind the page furniture.
 PREVIEW_BAND = "band.svg"
 
+# The alignment the package was prepared against: which second each bar of
+# the reference recording sounds at. Published loose beside the bands
+# because the WATCH page is built on it -- every installed score is a
+# performance you can follow before anybody pastes a link -- and the web
+# box cannot open the tar to get it.
+ALIGNMENT = "alignment.data"
+
 
 def preview_key(name: str, relative: str) -> str:
     """Where one preview asset lives in the bucket."""
@@ -252,14 +259,39 @@ def plate_name(n: int) -> str:
     return f"pages/p{max(1, n)}.svg"
 
 
+def band_name(first_measure: int) -> str:
+    """One system of a score, addressed by the measure it starts at.
+
+    Published loose alongside the opening band because the WATCH page needs
+    the whole piece, a system at a time, and the web box still holds no
+    score bytes: it fetches the one it is showing and caches it.
+    """
+    return f"bands/{int(first_measure)}.svg"
+
+
 def _put_preview(folder: pathlib.Path) -> int:
-    """The band and the plates, as loose objects. Returns how many."""
+    """The bands and the plates, as loose objects. Returns how many."""
     sent = 0
     bands = sorted((folder / "score" / "lines").glob("*.svg"),
                    key=lambda q: int(q.stem) if q.stem.isdigit() else 0)
     if bands:
         storage.put(bands[0], preview_key(folder.name, PREVIEW_BAND))
         sent += 1
+    # EVERY system, addressed by its own first measure. The preview needed
+    # exactly one; following a performance needs all of them, and pulling
+    # the tar onto the web box to reach system forty is what this whole
+    # arrangement exists to avoid.
+    for band in bands:
+        if band.stem.isdigit():
+            storage.put(band, preview_key(folder.name, band_name(int(band.stem))))
+            sent += 1
+    for measures in (folder / "reference" / "measures.data",
+                     folder / "performance" / "measures.data",
+                     folder / "score" / "measures.data"):
+        if measures.is_file():
+            storage.put(measures, preview_key(folder.name, ALIGNMENT))
+            sent += 1
+            break
     for n, plate in enumerate(sorted(folder.glob("pages/page_*.svg")), 1):
         storage.put(plate, preview_key(folder.name, plate_name(n)))
         sent += 1

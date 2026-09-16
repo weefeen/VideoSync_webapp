@@ -5410,6 +5410,466 @@ def check_the_share_card_is_the_card_that_ships() -> str:
             f"?v={tag} so a new picture reaches a cache")
 
 
+def check_a_bar_is_found_where_the_engraving_puts_it() -> str:
+    """Bar positions come off the engraving, through its transforms.
+
+    The package says which measure a band starts at and nothing about where
+    the bars fall inside it, so a player could highlight a system but not a
+    bar. app/bars.py recovers that from the barlines Verovio leaves in the
+    band.
+
+    Reading the path data directly is wrong and quietly so: the engraving
+    sits inside a `page-margin` translate, inside a `definition-scale`
+    <svg> with its own viewBox, inside the root viewBox that the band
+    exporter re-crops. Skip any of those and every bar shifts by the margin
+    while nothing fails. This walks a real band and checks the three joins
+    that would hide such a shift:
+
+      * the bars found are numbered from the band's own first measure and
+        run on to where the NEXT band says it begins -- export.json is the
+        only independent statement of where a band ends;
+      * they ascend and touch, left to right, with no gap or overlap;
+      * they stay inside the band, because a fraction outside 0..1 is a
+        highlight drawn off the edge of the picture.
+    """
+    import json as _json
+    from app import bars as barmod
+    from app.settings import settings
+
+    package = None
+    for root in settings.score_roots:
+        for candidate in sorted(pathlib.Path(root.path).glob("*")):
+            if (candidate / "score" / "export.json").is_file() and \
+               (candidate / "score" / "lines").is_dir():
+                package = candidate
+                break
+        if package:
+            break
+    if package is None:
+        return "no engraved package installed here, nothing to measure"
+
+    export = _json.loads((package / "score" / "export.json").read_text(encoding="utf-8"))
+    starts = sorted(e["first_measure"] for e in export["entries"])
+    checked = 0
+    for index, first in enumerate(starts):
+        band = package / "score" / "lines" / f"{first}.svg"
+        if not band.is_file():
+            continue
+        found = barmod.bars_for(band, first)
+        if not found:
+            raise Failed(f"band {first} of {package.name}: no bars found")
+
+        if found[0].measure != first:
+            raise Failed(f"band {first}: numbering starts at {found[0].measure}")
+
+        following = starts[index + 1] if index + 1 < len(starts) else None
+        if following is not None and found[-1].measure + 1 != following:
+            raise Failed(
+                f"band {first} ends at measure {found[-1].measure}, but "
+                f"export.json says the next band begins at {following}")
+
+        previous = None
+        for bar in found:
+            if not (0.0 <= bar.x0 <= 1.0 and 0.0 <= bar.x1 <= 1.0):
+                raise Failed(f"bar {bar.measure} sits outside the band: "
+                             f"{bar.x0:.3f}..{bar.x1:.3f}")
+            if bar.x1 <= bar.x0:
+                raise Failed(f"bar {bar.measure} has no width")
+            if previous is not None and abs(bar.x0 - previous) > 1e-9:
+                raise Failed(f"bar {bar.measure} starts at {bar.x0:.4f} "
+                             f"where the one before ended at {previous:.4f}")
+            previous = bar.x1
+        checked += len(found)
+
+    return (f"{package.name}: {checked} bars across {len(starts)} bands, each "
+            f"numbered from its band and ending where the next one begins")
+
+
+def check_the_same_video_is_one_performance() -> str:
+    """A performance outlives the thing it arrived as, and is aligned once.
+
+    The seam under v2. An upload and a pasted YouTube link are the same
+    object -- somebody played a work, and we know when each bar sounds --
+    so the player reads a performance, not a job.
+
+    The joins that would fail silently, and so are checked here:
+
+      * a public id is not the primary key, because a sequential id in a
+        URL lets anyone walk the library including what is still failing;
+      * the SAME video discovered twice cannot become two performances.
+        That guard is the unique index, not code that remembers to look:
+        a link pasted by two visitors and found in the group besides is
+        three discoveries of one recording;
+      * two uploads, which have no external id, must still coexist;
+      * seconds become milliseconds exactly once on the way in, and the
+        timeline comes back in bar order.
+    """
+    import sqlite3
+    import tempfile as _tmp
+    from app import store
+
+    with _tmp.TemporaryDirectory() as folder:
+        # settings is frozen, so the database file is redirected instead of
+        # the working directory it is derived from.
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            perf = store.new_performance("IDENTIFYING", title="a test")
+            if perf["public_id"] == perf["id"]:
+                raise Failed("the public id is the primary key")
+            if len(perf["public_id"]) < 8:
+                raise Failed(f"public id {perf['public_id']!r} is short enough to guess")
+
+            store.attach_media(perf["id"], "youtube", external_id="abc123",
+                               url="https://youtu.be/abc123")
+            again = store.media_by_external("youtube", "abc123")
+            if again is None or again["performance_id"] != perf["id"]:
+                raise Failed("a video we have seen was not found by its id")
+
+            other = store.new_performance("DISCOVERED")
+            try:
+                store.attach_media(other["id"], "youtube", external_id="abc123")
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise Failed("the same video was accepted twice")
+
+            # uploads carry no external id and must not collide with each other
+            store.attach_media(other["id"], "upload", storage_uri="a.mp4")
+            store.attach_media(perf["id"], "upload", storage_uri="b.mp4")
+
+            sync_id = store.put_sync(perf["id"], "Op.39", state="READY",
+                                     method="score",
+                                     timeline=[(1, 3.425), (2, 3.744), (3, 4.362)])
+            back = store.sync_timeline(sync_id)
+            if back != [(1, 3425), (2, 3744), (3, 4362)]:
+                raise Failed(f"the timeline came back as {back}")
+            if store.latest_sync(perf["id"])["bars"] != 3:
+                raise Failed("the alignment did not record how many bars it has")
+
+            store.put_score_bars("Op.39", [(1, 1, 0.0, 0.2), (2, 1, 0.2, 0.5)])
+            store.put_score_bars("Op.39", [(1, 1, 0.0, 0.3)])
+            kept = store.score_bars("Op.39")
+            if len(kept) != 1 or abs(kept[0]["x1"] - 0.3) > 1e-9:
+                raise Failed("re-publishing an edition left old geometry behind")
+
+            return ("a performance carries its own public id; one video is one "
+                    "performance and the index says so; uploads coexist; "
+                    "seconds become milliseconds once")
+        finally:
+            store.close()
+            store._path = was
+
+
+def check_one_video_however_many_ways_it_is_found() -> str:
+    """Found by a person, by the group, by a search: still one performance.
+
+    The rule the whole acquisition side rests on. A recording reaches us as
+    a pasted link, as a post in the Chopin group and as a row in a search
+    result, and that is three DISCOVERIES of one performance -- never three
+    performances, and never three alignments, because alignment is the
+    expensive thing we are trying not to do twice.
+
+    The cases, and what would go wrong without each:
+
+      * a NEW link from a visitor starts a performance at the top of the
+        queue, because somebody is sitting there waiting for it;
+      * the SAME link again returns what we have. Without this every reload
+        of a shared page would queue the piece again;
+      * a link the COLLECTOR found starts at the collector's own weight, so
+        background enrichment cannot outrank a person;
+      * a background video a visitor then asks for is RAISED rather than
+        queued a second time -- and a later background sighting of it must
+        not push it back down, which is the half of that rule that is easy
+        to get wrong;
+      * two callers arriving with the same new video at once end up with
+        one performance. The guard is the unique index, not the order the
+        code happened to run in.
+    """
+    import sqlite3
+    import tempfile as _tmp
+    from app import store, watch, youtube
+
+    LINK = "https://www.youtube.com/watch?v=dyZmzXMHItI"
+    with _tmp.TemporaryDirectory() as folder:
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            # the same recording, in the forms it really arrives in
+            forms = [LINK,
+                     "https://youtu.be/dyZmzXMHItI?t=42",
+                     "https://www.youtube.com/watch?v=dyZmzXMHItI&list=PL1",
+                     "https://m.youtube.com/watch?v=dyZmzXMHItI&feature=share",
+                     "https://www.youtube-nocookie.com/embed/dyZmzXMHItI"]
+            ids = {youtube.video_id(f) for f in forms}
+            if ids != {"dyZmzXMHItI"}:
+                raise Failed(f"one video read as {ids}")
+
+            # a visitor pastes something we have never seen
+            first, made = watch.resolve(LINK, source_type=watch.USER_PASTE)
+            if not made:
+                raise Failed("a new link did not create a performance")
+            if first["priority"] != watch.PRIORITY[watch.USER_PASTE]:
+                raise Failed(f"a waiting visitor queued at {first['priority']}")
+
+            # the same link again, in a different form
+            again, made2 = watch.resolve(forms[1], source_type=watch.USER_PASTE)
+            if made2 or again["public_id"] != first["public_id"]:
+                raise Failed("the same video became a second performance")
+
+            media = store.media_by_external("youtube", "dyZmzXMHItI")
+            if len(store.discoveries_for(media["id"])) != 2:
+                raise Failed("the second sighting was not recorded")
+
+            # the collector finds one of its own
+            other, made3 = watch.resolve("https://youtu.be/AAAAAAAAAAA",
+                                         source_type=watch.FACEBOOK_GROUP,
+                                         reference="post/123")
+            if not made3:
+                raise Failed("the collector's find did not start a performance")
+            if other["priority"] != watch.PRIORITY[watch.FACEBOOK_GROUP]:
+                raise Failed("a collector's find was not queued at its own weight")
+            if other["priority"] >= first["priority"]:
+                raise Failed("background work outranks a waiting visitor")
+
+            # ...and then somebody asks for it
+            asked, made4 = watch.resolve("https://youtu.be/AAAAAAAAAAA",
+                                         source_type=watch.USER_PASTE)
+            if made4 or asked["public_id"] != other["public_id"]:
+                raise Failed("asking for a queued video made a second one")
+            if asked["priority"] != watch.PRIORITY[watch.USER_PASTE]:
+                raise Failed(f"it was not moved up the queue: {asked['priority']}")
+
+            # a later background sighting must not undo that
+            watch.resolve("https://youtu.be/AAAAAAAAAAA",
+                          source_type=watch.YOUTUBE_SEARCH)
+            after = store.performance(asked["public_id"])
+            if after["priority"] != watch.PRIORITY[watch.USER_PASTE]:
+                raise Failed("a background sighting pushed a waited-for video down")
+
+            # two at once, on a video neither has seen
+            store.attach_media(first["id"], "youtube", external_id="BBBBBBBBBBB")
+            try:
+                store.attach_media(other["id"], "youtube", external_id="BBBBBBBBBBB")
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise Failed("the index let the same video in twice")
+
+            # something that is not a video at all
+            for bad in ("", "https://vimeo.com/12345", "hello",
+                        "https://www.youtube.com/results?search_query=chopin"):
+                try:
+                    youtube.video_id(bad)
+                except youtube.NotYouTube:
+                    continue
+                raise Failed(f"{bad!r} was read as a video")
+
+            counts = {r["source_type"]: r["n"] for r in store.discovery_counts()}
+            return (f"one video from five URL forms; {counts} recorded; a queued "
+                    f"video rises when asked for and is not pushed back down")
+        finally:
+            store.close()
+            store._path = was
+
+
+def check_a_state_cannot_be_set_from_anywhere() -> str:
+    """Transitions are explicit, validated and logged, or they are refused.
+
+    The specification warns against arbitrary status strings being changed
+    from many places, because the states are what the whole pipeline reads
+    to decide what to do next. `watch.advance` is the only door, and this
+    is what makes it one: a move the model does not allow raises instead of
+    writing, so a wrong state is impossible rather than merely unlikely.
+
+    Also checked: a video we cannot follow is RECORDED as such with a
+    reason from the fixed vocabulary -- otherwise the collectors offer the
+    same unusable video back every time they look -- and "we know the work
+    but nobody has engraved it" is a wait rather than a refusal, because
+    the request is a vote for what gets engraved next.
+    """
+    import tempfile as _tmp
+    from app import store, watch
+
+    with _tmp.TemporaryDirectory() as folder:
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            perf = store.new_performance(watch.DISCOVERED)
+            pid = perf["id"]
+
+            # the whole legal path, one step at a time
+            for step in (watch.VALIDATING, watch.IDENTIFYING,
+                         watch.READY_FOR_SYNC, watch.SYNCHRONISING,
+                         watch.QC, watch.READY):
+                perf = watch.advance(pid, step)
+                if perf["state"] != step:
+                    raise Failed(f"advance to {step} did not take")
+
+            # and a jump the model forbids
+            try:
+                watch.advance(pid, watch.IDENTIFYING)
+            except watch.BadTransition:
+                pass
+            else:
+                raise Failed("READY was allowed to go back to IDENTIFYING")
+
+            # every state must be reachable, or it is decoration
+            reachable = {watch.DISCOVERED}
+            frontier = [watch.DISCOVERED]
+            while frontier:
+                for nxt in watch.MOVES[frontier.pop()]:
+                    if nxt not in reachable:
+                        reachable.add(nxt)
+                        frontier.append(nxt)
+            missing = set(watch.MOVES) - reachable
+            if missing:
+                raise Failed(f"states nothing can reach: {sorted(missing)}")
+
+            # a reason outside the vocabulary is refused
+            second = store.new_performance(watch.IDENTIFYING)
+            try:
+                watch.advance(second["id"], watch.REJECTED, reason="because")
+            except ValueError:
+                pass
+            else:
+                raise Failed("any string was accepted as a skip reason")
+
+            # a work we know and have not engraved waits; it is not rejected
+            waited = watch.skip(second["id"], watch.NOT_ENGRAVED)
+            if waited["state"] != watch.REVIEW:
+                raise Failed(f"an un-engraved work went to {waited['state']}")
+            if waited["skip_reason"] != watch.NOT_ENGRAVED:
+                raise Failed("the reason was not recorded")
+
+            third = store.new_performance(watch.VALIDATING)
+            gone = watch.skip(third["id"], watch.VIDEO_UNAVAILABLE)
+            if gone["state"] != watch.UNAVAILABLE:
+                raise Failed("a dead video was not marked unavailable")
+
+            return (f"{len(watch.MOVES)} states, all reachable; the legal path "
+                    f"runs and a forbidden jump raises; reasons are a fixed set")
+        finally:
+            store.close()
+            store._path = was
+
+
+def check_the_faults_an_adversarial_review_found() -> str:
+    """The eight ways this was broken, kept broken-proof.
+
+    Each of these was found by reading the code against the specification
+    and reproducing the failure, not by guessing. They are together in one
+    check because they share a cause: the happy path was tested and the
+    edges were reasoned about.
+
+      1. A media row whose performance had gone crashed `resolve` with a
+         TypeError. It cannot simply be skipped either -- the unique index
+         means that video could never be inserted again, so the recording
+         would be unreachable for good. It is adopted.
+      2. `advance` read the state, then wrote it. Two workers both passed
+         the check and both wrote, so the "single door" did not actually
+         stop a performance being taken twice. The state read is now part
+         of the WHERE, so the loser is told.
+      3. The work queue returned rows already in a worker's hands.
+      4. `skip` could not be called from DISCOVERED -- the very state
+         `resolve` creates -- so a collector finding a dead video had
+         nowhere to put that.
+      5. `skip` with no note nulled the diagnostic of whatever failed.
+      6. Moving to the state something is already in silently discarded
+         the reason and note that came with it.
+      7. A person pasting a link to something that failed for technical
+         reasons did not put it back in the queue.
+      8. `youtube.com/<eleven chars>` is a channel, and was read as a video.
+    """
+    import tempfile as _tmp
+    from app import store, watch, youtube
+
+    with _tmp.TemporaryDirectory() as folder:
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            # 1 — a media row that has lost its performance
+            perf = store.new_performance(watch.DISCOVERED)
+            store.attach_media(perf["id"], "youtube", external_id="CCCCCCCCCCC")
+            with store.write() as conn:
+                conn.execute("DELETE FROM performances WHERE id = ?", (perf["id"],))
+            adopted, made = watch.resolve("https://youtu.be/CCCCCCCCCCC")
+            if made or adopted is None:
+                raise Failed("an orphaned recording was not adopted")
+            if store.media_by_external("youtube", "CCCCCCCCCCC")["performance_id"] \
+                    != adopted["id"]:
+                raise Failed("the media row was not re-attached")
+
+            # 2 — two workers, one job
+            racer = store.new_performance(watch.DISCOVERED)
+            watch.advance(racer["id"], watch.VALIDATING)
+            if store.move_state(racer["id"], watch.DISCOVERED, watch.VALIDATING):
+                raise Failed("a stale claim was allowed to win")
+
+            # 3 — work in flight is not handed out again
+            ids = {r["id"] for r in store.waiting_performances()}
+            if racer["id"] in ids:
+                raise Failed("a performance being validated was offered as waiting")
+
+            # 4 — a collector can refuse what it just found
+            fresh, _ = watch.resolve("https://youtu.be/DDDDDDDDDDD",
+                                     source_type=watch.FACEBOOK_GROUP)
+            dead = watch.skip(fresh["id"], watch.VIDEO_UNAVAILABLE, note="410")
+            if dead["state"] != watch.UNAVAILABLE:
+                raise Failed("a dead video could not be marked from DISCOVERED")
+
+            # 5 + 6 — a second reason records, and does not wipe the note
+            again = watch.skip(fresh["id"], watch.EMBED_UNAVAILABLE)
+            if again["error"] != "410":
+                raise Failed("the diagnostic was nulled by a later skip")
+            if again["skip_reason"] != watch.EMBED_UNAVAILABLE:
+                raise Failed("a reason given at the same state was dropped")
+
+            # 7 — somebody asks for something that broke
+            broken, _ = watch.resolve("https://youtu.be/EEEEEEEEEEE",
+                                      source_type=watch.YOUTUBE_SEARCH)
+            watch.advance(broken["id"], watch.VALIDATING)
+            watch.advance(broken["id"], watch.FAILED, error="the node died")
+            asked, _ = watch.resolve("https://youtu.be/EEEEEEEEEEE",
+                                     source_type=watch.USER_PASTE)
+            if asked["state"] != watch.VALIDATING:
+                raise Failed(f"a person asking did not re-queue it: {asked['state']}")
+
+            # ...but a candidate refused on its merits stays refused
+            junk, _ = watch.resolve("https://youtu.be/FFFFFFFFFFF",
+                                    source_type=watch.YOUTUBE_SEARCH)
+            watch.skip(junk["id"], watch.NOT_CHOPIN)
+            once_more, _ = watch.resolve("https://youtu.be/FFFFFFFFFFF",
+                                         source_type=watch.USER_PASTE)
+            if once_more["state"] != watch.REJECTED:
+                raise Failed("a refused candidate was reopened by a paste")
+
+            # 8 — a channel is not a video
+            for not_a_video in ("https://www.youtube.com/abcdefghijk",
+                                "https://www.youtube.com/@chopininstitute",
+                                "http://[abc"):
+                try:
+                    youtube.video_id(not_a_video)
+                except youtube.NotYouTube:
+                    continue
+                raise Failed(f"{not_a_video!r} was read as a video")
+
+            return ("orphans adopted, stale claims refused, in-flight work not "
+                    "re-handed, skips work from DISCOVERED, notes survive, "
+                    "failures re-queue for a person but refusals do not")
+        finally:
+            store.close()
+            store._path = was
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5485,6 +5945,11 @@ def main() -> int:
         check_a_refusal_is_not_a_failed_recognition,
         check_the_delivery_page_can_show_the_download,
         check_one_person_cannot_hold_billions_of_buckets,
+        check_a_bar_is_found_where_the_engraving_puts_it,
+        check_the_same_video_is_one_performance,
+        check_one_video_however_many_ways_it_is_found,
+        check_a_state_cannot_be_set_from_anywhere,
+        check_the_faults_an_adversarial_review_found,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

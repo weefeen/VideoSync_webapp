@@ -181,6 +181,16 @@ class ScorePackage:
         return schedule
 
 
+def read_measures_text(text: str, *, name: str = "measures.data") -> list[tuple[int, float]]:
+    """The same parser, on text that never touched this disk.
+
+    The web box holds no packages; an alignment fetched from the bucket has
+    to be read by the SAME code that reads one on disk, or the two drift
+    and a measure number gets read as a timestamp again.
+    """
+    return _parse_measures(text.splitlines(), name)
+
+
 def _read_measures(path: pathlib.Path) -> list[tuple[int, float]]:
     """Parse a measures file into (measure, seconds) pairs.
 
@@ -193,19 +203,23 @@ def _read_measures(path: pathlib.Path) -> list[tuple[int, float]]:
     whole and ascend in small steps, timestamps carry a fractional part, so
     the column that is entirely integral is the measure.
     """
+    return _parse_measures(path.read_text(encoding="utf-8").splitlines(), path.name)
+
+
+def _parse_measures(lines, name: str) -> list[tuple[int, float]]:
     raw: list[list[str]] = []
-    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for n, line in enumerate(lines, start=1):
         line = line.strip()
         if not line:
             continue
         parts = line.split()          # tolerate tabs or spaces
         if len(parts) < 2:
             raise PackageError(
-                f"{path.name} line {n}: expected two columns, got {line!r}")
+                f"{name} line {n}: expected two columns, got {line!r}")
         raw.append(parts)
 
     if not raw:
-        raise PackageError(f"{path.name} is empty — this package has no alignment.")
+        raise PackageError(f"{name} is empty — this package has no alignment.")
 
     def integral(index: int) -> bool:
         try:
@@ -222,7 +236,7 @@ def _read_measures(path: pathlib.Path) -> list[tuple[int, float]]:
         try:
             rows.append((int(float(parts[measure_col])), float(parts[time_col])))
         except (ValueError, IndexError) as exc:
-            raise PackageError(f"{path.name} line {n}: {exc}") from exc
+            raise PackageError(f"{name} line {n}: {exc}") from exc
 
     rows.sort(key=lambda r: r[1])
     return rows
