@@ -38,6 +38,9 @@ from . import storage
 from . import store
 from . import sync as syncing
 from . import visitors
+from . import viewer
+from . import watch
+from . import youtube
 from .settings import max_upload_minutes, settings
 
 logger = logging.getLogger(__name__)
@@ -1817,3 +1820,154 @@ def api_renders():
             "seconds_per_gb": round(total / gigabytes, 1) if gigabytes else 0.0,
         })
     return jsonify({"renders": renders})
+
+
+# ── v2: watching a performance with the score ────────────────────────────
+
+@bp.get("/api/library/<path:name>/band/<int:first>")
+def api_band_at(name: str, first: int):
+    """One system of a score, addressed by the measure it begins at.
+
+    The preview endpoint above serves the OPENING band and nothing else,
+    which is all the design screens ever needed. Following a performance
+    needs every system, so each is published loose and fetched on demand:
+    the web box still holds no score bytes, it holds a capped cache of the
+    two or three systems somebody is looking at.
+    """
+    if library.find(name) is None and name not in _preview_names():
+        return jsonify({"error": f"No score named {name!r}."}), 404
+    raw = scorestore.preview_bytes(name, scorestore.band_name(first))
+    if raw is None:
+        return jsonify({"error": "That score has no such system."}), 404
+    response = Response(raw, mimetype="image/svg+xml")
+    # The engraving for a given measure never changes; when it does, the
+    # package is republished under a new name or the geometry is recut.
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    response.set_etag(hashlib.sha1(raw).hexdigest())
+    return response.make_conditional(request)
+
+
+def _preview_names() -> set:
+    try:
+        return set(scorestore.previews())
+    except Exception:                                  # noqa: BLE001
+        logger.warning("could not read the preview index", exc_info=True)
+        return set()
+
+
+@bp.get("/api/performance/<public_id>")
+def api_performance(public_id: str):
+    """One performance, with its bars and where they sit.
+
+    The page polls this while the performance is still being prepared, so
+    it answers at every state rather than only when it is ready.
+    """
+    row = store.performance(public_id)
+    if row is None:
+        return jsonify({"error": "No such performance."}), 404
+    return jsonify(viewer.payload(row))
+
+
+@bp.post("/api/watch")
+def api_watch():
+    """Paste a link, get a performance back.
+
+    Idempotent by design and by database: the same video submitted twice,
+    by two people at once, or by a collector and a visitor together, is one
+    performance. The reply says which, and whether this call started it.
+    """
+    data = request.get_json(silent=True) or request.form
+    link = (data.get("url") or data.get("link") or "").strip()
+    try:
+        performance, made = watch.resolve(link, source_type=watch.USER_PASTE)
+    except youtube.NotYouTube as exc:
+        # The visitor's words, not a stack trace: this is the most common
+        # thing to get wrong and the message is the whole of the help.
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"id": performance["public_id"],
+                    "state": performance["state"],
+                    "created": made,
+                    "where": f"/p/{performance['public_id']}"}), 201 if made else 200
+
+
+@bp.get("/p/<public_id>")
+def watch_page(public_id: str):
+    """The page a performance is watched on.
+
+    Source-neutral on purpose: an upload and a YouTube link are the same
+    kind of thing here, and the page decides which player to put in the
+    frame from the media source rather than from two different routes.
+    """
+    row = store.performance(public_id)
+    if row is None:
+        return jsonify({"error": "No such performance."}), 404
+    page = _viewer_html()
+    if page is None:
+        return jsonify({"error": "The viewer is not installed here."}), 500
+    body = page.replace("__PERFORMANCE__", json.dumps(viewer.payload(row)))
+    response = Response(body, mimetype="text/html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _viewer_html() -> str | None:
+    """The viewer template, read once.
+
+    It lives in design/ because it is the artefact the design was agreed
+    on; serving that file rather than a copy means the page cannot drift
+    from what was approved without somebody editing the approved thing.
+    """
+    global _VIEWER
+    if _VIEWER is None:
+        candidate = (pathlib.Path(__file__).resolve().parent.parent
+                     / "design" / "watch" / "viewer.tpl.html")
+        if not candidate.is_file():
+            return None
+        _VIEWER = candidate.read_text(encoding="utf-8")
+    return _VIEWER
+
+
+_VIEWER: "str | None" = None
+
+@bp.post("/api/ingest")
+def api_ingest():
+    """How a collector hands us something it found. Internal only.
+
+    The group collector, the trusted channels and the searches all arrive
+    here, and the reply tells them whether this was new. They are expected
+    to offer the same video repeatedly -- that is what a collector does --
+    and the answer to a repeat is the performance we already have, at
+    whatever priority it already earned.
+
+    THE GUARD IS THE ABSENCE OF `X-Forwarded-For`, as with the rate-limit
+    reset: every request reaches gunicorn from 127.0.0.1 because Apache
+    proxies it, so `remote_addr` would permit the whole internet. Apache
+    sets the header on what it proxies; a call made on the box carries
+    none. A collector running elsewhere will need a shared secret, and that
+    is the point at which one should be added -- not before, because an
+    unused secret is one nobody notices has leaked.
+    """
+    if request.headers.get("X-Forwarded-For"):
+        # Indistinguishable from a path that does not exist, deliberately.
+        return jsonify({"error": "Not found"}), 404
+
+    data = request.get_json(silent=True) or request.form
+    link = (data.get("url") or "").strip()
+    source = (data.get("source_type") or watch.YOUTUBE_SEARCH).strip().upper()
+    if source not in watch.PRIORITY:
+        return jsonify({"error": f"{source!r} is not a way of finding things",
+                        "known": sorted(watch.PRIORITY)}), 400
+    if source in (watch.USER_PASTE, watch.USER_UPLOAD):
+        # A collector must not be able to claim a person is waiting: that is
+        # the one thing priority is for.
+        return jsonify({"error": "a collector cannot post as a person"}), 400
+    try:
+        performance, made = watch.resolve(
+            link, source_type=source,
+            reference=(data.get("reference") or "").strip())
+    except youtube.NotYouTube as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"id": performance["public_id"],
+                    "state": performance["state"],
+                    "priority": performance["priority"],
+                    "created": made}), 201 if made else 200

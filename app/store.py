@@ -406,6 +406,10 @@ CREATE TABLE IF NOT EXISTS score_bars (
     band     INTEGER NOT NULL,          -- the band's own first measure
     x0       REAL NOT NULL,
     x1       REAL NOT NULL,
+    -- The system's width over its height. The page has to size the video
+    -- and the plate BEFORE any engraving has loaded, so it cannot wait to
+    -- measure the picture itself.
+    aspect   REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (edition, measure)
 ) WITHOUT ROWID;
 """
@@ -471,6 +475,7 @@ _ADDED = (
     # between the two commits has the table without them.
     ("performances", "priority", "INTEGER NOT NULL DEFAULT 0"),
     ("performances", "skip_reason", "TEXT"),
+    ("score_bars", "aspect", "REAL NOT NULL DEFAULT 0"),
     ("jobs", "stage", "TEXT"),
     ("jobs", "detail", "TEXT NOT NULL DEFAULT ''"),
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
@@ -1696,8 +1701,8 @@ def sync_timeline(sync_id: str) -> list[tuple[int, int]]:
 
 # ── where the bars are on the page ───────────────────────────────────────
 
-def put_score_bars(edition: str, rows: list[tuple[int, int, float, float]]) -> None:
-    """Cache one edition's bar geometry: (measure, band, x0, x1).
+def put_score_bars(edition: str, rows: list[tuple]) -> None:
+    """Cache one edition's bar geometry: (measure, band, x0, x1, aspect).
 
     Replaces whatever was there: a re-published package may re-engrave, and
     half of an old layout mixed with half of a new one would put highlights
@@ -1705,13 +1710,16 @@ def put_score_bars(edition: str, rows: list[tuple[int, int, float, float]]) -> N
     """
     with write() as conn:
         conn.execute("DELETE FROM score_bars WHERE edition = ?", (edition,))
+        # A caller that does not know the band's shape may leave it out; the
+        # page falls back to measuring the picture once it has loaded.
         conn.executemany(
-            "INSERT INTO score_bars (edition, measure, band, x0, x1)"
-            " VALUES (?,?,?,?,?)", [(edition, *r) for r in rows])
+            "INSERT INTO score_bars (edition, measure, band, x0, x1, aspect)"
+            " VALUES (?,?,?,?,?,?)",
+            [(edition, *r, *((0.0,) if len(r) == 4 else ())) for r in rows])
 
 
 def score_bars(edition: str) -> list[sqlite3.Row]:
-    return query("SELECT measure, band, x0, x1 FROM score_bars"
+    return query("SELECT measure, band, x0, x1, aspect FROM score_bars"
                  " WHERE edition = ? ORDER BY measure", (edition,))
 
 

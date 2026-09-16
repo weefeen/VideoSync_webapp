@@ -197,13 +197,35 @@ def bars_for(path: str | pathlib.Path, first_measure: int) -> list[Bar]:
     statement of where a band ends.
     """
     path = pathlib.Path(path)
-    root = ET.parse(path).getroot()
+    return bars_from(path.read_bytes(), first_measure, name=path.name)
+
+
+def band_aspect(data: bytes) -> float:
+    """The system's width over its height, from its own viewBox."""
+    root = ET.fromstring(data)
     box = (root.get("viewBox") or "").split()
     if len(box) != 4:
-        raise BandGeometryError(f"{path.name} has no usable viewBox")
+        raise BandGeometryError("that band has no usable viewBox")
+    _, _, vw, vh = (float(v) for v in box)
+    if vw <= 0 or vh <= 0:
+        raise BandGeometryError("that band has an empty viewBox")
+    return vw / vh
+
+
+def bars_from(data: bytes, first_measure: int, *, name: str = "band") -> list[Bar]:
+    """The same, from the bytes of a band.
+
+    The web box holds no score files -- the engraving is fetched from the
+    bucket and never written to this disk -- so the geometry has to be
+    readable from what came back over the wire.
+    """
+    root = ET.fromstring(data)
+    box = (root.get("viewBox") or "").split()
+    if len(box) != 4:
+        raise BandGeometryError(f"{name} has no usable viewBox")
     vx, vy, vw, vh = (float(v) for v in box)
     if vw <= 0 or vh <= 0:
-        raise BandGeometryError(f"{path.name} has an empty viewBox")
+        raise BandGeometryError(f"{name} has an empty viewBox")
 
     found: list[tuple[float, float, float]] = []
     for child in root:                          # the root's own box is the frame
@@ -221,5 +243,5 @@ def bars_for(path: str | pathlib.Path, first_measure: int) -> list[Bar]:
                         x1=(x - vx) / vw))
         left = x
     if not bars:
-        logger.warning("%s: no barlines found on the band", path.name)
+        logger.warning("%s: no barlines found on the band", name)
     return bars
