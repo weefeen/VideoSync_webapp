@@ -5563,6 +5563,203 @@ def check_the_same_video_is_one_performance() -> str:
             store._path = was
 
 
+def check_one_video_however_many_ways_it_is_found() -> str:
+    """Found by a person, by the group, by a search: still one performance.
+
+    The rule the whole acquisition side rests on. A recording reaches us as
+    a pasted link, as a post in the Chopin group and as a row in a search
+    result, and that is three DISCOVERIES of one performance -- never three
+    performances, and never three alignments, because alignment is the
+    expensive thing we are trying not to do twice.
+
+    The cases, and what would go wrong without each:
+
+      * a NEW link from a visitor starts a performance at the top of the
+        queue, because somebody is sitting there waiting for it;
+      * the SAME link again returns what we have. Without this every reload
+        of a shared page would queue the piece again;
+      * a link the COLLECTOR found starts at the collector's own weight, so
+        background enrichment cannot outrank a person;
+      * a background video a visitor then asks for is RAISED rather than
+        queued a second time -- and a later background sighting of it must
+        not push it back down, which is the half of that rule that is easy
+        to get wrong;
+      * two callers arriving with the same new video at once end up with
+        one performance. The guard is the unique index, not the order the
+        code happened to run in.
+    """
+    import sqlite3
+    import tempfile as _tmp
+    from app import store, watch, youtube
+
+    LINK = "https://www.youtube.com/watch?v=dyZmzXMHItI"
+    with _tmp.TemporaryDirectory() as folder:
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            # the same recording, in the forms it really arrives in
+            forms = [LINK,
+                     "https://youtu.be/dyZmzXMHItI?t=42",
+                     "https://www.youtube.com/watch?v=dyZmzXMHItI&list=PL1",
+                     "https://m.youtube.com/watch?v=dyZmzXMHItI&feature=share",
+                     "https://www.youtube-nocookie.com/embed/dyZmzXMHItI"]
+            ids = {youtube.video_id(f) for f in forms}
+            if ids != {"dyZmzXMHItI"}:
+                raise Failed(f"one video read as {ids}")
+
+            # a visitor pastes something we have never seen
+            first, made = watch.resolve(LINK, source_type=watch.USER_PASTE)
+            if not made:
+                raise Failed("a new link did not create a performance")
+            if first["priority"] != watch.PRIORITY[watch.USER_PASTE]:
+                raise Failed(f"a waiting visitor queued at {first['priority']}")
+
+            # the same link again, in a different form
+            again, made2 = watch.resolve(forms[1], source_type=watch.USER_PASTE)
+            if made2 or again["public_id"] != first["public_id"]:
+                raise Failed("the same video became a second performance")
+
+            media = store.media_by_external("youtube", "dyZmzXMHItI")
+            if len(store.discoveries_for(media["id"])) != 2:
+                raise Failed("the second sighting was not recorded")
+
+            # the collector finds one of its own
+            other, made3 = watch.resolve("https://youtu.be/AAAAAAAAAAA",
+                                         source_type=watch.FACEBOOK_GROUP,
+                                         reference="post/123")
+            if not made3:
+                raise Failed("the collector's find did not start a performance")
+            if other["priority"] != watch.PRIORITY[watch.FACEBOOK_GROUP]:
+                raise Failed("a collector's find was not queued at its own weight")
+            if other["priority"] >= first["priority"]:
+                raise Failed("background work outranks a waiting visitor")
+
+            # ...and then somebody asks for it
+            asked, made4 = watch.resolve("https://youtu.be/AAAAAAAAAAA",
+                                         source_type=watch.USER_PASTE)
+            if made4 or asked["public_id"] != other["public_id"]:
+                raise Failed("asking for a queued video made a second one")
+            if asked["priority"] != watch.PRIORITY[watch.USER_PASTE]:
+                raise Failed(f"it was not moved up the queue: {asked['priority']}")
+
+            # a later background sighting must not undo that
+            watch.resolve("https://youtu.be/AAAAAAAAAAA",
+                          source_type=watch.YOUTUBE_SEARCH)
+            after = store.performance(asked["public_id"])
+            if after["priority"] != watch.PRIORITY[watch.USER_PASTE]:
+                raise Failed("a background sighting pushed a waited-for video down")
+
+            # two at once, on a video neither has seen
+            store.attach_media(first["id"], "youtube", external_id="BBBBBBBBBBB")
+            try:
+                store.attach_media(other["id"], "youtube", external_id="BBBBBBBBBBB")
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise Failed("the index let the same video in twice")
+
+            # something that is not a video at all
+            for bad in ("", "https://vimeo.com/12345", "hello",
+                        "https://www.youtube.com/results?search_query=chopin"):
+                try:
+                    youtube.video_id(bad)
+                except youtube.NotYouTube:
+                    continue
+                raise Failed(f"{bad!r} was read as a video")
+
+            counts = {r["source_type"]: r["n"] for r in store.discovery_counts()}
+            return (f"one video from five URL forms; {counts} recorded; a queued "
+                    f"video rises when asked for and is not pushed back down")
+        finally:
+            store.close()
+            store._path = was
+
+
+def check_a_state_cannot_be_set_from_anywhere() -> str:
+    """Transitions are explicit, validated and logged, or they are refused.
+
+    The specification warns against arbitrary status strings being changed
+    from many places, because the states are what the whole pipeline reads
+    to decide what to do next. `watch.advance` is the only door, and this
+    is what makes it one: a move the model does not allow raises instead of
+    writing, so a wrong state is impossible rather than merely unlikely.
+
+    Also checked: a video we cannot follow is RECORDED as such with a
+    reason from the fixed vocabulary -- otherwise the collectors offer the
+    same unusable video back every time they look -- and "we know the work
+    but nobody has engraved it" is a wait rather than a refusal, because
+    the request is a vote for what gets engraved next.
+    """
+    import tempfile as _tmp
+    from app import store, watch
+
+    with _tmp.TemporaryDirectory() as folder:
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            perf = store.new_performance(watch.DISCOVERED)
+            pid = perf["id"]
+
+            # the whole legal path, one step at a time
+            for step in (watch.VALIDATING, watch.IDENTIFYING,
+                         watch.READY_FOR_SYNC, watch.SYNCHRONISING,
+                         watch.QC, watch.READY):
+                perf = watch.advance(pid, step)
+                if perf["state"] != step:
+                    raise Failed(f"advance to {step} did not take")
+
+            # and a jump the model forbids
+            try:
+                watch.advance(pid, watch.IDENTIFYING)
+            except watch.BadTransition:
+                pass
+            else:
+                raise Failed("READY was allowed to go back to IDENTIFYING")
+
+            # every state must be reachable, or it is decoration
+            reachable = {watch.DISCOVERED}
+            frontier = [watch.DISCOVERED]
+            while frontier:
+                for nxt in watch.MOVES[frontier.pop()]:
+                    if nxt not in reachable:
+                        reachable.add(nxt)
+                        frontier.append(nxt)
+            missing = set(watch.MOVES) - reachable
+            if missing:
+                raise Failed(f"states nothing can reach: {sorted(missing)}")
+
+            # a reason outside the vocabulary is refused
+            second = store.new_performance(watch.IDENTIFYING)
+            try:
+                watch.advance(second["id"], watch.REJECTED, reason="because")
+            except ValueError:
+                pass
+            else:
+                raise Failed("any string was accepted as a skip reason")
+
+            # a work we know and have not engraved waits; it is not rejected
+            waited = watch.skip(second["id"], watch.NOT_ENGRAVED)
+            if waited["state"] != watch.REVIEW:
+                raise Failed(f"an un-engraved work went to {waited['state']}")
+            if waited["skip_reason"] != watch.NOT_ENGRAVED:
+                raise Failed("the reason was not recorded")
+
+            third = store.new_performance(watch.VALIDATING)
+            gone = watch.skip(third["id"], watch.VIDEO_UNAVAILABLE)
+            if gone["state"] != watch.UNAVAILABLE:
+                raise Failed("a dead video was not marked unavailable")
+
+            return (f"{len(watch.MOVES)} states, all reachable; the legal path "
+                    f"runs and a forbidden jump raises; reasons are a fixed set")
+        finally:
+            store.close()
+            store._path = was
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5640,6 +5837,8 @@ def main() -> int:
         check_one_person_cannot_hold_billions_of_buckets,
         check_a_bar_is_found_where_the_engraving_puts_it,
         check_the_same_video_is_one_performance,
+        check_one_video_however_many_ways_it_is_found,
+        check_a_state_cannot_be_set_from_anywhere,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

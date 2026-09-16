@@ -1,0 +1,1028 @@
+<title>Watch With Score</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,300;1,9..144,400&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Tokens, type and components taken from the shipped chopin.weefeen.com
+   stylesheet (app/static/svs/index.html) so this reads as the same site.
+   Single light theme, deliberately: the live site commits to ivory paper. */
+:root{--paper:#f6f1e8;--ink:#1c1622;--soft:#5a5266;--faint:#9a92a6;
+  --hair:rgba(28,22,34,.13);--hair-2:rgba(28,22,34,.07);
+  --b1:#381C53;--b2:#552D7B;--b3:#663893;--mag:#cc237e;--surface:#fffdf9;
+  --safe-t:env(safe-area-inset-top,0px);--safe-b:env(safe-area-inset-bottom,0px);
+  --safe-l:env(safe-area-inset-left,0px);--safe-r:env(safe-area-inset-right,0px)}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--paper);color:var(--ink);font-family:Inter,sans-serif;font-size:15px;
+  line-height:1.55;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+h1,h2,h3{font-family:Fraunces,serif;font-weight:300;letter-spacing:-.02em;margin:0;line-height:1.1}
+p{margin:0}
+a{color:var(--b3);text-decoration:none;border-bottom:1px solid rgba(102,56,147,.28)}
+a:hover{color:var(--mag);border-bottom-color:rgba(204,35,126,.4)}
+:focus-visible{outline:2px solid var(--b3);outline-offset:2px}
+.lab{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;
+  text-transform:uppercase;color:var(--faint);margin:0}
+.mag-rule{width:38px;height:1px;background:var(--mag);border:0;margin:22px 0}
+
+/* ══════════ 1 · the paste page — the site's own furniture ══════════ */
+.top{max-width:1040px;margin:0 auto;padding:34px 40px 0;display:flex;align-items:baseline;
+  justify-content:space-between;gap:24px}
+.wordmark{font-family:Fraunces,serif;font-weight:400;font-size:15px;letter-spacing:-.01em;
+  color:var(--ink);background:none;border:0;padding:0;cursor:pointer}
+.wordmark span{color:var(--faint);font-family:"JetBrains Mono",monospace;font-size:9.5px;
+  letter-spacing:.19em;text-transform:uppercase;margin-left:10px}
+.step-of{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;
+  text-transform:uppercase;color:var(--faint)}
+.step-of b{color:var(--ink);font-weight:400}
+main{max-width:1040px;margin:0 auto;padding:0 40px 78px}
+.hero{display:grid;grid-template-columns:.78fr 1.22fr;gap:14px 44px;align-items:center;
+  padding-top:46px}
+.display{font-family:Fraunces,serif;font-weight:300;font-size:clamp(32px,4.4vw,50px);
+  letter-spacing:-.03em;line-height:1.04}
+.display em{font-style:italic;color:var(--b2)}
+.standfirst{font-size:16.5px;color:var(--ink);max-width:46ch}
+.artifact{margin:0;min-width:0}
+.chrome{background:var(--surface);border:1px solid var(--hair);border-radius:16px;padding:11px;
+  box-shadow:0 1px 2px rgba(25,19,32,.04),0 28px 56px -28px rgba(25,19,32,.30)}
+.frame{width:100%;aspect-ratio:16/9;position:relative;overflow:hidden;border-radius:8px;
+  background:#0d0b11;box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)}
+.badge{position:absolute;top:11px;left:11px;z-index:5;display:flex;align-items:center;gap:6px;
+  font-family:"JetBrains Mono",monospace;font-size:8px;font-weight:500;letter-spacing:.19em;
+  text-transform:uppercase;color:rgba(255,255,255,.86);background:rgba(13,11,17,.5);
+  border:1px solid rgba(255,255,255,.14);padding:4px 8px;border-radius:5px}
+.badge i{width:4px;height:4px;border-radius:50%;background:var(--mag);box-shadow:0 0 7px var(--mag)}
+.scrub{display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;
+  padding:11px 5px 3px}
+.scrub .tc{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.11em;
+  color:var(--faint);font-variant-numeric:tabular-nums}
+.scrub .track{position:relative;height:2px;background:rgba(25,19,32,.16);border-radius:2px}
+.scrub .track i{position:absolute;left:0;top:0;height:100%;background:var(--mag);border-radius:2px;
+  display:block}
+.artifact figcaption{display:flex;justify-content:space-between;gap:16px;margin-top:14px;padding:0 5px}
+.mini{position:absolute;inset:0;display:grid;grid-template-rows:1fr auto}
+.mini .vid{position:relative;display:grid;place-items:center}
+.mini .glow{position:absolute;inset:0;background:
+  radial-gradient(118% 92% at 50% 6%,rgba(102,56,147,.46),transparent 64%),
+  radial-gradient(74% 64% at 82% 100%,rgba(204,35,126,.20),transparent 72%)}
+.mini .staff{background:#fffdf9;padding:5px 9px 3px;position:relative}
+.mini .staff img{display:block;width:100%;height:auto}
+.mini .staff .hl{position:absolute;top:12%;bottom:16%;background:rgba(204,35,126,.16);
+  box-shadow:inset 1px 0 0 rgba(204,35,126,.55),inset -1px 0 0 rgba(204,35,126,.55);border-radius:2px}
+.ptri{position:relative;width:52px;height:52px;border-radius:50%;display:grid;place-items:center;
+  border:1px solid rgba(255,255,255,.34);background:rgba(13,11,17,.42)}
+.block{padding:52px 0 0}
+.stepmark{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin-bottom:9px}
+.stepmark b{white-space:nowrap;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:#fff;background:var(--mag);padding:7px 13px;
+  border-radius:2px}
+.stepmark span{white-space:nowrap;font-family:"JetBrains Mono",monospace;font-size:12px;
+  font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--ink)}
+.stepbox{border:1px solid rgba(204,35,126,.28);border-radius:3px;padding:20px 22px 22px;
+  position:relative;background:#fdfafb;margin-top:34px}
+.stepbox>.stepmark{margin:-31px 0 15px}
+.stepbox>.stepmark b{box-shadow:0 0 0 5px var(--paper)}
+.stepbox>.stepmark span{background:var(--paper);padding:0 8px}
+.blockhead{display:flex;align-items:baseline;justify-content:space-between;gap:20px}
+/* the two ways in */
+.choice{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:38px}
+.opt{text-align:left;font:inherit;background:var(--surface);border:1px solid var(--hair);
+  border-radius:3px;padding:20px 22px 18px;cursor:pointer;display:flex;flex-direction:column;
+  gap:7px;transition:border-color .18s,background .18s,box-shadow .18s}
+.opt:hover{border-color:var(--b3)}
+.opt.on{border-color:rgba(204,35,126,.5);background:#fdfafb;
+  box-shadow:inset 3px 0 0 var(--mag)}
+.opt .n{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;
+  text-transform:uppercase;color:var(--faint)}
+.opt.on .n{color:var(--mag)}
+.opt h3{font-family:Fraunces,serif;font-size:22px;font-weight:400;letter-spacing:-.015em}
+.opt h3 em{font-style:italic;color:var(--b2)}
+.opt p{font-size:13.5px;color:var(--soft);max-width:34ch}
+.opt .steps{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--faint);margin-top:3px}
+.pane{display:none}
+.pane.on{display:block}
+/* the dropzone, in the shape the live site uses */
+.dropzone{padding:34px 30px;border:1px dashed var(--hair-2);border-radius:3px;
+  background:linear-gradient(#fdfbf7,#f9f5ee);box-shadow:inset 0 1px 0 #fff;
+  display:grid;grid-template-columns:auto 1fr auto;gap:26px;align-items:center;cursor:pointer;
+  transition:border-color .2s,background .2s}
+.dropzone:hover{border-color:var(--b3);background:linear-gradient(#fdfbf7,#f6f0fa)}
+.dropzone .glyph{width:58px;height:58px;display:grid;place-items:center;
+  border:1px solid var(--hair-2);border-radius:50%;color:var(--b2)}
+.dropzone h2{font-family:Fraunces,serif;font-size:21px;font-weight:300}
+.dropzone h2 em{font-style:italic;color:var(--b2)}
+.dropbtn{font:inherit;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;
+  text-transform:uppercase;color:#fff;background:var(--b1);border:0;border-radius:2px;
+  padding:14px 24px;cursor:pointer;white-space:nowrap}
+.dropbtn:hover{background:var(--b2)}
+/* what still has to happen after this step, and what does not */
+.rest{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:20px}
+.rest span{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--faint);border:1px solid var(--hair-2);
+  border-radius:2px;padding:6px 10px}
+.rest span.none{border-color:rgba(204,35,126,.35);color:var(--mag)}
+@media (max-width:760px){
+  .choice{grid-template-columns:1fr}
+  .dropzone{grid-template-columns:1fr;gap:16px;text-align:left}
+}
+.pasterow{display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:16px}
+.pasterow input{font:inherit;font-size:16px;color:var(--ink);background:#fff;
+  border:1px solid var(--hair-2);border-radius:3px;padding:16px 18px;min-width:0}
+.pasterow input::placeholder{color:var(--faint)}
+.pasterow input:focus{outline:0;border-color:var(--b3);box-shadow:0 0 0 3px rgba(102,56,147,.12)}
+.go{font:inherit;font-family:Fraunces,serif;font-size:17px;font-weight:400;letter-spacing:-.01em;
+  background:var(--b1);border:0;border-radius:3px;color:#fff;padding:14px 26px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:12px;transition:background .2s}
+.go:hover{background:var(--b2)}
+.go svg{transition:transform .2s}
+.go:hover svg{transform:translateX(3px)}
+.dropnote{margin:13px 2px 0;font-size:12.5px;line-height:1.65;color:var(--soft);max-width:62ch}
+.dropnote b{color:var(--ink);font-weight:500}
+.linkbtn{font:inherit;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;
+  text-transform:uppercase;background:none;border:0;border-bottom:1px solid var(--hair);
+  color:var(--soft);padding:7px 0;cursor:pointer;margin-top:12px}
+.linkbtn:hover{color:var(--b3);border-bottom-color:var(--b3)}
+.running{display:none;margin-top:16px}
+.running.on{display:block}
+.runtrack{position:relative;height:2px;background:rgba(25,19,32,.16);border-radius:2px}
+.runtrack i{position:absolute;left:0;top:0;height:100%;width:0;background:var(--mag);
+  border-radius:2px;display:block;transition:width .5s ease}
+.runrow{display:flex;align-items:baseline;gap:16px;margin-top:15px}
+.runrow .t{font-family:Fraunces,serif;font-size:21px;font-weight:300}
+.runrow .v{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:9.5px;
+  letter-spacing:.17em;text-transform:uppercase;color:var(--mag)}
+.pieces{margin-top:6px;border-top:1px solid var(--hair-2)}
+.piece{width:100%;text-align:left;font:inherit;background:none;border:0;
+  border-bottom:1px solid var(--hair-2);padding:17px 0 17px 26px;cursor:pointer;
+  display:grid;grid-template-columns:1fr auto;gap:8px 20px;align-items:baseline;position:relative;
+  transition:padding-left .18s}
+.piece::before{content:'';position:absolute;left:0;top:calc(50% - 1px);width:0;height:1px;
+  background:var(--mag);transition:width .22s ease}
+.piece:hover{padding-left:34px}
+.piece:hover::before{width:20px}
+.piece .t{font-family:Fraunces,serif;font-size:20px;font-weight:300;color:var(--soft)}
+.piece:hover .t{color:var(--ink)}
+.piece .t em{font-style:italic;color:var(--b2)}
+.piece .m{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.piece.live .m{color:var(--mag)}
+.libnote{margin-top:24px;font-size:13.5px;color:var(--soft);max-width:52ch}
+.freeline{margin:26px 0 0;padding:16px 20px;border:1px solid var(--hair-2);
+  border-left:2px solid #b8813a;border-radius:2px;background:#fdfbf7;font-size:13.5px;
+  color:var(--soft);line-height:1.6;display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}
+.freeline b{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.19em;
+  text-transform:uppercase;color:#4a3212;background:#e8c98a;padding:4px 9px;border-radius:2px}
+.freeline i{font-style:normal;color:var(--ink)}
+.srcfoot{padding:32px 0 34px;background:#f3ecdf;border-top:1px solid var(--hair-2)}
+.srcinner{max-width:1040px;margin:0 auto;padding:0 40px;display:grid;grid-template-columns:auto 1fr;
+  gap:6px 34px;align-items:baseline}
+.srcblock{font-size:12.5px;line-height:1.85;color:var(--soft);max-width:66ch}
+.srcblock b{display:block;font-weight:450;color:var(--ink);font-size:13px;margin-bottom:2px}
+.srcblock i{font-style:normal}
+.srcblock a{color:var(--soft);border-bottom:1px solid rgba(28,22,34,.16)}
+.srcmod{grid-column:2;margin-top:12px;padding-top:11px;border-top:1px solid var(--hair-2);
+  font-size:12px;color:var(--soft);max-width:66ch}
+.foot{max-width:1040px;margin:20px auto 0;padding:26px 40px 54px;display:flex;align-items:baseline;
+  justify-content:space-between;gap:24px;flex-wrap:wrap;border-top:1px solid var(--hair)}
+.footlinks{display:flex;gap:26px;flex-wrap:wrap}
+.footlinks a{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.17em;
+  text-transform:uppercase;color:var(--soft);border-bottom:1px solid var(--hair-2)}
+
+/* ══════════ 2 · the viewer — one screenful, never a scrollbar ══════════ */
+body.watching{position:fixed;inset:0;overflow:hidden;overscroll-behavior:none;width:100%;height:100%}
+body.watching .top,body.watching main,body.watching .srcfoot,body.watching .foot{display:none}
+.viewer{display:none}
+body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
+  height:100vh;height:100dvh;width:100%;
+  padding:var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l)}
+.vbar{max-width:1040px;margin:0 auto;width:100%;
+  display:flex;align-items:center;gap:14px;padding:9px 40px;
+  border-bottom:1px solid var(--hair-2);min-height:46px}
+.vmark{font-family:Fraunces,serif;font-size:14px;font-weight:400;color:var(--ink);background:none;
+  border:0;padding:6px 2px;cursor:pointer;display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.vmark svg{opacity:.5}
+.vmark:hover{color:var(--b3)}
+.vwork{flex:1;min-width:0;font-family:Fraunces,serif;font-size:14px;font-weight:400;
+  color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vwork b{color:var(--ink);font-weight:400}
+.vbarnum{flex:0 0 auto;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.17em;
+  text-transform:uppercase;color:var(--faint);font-variant-numeric:tabular-nums}
+.vbarnum b{font-family:Fraunces,serif;font-size:17px;letter-spacing:0;color:var(--ink);
+  font-weight:400;margin-left:7px}
+.vbody{max-width:1040px;margin:0 auto;width:100%;overflow:hidden;
+  display:flex;flex-direction:column;justify-content:center;align-items:center;
+  min-height:0;gap:10px;padding:13px 40px 15px}
+.vidwrap{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:100%}
+.scorearea{flex:0 0 auto;min-height:0;display:flex;flex-direction:column;gap:9px}
+.vframe{position:relative;overflow:hidden;border-radius:10px;background:#0d0b11;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.07),0 14px 34px -20px rgba(25,19,32,.5)}
+.vframe video,.vframe iframe{position:absolute;inset:0;width:100%;height:100%;
+  border:0;object-fit:contain;background:#0d0b11;display:block}
+.vframe.yt video{display:none}
+.vframe.file iframe{display:none}
+.vframe.yt .playbtn{display:none}
+.playbtn{position:absolute;inset:0;margin:auto;width:62px;height:62px;border-radius:50%;padding:0;
+  border:1px solid rgba(255,255,255,.34);display:grid;place-items:center;cursor:pointer;
+  background:rgba(13,11,17,.42);transition:opacity .25s,border-color .2s,transform .2s;z-index:4}
+.playbtn:hover{border-color:#fff;transform:scale(1.05)}
+.playbtn.hide{opacity:0;pointer-events:none}
+.vscrub{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+  flex:0 0 auto;margin:0 auto}
+.vscrub .tc{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.11em;
+  color:var(--faint);font-variant-numeric:tabular-nums}
+.vtrack{position:relative;height:3px;background:rgba(25,19,32,.16);border-radius:3px;cursor:pointer}
+.vtrack i{position:absolute;left:0;top:0;height:100%;background:var(--mag);border-radius:3px;
+  display:block}
+.vtrack::after{content:'';position:absolute;left:0;right:0;top:-13px;bottom:-13px}
+.plate{flex:0 0 auto;min-height:0;position:relative;background:#fffdf9;
+  border:0;border-radius:8px;overflow:hidden;margin:0 auto;
+  box-shadow:0 0 0 1px var(--hair-2),0 14px 34px -22px rgba(25,19,32,.4)}
+.bands{position:absolute;inset:0;
+  display:flex;flex-direction:column;justify-content:center;gap:10px;overflow:hidden}
+.band{position:relative;display:none;align-self:center;width:100%}
+.band.show{display:block}
+.band img{display:block;width:100%;height:auto}
+.mz{position:absolute;top:6%;bottom:6%;border-radius:2px;cursor:pointer;background:transparent;
+  transition:background .12s}
+.mz:hover{background:rgba(102,56,147,.10)}
+.mz.on{background:rgba(204,35,126,.15);
+  box-shadow:inset 1px 0 0 rgba(204,35,126,.55),inset -1px 0 0 rgba(204,35,126,.55)}
+/* the cursor: a playhead that travels through the bar in time, rather than
+   a box that steps from one to the next */
+.viewer.browsing .vidwrap,.viewer.browsing .vscrub,
+.viewer.browsing .cursor{display:none}
+.viewer.browsing .bands{overflow:hidden;justify-content:center;gap:16px}
+.viewer.browsing .band{display:block;width:100%}
+.viewer.browsing .mz{cursor:pointer}
+.viewer.browsing .mz:hover{background:rgba(102,56,147,.13)}
+.browsehint{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.viewer:not(.browsing) .browsehint{display:none}
+.scorerow{display:flex;align-items:center;justify-content:center;
+  flex:0 0 auto;min-height:0;align-self:center}
+/* the turn columns hold the reserved height, so they never shift either */
+.pturn{align-self:stretch}
+.pturn{flex:0 0 78px;width:78px;border:0;padding:0;background:none;cursor:pointer;
+  display:grid;place-items:center;color:var(--soft);transition:color .16s}
+/* a well behind the chevron, so the target reads as a target */
+.pturn i{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;
+  border:1px solid var(--hair-2);background:var(--surface);
+  transition:border-color .16s,transform .16s,box-shadow .16s}
+.pturn:hover{color:var(--b3)}
+.pturn:hover i{border-color:var(--b3);transform:scale(1.06);
+  box-shadow:0 6px 18px -10px rgba(25,19,32,.5)}
+.pturn:active i{transform:scale(.97)}
+.pturn[disabled]{opacity:.22;cursor:default;color:var(--faint)}
+.pturn[disabled]:hover i{border-color:var(--hair-2);transform:none;box-shadow:none}
+@media (max-width:640px){.pturn{flex-basis:42px;width:42px}
+  .pturn i{width:34px;height:34px}}
+.cursor{position:absolute;top:4%;bottom:4%;width:2px;margin-left:-1px;display:none;
+  background:rgba(204,35,126,.58);border-radius:2px;pointer-events:none;
+  box-shadow:0 0 5px rgba(204,35,126,.20)}
+.cursor.on{display:block}
+.sctl{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:8px;
+  flex-wrap:wrap;margin:0 auto;max-width:100%}
+.sbtn{font:inherit;font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.15em;
+  text-transform:uppercase;background:none;border:1px solid var(--hair);border-radius:3px;
+  color:var(--soft);padding:0 12px;height:38px;min-width:42px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  transition:border-color .16s,color .16s,background .16s}
+.sbtn:hover{border-color:var(--b3);color:var(--b3)}
+.sbtn[disabled]{opacity:.32;cursor:default}
+.sbtn[disabled]:hover{border-color:var(--hair);color:var(--soft)}
+.sbtn.on{background:var(--mag);border-color:var(--mag);color:#fff}
+.sbtn.on:hover{color:#fff}
+.sspace{flex:1 1 auto;min-width:4px}
+@media (max-width:760px){
+  .lw{display:none}
+  .sctl{gap:5px}
+  .sbtn{padding:0 9px;min-width:36px;font-size:8.5px}
+}
+.seg{display:inline-flex;border:1px solid var(--hair);border-radius:3px;overflow:hidden}
+.seg .sbtn{border:0;border-left:1px solid var(--hair);border-radius:0;min-width:38px;padding:0 10px}
+.seg .sbtn:first-child{border-left:0}
+
+@media (max-width:900px){
+  .vbody{padding:11px 22px 13px}
+  .vbar{padding:8px 22px}
+}
+@media (max-width:640px){
+  .vbody{padding:9px 14px 11px;gap:9px}
+  .vbar{padding:7px 14px;gap:10px;min-height:42px}
+  .vwork{font-size:13px}
+  .sbtn{height:40px;padding:0 10px;font-size:8.5px}
+  .sctl{gap:6px}
+  }
+@media (max-width:900px){
+  .hero{grid-template-columns:1fr;gap:40px;align-items:start}
+  .pasterow{grid-template-columns:1fr}
+  .srcinner{grid-template-columns:1fr}
+  .srcmod{grid-column:1}
+  .top,main,.foot,.srcinner{padding-left:22px;padding-right:22px}
+  .piece{grid-template-columns:1fr}
+}
+
+/* ── the engraved pages drifting behind the page ──────────────────────────
+   Lifted from app/static/svs/svs-motion.css: one plate, tiled by the
+   browser and moved by a transform, masked so it shows in the margins
+   beside the 1040px reading column and in a strip across the header. Held
+   at eight percent, and behind a reduced-motion guard. */
+@media (prefers-reduced-motion: no-preference){
+.driftpages{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;opacity:.08;
+  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 34px,#000 calc(100% - 34px),transparent 100%);
+          mask-image:linear-gradient(180deg,transparent 0,#000 34px,#000 calc(100% - 34px),transparent 100%)}
+.driftzone{position:absolute;inset:0;overflow:hidden}
+.drift-margins{
+  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(50% - 550px),transparent calc(50% - 520px),
+      transparent calc(50% + 520px),#000 calc(50% + 550px),#000 100%);
+          mask-image:linear-gradient(90deg,#000 0,#000 calc(50% - 550px),transparent calc(50% - 520px),
+      transparent calc(50% + 520px),#000 calc(50% + 550px),#000 100%)}
+.drift-head{
+  -webkit-mask-image:linear-gradient(180deg,#000 0,#000 74px,transparent 148px);
+          mask-image:linear-gradient(180deg,#000 0,#000 74px,transparent 148px)}
+.drifttilt{position:absolute;top:-100%;right:-40%;bottom:-20%;left:-40%;transform:rotate(-7deg)}
+.driftrun{position:absolute;top:0;bottom:0;left:-734px;right:-734px;
+  background-image:url("__PLATE__");background-repeat:repeat;background-position:0 center;
+  background-size:734px auto;animation:driftrun 100s linear infinite;will-change:transform}
+@keyframes driftrun{from{transform:translate3d(0,0,0)}to{transform:translate3d(734px,0,0)}}
+}
+/* Above the backdrop without making a stacking context -- position alone,
+   never a z-index; see the note in svs-motion.css. */
+.top,main,.srcfoot,.foot,.viewer{position:relative}
+</style>
+
+<div class="driftpages" aria-hidden="true">
+ <div class="driftzone drift-margins"><div class="drifttilt"><div class="driftrun"></div></div></div>
+ <div class="driftzone drift-head"><div class="drifttilt"><div class="driftrun"></div></div></div>
+</div>
+
+<header class="top">
+ <button class="wordmark" id="home">Score Video Sync<span>Chopin</span></button>
+ <span class="step-of">Step <b>1</b> of 2</span>
+</header>
+
+<main>
+ <div class="hero">
+  <div>
+   <h1 class="display">The score, moving<br>with <em>any</em> Chopin.</h1>
+   <hr class="mag-rule">
+   <p class="standfirst">Paste a link to a Chopin performance on YouTube. We recognise the piece,
+   align the engraving bar by bar to that pianist's playing, and hand you the original video with
+   the score moving beside it. Free, and nothing is re-uploaded or re-rendered.</p>
+  </div>
+  <figure class="artifact">
+   <div class="chrome">
+    <div class="frame">
+     <span class="badge"><i></i>Score follows the video</span>
+     <div class="mini">
+      <div class="vid"><div class="glow"></div>
+       <span class="ptri"><svg width="15" height="17" viewBox="0 0 15 17" aria-hidden="true"><path d="M0 0l15 8.5L0 17z" fill="#ffffff"/></svg></span>
+      </div>
+      <div class="staff"><img id="heroband" alt="Engraved bars from the Scherzo">
+       <span class="hl" id="herohl"></span></div>
+     </div>
+    </div>
+    <div class="scrub"><span class="tc">00:29</span>
+     <span class="track"><i style="width:7%"></i></span><span class="tc">07:04</span></div>
+   </div>
+   <figcaption><span class="lab">Scherzo&nbsp;No.&nbsp;3, Op.&nbsp;39</span>
+    <span class="lab" id="herocap">Bar 9 &middot; of 649</span></figcaption>
+  </figure>
+ </div>
+
+
+
+ <div class="choice" id="choice">
+  <button class="opt" data-opt="upload">
+   <span class="n">Option 1</span>
+   <h3>Upload your <em>performance</em></h3>
+   <p>We put the score into your video and email it back, yours to post anywhere.</p>
+   <span class="steps">Four steps &middot; you choose how it looks</span>
+  </button>
+  <button class="opt on" data-opt="link">
+   <span class="n">Option 2</span>
+   <h3>Paste a <em>link</em></h3>
+   <p>Watch a performance already on YouTube with the score moving beside it.</p>
+   <span class="steps">Two steps &middot; nothing to set</span>
+  </button>
+ </div>
+
+ <div class="pane" id="pane-upload">
+  <div class="stepbox">
+   <div class="stepmark"><b>Step 1 / 4</b><span>Choose the video</span></div>
+   <label class="dropzone">
+    <span class="glyph"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V3"/><path d="M7.5 7.5 12 3l4.5 4.5"/><path d="M3.5 14v4.5A2.5 2.5 0 0 0 6 21h12a2.5 2.5 0 0 0 2.5-2.5V14"/></svg></span>
+    <span><h2>Drop your <em>performance</em> video</h2>
+     <span class="lab">mp4 &middot; mov &middot; avi &middot; mkv &middot; webm &mdash; up to 500 mb</span></span>
+    <span class="dropbtn">Choose a file</span>
+   </label>
+   <p class="dropnote"><b>Please upload the complete piece:</b><br>The score is followed from
+    the first bar to the last, so a part of a performance cannot be matched yet. A single
+    movement is a complete piece &mdash; a nocturne, an etude, one scherzo, a sonata movement.</p>
+   <div class="rest">
+    <span>Then: confirm the piece</span>
+    <span>Then: how it looks</span>
+    <span>Then: where to send it</span>
+   </div>
+  </div>
+ </div>
+
+ <div class="pane on" id="pane-link">
+  <div class="stepbox">
+   <div class="stepmark"><b>Step 1 / 2</b>  <span>Paste the link</span></div>
+    <div class="blockhead"><span class="lab">The performance</span>
+     <span class="lab">youtube.com &middot; youtu.be</span></div>
+    <div class="pasterow">
+     <input id="url" type="text" inputmode="url" spellcheck="false"
+            placeholder="https://www.youtube.com/watch?v=&hellip;" aria-label="YouTube link">
+     <button class="go" id="go">Watch with score
+      <svg width="17" height="10" viewBox="0 0 17 10" fill="none" aria-hidden="true"><path d="M0 5h15M11 1l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <p class="dropnote"><b>Please link the complete piece:</b><br>The score is followed from the first
+     bar to the last, so a part of a performance cannot be matched. A single movement is a complete
+     piece &mdash; a nocturne, an etude, one scherzo, a sonata movement.</p>
+    <button class="linkbtn" id="try">Use the example that is loaded</button>
+   <div class="rest">
+    <span class="none">No settings &mdash; you watch the original video</span>
+   </div>
+    <div class="running" id="running">
+     <div class="runtrack"><i id="runbar"></i></div>
+     <div class="runrow"><span class="t" id="runtext">Checking the video</span>
+      <span class="v" id="runstep">Step 1 of 3</span></div>
+    </div>
+   </div>
+ </div>
+
+ <p class="freeline"><b>Free</b> <i>No sign-up, no account.</i>
+  <span>You are watching the pianist's own video; we only put the score beside it.</span></p>
+</main>
+
+<section class="srcfoot">
+ <div class="srcinner">
+  <span class="lab">Score sources</span>
+  <p class="srcblock"><b>First Editions of Fryderyk Chopin's Music</b>Copyright 2017-2021 The
+   Fryderyk Chopin Institute (<a href="https://nifc.pl">https://nifc.pl</a>)<br>
+   <i>Website:</i> <a href="https://chopinscores.org">https://chopinscores.org</a><br>
+   <i>License:</i> <a href="https://creativecommons.org/licenses/by/4.0">https://creativecommons.org/licenses/by/4.0</a></p>
+  <p class="srcmod">Scores may have been converted or adapted for display on Weefeen.</p>
+ </div>
+</section>
+
+<footer class="foot">
+ <span class="lab">Weefeen &middot; Score Video Sync</span>
+ <span class="footlinks"><a href="#">Contact us</a><a href="#">The Chopin library</a>
+  <a href="#">Credits</a><a href="#">Privacy</a></span>
+</footer>
+
+<!-- ══ 2 · WATCH — one screenful ══ -->
+<section class="viewer" id="viewer">
+ <div class="vbar">
+  <button class="vmark" id="vback" aria-label="Back to paste a link">
+   <svg width="15" height="10" viewBox="0 0 17 10" fill="none" aria-hidden="true"><path d="M17 5H2M6 1L2 5l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+   Score Video Sync</button>
+  <span class="vwork"><b>Scherzo No. 3 in C&sharp; minor, Op. 39</b> &middot; 649 bars</span>
+  <span class="vbarnum">Bar <b id="barnum">1</b></span>
+ </div>
+
+ <div class="vbody">
+  <div class="vidwrap" id="vidwrap">
+    <div class="vframe" id="vframe">
+     <iframe id="yt" title="Chopin - Scherzo No. 3, Op. 39"
+             allow="accelerometer; encrypted-media; picture-in-picture; fullscreen"
+             allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+     <video id="vid" playsinline webkit-playsinline preload="metadata" src="__VIDEO__"></video>
+     <button class="playbtn" id="play" aria-label="Play">
+      <svg class="tri" width="18" height="20" viewBox="0 0 18 20" aria-hidden="true"><path d="M0 0l18 10L0 20z" fill="#ffffff"/></svg>
+     </button>
+    </div>
+   </div>
+
+  <div class="scorearea" id="scorearea">
+   <div class="vscrub">
+    <span class="tc" id="tnow">00:00</span>
+    <span class="vtrack" id="track"><i id="fill" style="width:0%"></i></span>
+    <span class="tc" id="tend">07:04</span>
+   </div>
+   <div class="scorerow" id="scorerow">
+    <button class="pturn prev" id="pprev" aria-label="Previous system"><i><svg width="15" height="24" viewBox="0 0 11 18" fill="none" aria-hidden="true"><path d="M9 1 2 9l7 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></i></button>
+    <div class="plate" id="plate"><div class="bands" id="bands"></div></div>
+    <button class="pturn next" id="pnext" aria-label="Next system"><i><svg width="15" height="24" viewBox="0 0 11 18" fill="none" aria-hidden="true"><path d="M2 1l7 8-7 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></i></button>
+   </div>
+   <div class="sctl" id="sctl">
+    <button class="sbtn" id="browsebtn">Open<span class="lw"> the score</span></button>
+    <span class="browsehint">Click a bar to play from there</span>
+    <span class="sspace"></span>
+    <span class="seg" id="markseg">
+     <button class="sbtn" data-m="measure">Measure</button>
+     <button class="sbtn on" data-m="cursor">Cursor</button>
+     <button class="sbtn" data-m="none">None</button>
+    </span>
+    <span class="seg" id="seg">
+     <button class="sbtn on" data-n="1">1<span class="lw"> system</span></button>
+     <button class="sbtn" data-n="2">2<span class="lw"> systems</span></button>
+    </span>
+   </div>
+  </div>
+ </div>
+</section>
+
+<script>
+(function(){
+ "use strict";
+ var DATA = __PAYLOAD__;
+ var EXAMPLE = "https://www.youtube.com/watch?v=dyZmzXMHItI";
+ var GAP = 10;
+
+ /* ---------- build the score out of the real package ---------- */
+ var bandsEl = document.getElementById('bands');
+ var BANDS = [], BARS = [];
+ (function build(){
+  for(var i=0;i<DATA.bands.length;i++){
+   var d = DATA.bands[i];
+   var el = document.createElement('span');
+   el.className = 'band';
+   var img = document.createElement('img');
+   img.src = d.img;
+   img.alt = 'Scherzo No. 3, bars ' + d.bars[0].m + ' to ' + d.bars[d.bars.length-1].m;
+   el.appendChild(img);
+   for(var j=0;j<d.bars.length;j++){
+    var b = d.bars[j];
+    if(b.t < 0) continue;              /* a bar the aligner never placed */
+    var z = document.createElement('span');
+    z.className = 'mz';
+    z.tabIndex = 0;
+    z.setAttribute('role','button');
+    z.setAttribute('aria-label','Bar '+b.m);
+    z.style.left  = b.a+'%';
+    z.style.width = Math.max(0.4, b.b - b.a)+'%';
+    el.appendChild(z);
+    BARS.push({n:b.m, t:b.t, el:z, band:i, x0:b.a, x1:b.b});
+   }
+   bandsEl.appendChild(el);
+   BANDS.push({el:el, aspect:d.aspect, first:d.bars[0].m, last:d.bars[d.bars.length-1].m});
+  }
+  BARS.sort(function(a,b){ return a.t - b.t; });
+ })();
+
+ /* the hero on page 1 uses the same engraving and the same bar box */
+ (function hero(){
+  var d = DATA.bands[1] || DATA.bands[0], b = d.bars[0];
+  document.getElementById('heroband').src = d.img;
+  var hl = document.getElementById('herohl');
+  hl.style.left = b.a+'%';
+  hl.style.width = Math.max(0.6, b.b - b.a)+'%';
+  document.getElementById('herocap').textContent = 'Bar '+b.m+' · of 649';
+ })();
+
+ /* ---------- page 1 ---------- */
+ var vid = document.getElementById('vid');
+ function goWatch(){
+  document.body.classList.add('watching');
+  if(location.hash !== '#watch') location.hash = '#watch';
+  window.scrollTo(0,0);
+  layout();
+  startLoop();
+ }
+ function goHome(){
+  if(browsing) setBrowse(false);
+  if(useYT) ytCmd('pauseVideo'); else vid.pause();
+  stopLoop(); resetRun();
+  document.body.classList.remove('watching');
+  if(location.hash === '#watch') history.replaceState(null, '', location.pathname);
+  choose('link');
+  window.scrollTo(0,0);
+ }
+ /* Which way in, and what the rest of the page then has to be. Upload makes
+    a video and must be dressed; a link makes nothing and needs no settings. */
+ var stepOf = document.querySelector('.step-of');
+ function choose(which){
+  var opts = document.querySelectorAll('#choice .opt'), i;
+  for(i=0;i<opts.length;i++)
+   opts[i].classList.toggle('on', opts[i].getAttribute('data-opt') === which);
+  document.getElementById('pane-upload').classList.toggle('on', which === 'upload');
+  document.getElementById('pane-link').classList.toggle('on', which === 'link');
+  if(stepOf) stepOf.innerHTML = 'Step <b>1</b> of ' + (which === 'upload' ? '4' : '2');
+ }
+ document.getElementById('choice').addEventListener('click', function(e){
+  var b = e.target.closest('.opt'); if(b) choose(b.getAttribute('data-opt'));
+ });
+
+ document.getElementById('home').addEventListener('click', goHome);
+ document.getElementById('vback').addEventListener('click', goHome);
+
+ /* the watch page has its own address, the way /p/{id} will */
+ function route(){
+  if(location.hash === '#watch') goWatch(); else goHome();
+ }
+ window.addEventListener('hashchange', route);
+
+ var running = document.getElementById('running'),
+     runbar  = document.getElementById('runbar'),
+     runtext = document.getElementById('runtext'),
+     runstep = document.getElementById('runstep'),
+     url     = document.getElementById('url');
+ var STEPS = [
+  {t:'Checking the video',                 w:30},
+  {t:'Identifying the Chopin work',        w:62},
+  {t:'Lining the score up to the playing', w:100}
+ ];
+ var runTimers = [];
+ function resetRun(){
+  for(var i=0;i<runTimers.length;i++) clearTimeout(runTimers[i]);
+  runTimers = [];
+  running.classList.remove('on');
+  runbar.style.width = '0';
+  runtext.textContent = STEPS[0].t;
+  runstep.textContent = 'Step 1 of 3';
+ }
+ function run(){
+  if(!url.value.trim()) url.value = EXAMPLE;
+  running.classList.add('on');
+  STEPS.forEach(function(s,i){
+   runTimers.push(setTimeout(function(){
+    runbar.style.width = s.w+'%';
+    runtext.textContent = s.t;
+    runstep.textContent = 'Step '+(i+1)+' of 3';
+   }, 60 + i*640));
+  });
+  runTimers.push(setTimeout(goWatch, 60 + STEPS.length*640));
+ }
+ document.getElementById('go').addEventListener('click', run);
+ url.addEventListener('keydown', function(e){ if(e.key==='Enter') run(); });
+ document.getElementById('try').addEventListener('click', function(){ url.value = EXAMPLE; url.focus(); });
+
+ /* ---------- the viewer ---------- */
+ /* bandMode 0 = as many whole systems as fit; 2 = the one playing and the
+    next; 1 = the one playing, alone and as large as the screen allows. */
+ var bandMode = 1, start = 0, shown = 1, at = 0;
+ /* The score keeps up on its own. Turning by hand holds that off just long
+    enough to read the next system, then the music takes the page back. */
+ var HOLD = 8000, held = 0;
+ var marker = 'cursor';                  /* cursor | measure | none */
+ var browsing = false;
+ var cursorEl = document.createElement('span');
+ cursorEl.className = 'cursor';
+ var viewer  = document.getElementById('viewer'),
+     vbody   = document.querySelector('.vbody'),
+     vidwrap = document.getElementById('vidwrap'),
+     vframe  = document.getElementById('vframe'),
+     plate   = document.getElementById('plate'),
+     sctl    = document.getElementById('sctl'),
+     vscrub  = document.querySelector('.vscrub'),
+     fill    = document.getElementById('fill'),
+     tnow    = document.getElementById('tnow'),
+     tend    = document.getElementById('tend'),
+     barnum  = document.getElementById('barnum'),
+     playBtn = document.getElementById('play'),
+     scorerow = document.getElementById('scorerow'),
+     pprev   = document.getElementById('pprev'),
+     pnext   = document.getElementById('pnext'),
+     browseBtn = document.getElementById('browsebtn');
+
+ var GAPB = 10, MINW = 240;
+ /* the width the turn columns take out of the reading column */
+ function gutters(){ return 2 * (window.innerWidth <= 640 ? 42 : 78); }
+
+ function mmss(s){
+  if(!isFinite(s) || s < 0) s = 0;
+  var m = Math.floor(s/60), r = Math.floor(s%60);
+  return (m<10?'0':'')+m+':'+(r<10?'0':'')+r;
+ }
+ function barAt(time){
+  var lo = 0, hi = BARS.length-1, ans = 0;
+  while(lo <= hi){
+   var mid = (lo+hi) >> 1;
+   if(BARS[mid].t <= time){ ans = mid; lo = mid+1; } else hi = mid-1;
+  }
+  return ans;
+ }
+ function bandH(i, W){ return W / BANDS[i].aspect; }
+
+ /* The video and the score are the same width -- one column of the page,
+    not two sizes -- so the only question is how wide that column can be.
+    At width W a 16:9 video is 9/16 W tall and a system is W/aspect tall.
+
+    Solved against the TALLEST case the piece contains rather than the
+    system on screen: systems differ in height, so solving for the current
+    one resized the video at every page turn. One answer, good for every
+    bar, is worth the slack it leaves under the shorter systems. */
+ var _worst = {};
+ function worstStack(n){
+  if(_worst[n] !== undefined) return _worst[n];
+  var worst = 0, i, k, sum;
+  for(i=0;i<BANDS.length;i++){
+   sum = 0;
+   for(k=0;k<n && i+k<BANDS.length;k++) sum += 1 / BANDS[i+k].aspect;
+   if(sum > worst) worst = sum;
+  }
+  _worst[n] = worst;
+  return worst;
+ }
+
+ function widthFor(n, forPanes){
+  return (forPanes - (n-1)*GAPB) / (9/16 + worstStack(n));
+ }
+
+ function layout(){
+  if(!document.body.classList.contains('watching')) return;
+  var portrait = window.innerHeight > window.innerWidth * 1.02;
+  viewer.classList.toggle('tall', portrait);
+  viewer.classList.toggle('wide', !portrait);
+
+  var cs = getComputedStyle(vbody);
+  var column = vbody.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  var avail  = vbody.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  if(column <= 0 || avail <= 0) return;
+  var full = Math.max(MINW, column - gutters());   /* what the music may use */
+
+  /* Twice: setting the widths can rewrap the control row, which changes the
+     height everything else was sized against. The second pass sees it. */
+  for(var pass = 0; pass < 2; pass++){
+   if(browsing){
+    var ph = Math.max(80, avail - sctl.offsetHeight - 10);
+    plate.style.width  = Math.round(full)+'px';
+    plate.style.height = Math.round(ph)+'px';
+    scorerow.style.height = Math.round(ph)+'px';
+
+    var used = 0, count = 0;
+    for(var k=start;k<BANDS.length;k++){
+     var add = bandH(k, full) + (count ? 16 : 0);
+     if(used + add > ph && count) break;
+     used += add; count++;
+    }
+    shown = Math.max(1, count);
+    if(start + shown > BANDS.length) start = Math.max(0, BANDS.length - shown);
+    for(k=0;k<BANDS.length;k++){
+     var on = k >= start && k < start + shown;
+     BANDS[k].el.classList.toggle('show', on);
+     BANDS[k].el.style.width = '100%';
+    }
+    pprev.disabled = start <= 0;
+    pnext.disabled = start + shown >= BANDS.length;
+    continue;
+   }
+
+   var forPanes = avail - (vscrub.offsetHeight + sctl.offsetHeight + 3 * 10);
+   if(forPanes < 120) forPanes = 120;
+
+   var n = Math.min(bandMode, BANDS.length - start);
+   var W = Math.max(MINW, Math.min(full, widthFor(n, forPanes)));
+
+   /* the box the systems play inside: the tallest they will ever need,
+      so a page turn moves the music and nothing else */
+   /* what the score may occupy, fixed for the whole piece... */
+   var boxH = (n - 1) * GAPB + W * worstStack(n);
+   /* ...and what these particular systems actually need */
+   var ink = (n - 1) * GAPB;
+   for(var i=0;i<n && start+i<BANDS.length;i++) ink += W / BANDS[start+i].aspect;
+
+   shown = n;
+   vframe.style.width   = Math.round(W)+'px';
+   vframe.style.height  = Math.round(W * 9/16)+'px';
+   vidwrap.style.height = Math.round(W * 9/16)+'px';
+   vscrub.style.width   = Math.round(W)+'px';
+   plate.style.width    = Math.round(W)+'px';
+   plate.style.height   = Math.round(ink)+'px';
+   scorerow.style.height = Math.round(boxH)+'px';
+  }
+  if(!browsing) renderScore();
+ }
+
+ /* Only whole systems, scaled down rather than allowed to overflow. */
+ function renderScore(){
+  var W = bandsEl.clientWidth, H = bandsEl.clientHeight, i;
+  if(W <= 0 || H <= 0) return;
+  if(start + shown > BANDS.length) start = Math.max(0, BANDS.length - shown);
+
+  var ink = 0;
+  for(i=start;i<start+shown;i++) ink += bandH(i, W);
+  var room = H - (shown-1)*GAPB;
+  var scale = ink > room ? room/ink : 1;
+
+  for(i=0;i<BANDS.length;i++){
+   var on = i >= start && i < start + shown;
+   BANDS[i].el.classList.toggle('show', on);
+   if(!on && BANDS[i].el.contains(cursorEl)) cursorEl.classList.remove('on');
+   BANDS[i].el.style.width = (on && scale < 1) ? (scale*100)+'%' : '100%';
+  }
+  pprev.disabled = start <= 0;
+  pnext.disabled = start + shown >= BANDS.length;
+ }
+
+ function paint(){
+  if(!BARS.length) return;
+  var time = mediaTime();
+  if(time === lastPaint) return;
+  lastPaint = time;
+  var i = barAt(time);
+  if(i !== at){ BARS[at].el.classList.remove('on'); at = i; }
+  mark(time);
+  barnum.textContent = BARS[at].n;
+  tnow.textContent = mmss(time);
+  fill.style.width = Math.min(100, time/mediaDur()*100)+'%';
+
+  /* the playing system is always the top one on the plate */
+  if(browsing || Date.now() < held) return;
+  var b = BARS[at].band;
+  if(start !== b){ start = b; layout(); }
+ }
+
+ /* Where the playing is, drawn the way the reader asked for it. */
+ function mark(time){
+  if(browsing){ cursorEl.classList.remove('on'); return; }
+  var b = BARS[at], band = BANDS[b.band];
+  var visible = band.el.classList.contains('show');
+
+  b.el.classList.toggle('on', marker === 'measure' && visible);
+
+  if(marker !== 'cursor' || !visible){
+   cursorEl.classList.remove('on');
+   return;
+  }
+  if(cursorEl.parentNode !== band.el) band.el.appendChild(cursorEl);
+  /* travel across the bar between its own time and the next bar's */
+  var nextT = (at + 1 < BARS.length) ? BARS[at + 1].t : mediaDur();
+  var span  = Math.max(0.05, nextT - b.t);
+  var k = Math.max(0, Math.min(1, (time - b.t) / span));
+  cursorEl.style.left = (b.x0 + (b.x1 - b.x0) * k) + '%';
+  cursorEl.classList.add('on');
+ }
+
+ var raf = null, lastPaint = -1;
+ function loop(){ paint(); raf = requestAnimationFrame(loop); }
+ function startLoop(){ if(!raf) raf = requestAnimationFrame(loop); }
+ function stopLoop(){ if(raf){ cancelAnimationFrame(raf); raf = null; } }
+
+ /* ---- the media, whichever one this page can actually play ----------
+    Preferred: YouTube's own embed, streaming their HD. Commands and time go
+    over postMessage, which is what the IFrame API does underneath, so
+    nothing has to be loaded from youtube.com. If no message ever comes back
+    -- a host that will not frame youtube.com -- the local file takes over. */
+ var YT_ID = 'dyZmzXMHItI';
+ var ytFrame = document.getElementById('yt'), vframeEl = document.getElementById('vframe');
+ var useYT = false, ytSeen = false, ytTime = 0, ytDur = 0, ytState = -1, hand = null;
+ var ytStamp = 0;
+
+ function ytPost(msg){
+  try { ytFrame.contentWindow.postMessage(JSON.stringify(msg), '*'); } catch(e){}
+ }
+ function ytCmd(func, args){ ytPost({event:'command', func:func, args:args || []}); }
+
+ window.addEventListener('message', function(e){
+  if(!/(^|\.)youtube(-nocookie)?\.com$/.test(String(e.origin).replace(/^https?:\/\//,'').split('/')[0].replace(/^www\./,'.'))
+     && String(e.origin).indexOf('youtube') === -1) return;
+  var d;
+  try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch(err){ return; }
+  if(!d || typeof d !== 'object') return;
+  if(!ytSeen){ ytSeen = true; if(hand) clearInterval(hand); adopt(true); }
+  if(d.event === 'infoDelivery' && d.info){
+   if(typeof d.info.currentTime === 'number'){ ytTime = d.info.currentTime; ytStamp = performance.now(); }
+   if(typeof d.info.duration === 'number' && d.info.duration > 0){
+    ytDur = d.info.duration; tend.textContent = mmss(ytDur);
+   }
+   if(typeof d.info.playerState === 'number'){
+    if(d.info.playerState !== ytState) ytStamp = performance.now();
+    ytState = d.info.playerState;
+   }
+  }
+ });
+
+ function adopt(yt){
+  useYT = yt;
+  vframeEl.classList.toggle('yt', yt);
+  vframeEl.classList.toggle('file', !yt);
+  if(yt){ vid.pause(); vid.removeAttribute('src'); }   /* stop the fallback downloading */
+  startLoop();
+ }
+
+ /* one interface over both */
+ /* YouTube reports the time a few times a second; between reports, carry it
+    forward by the wall clock so the cursor travels instead of stepping. */
+ function mediaTime(){
+  if(!useYT) return vid.currentTime || 0;
+  if(ytState !== 1) return ytTime;
+  return ytTime + (performance.now() - ytStamp) / 1000;
+ }
+ function mediaDur(){ return (useYT ? ytDur : vid.duration) || DATA.end; }
+ function mediaSeek(t){ if(useYT) ytCmd('seekTo', [t, true]); else vid.currentTime = t; }
+ function mediaPlaying(){ return useYT ? ytState === 1 : !vid.paused; }
+ function mediaPlay(){ if(useYT) ytCmd('playVideo'); else vid.play(); }
+ function mediaToggle(){
+  if(useYT){ ytState === 1 ? ytCmd('pauseVideo') : ytCmd('playVideo'); }
+  else { vid.paused ? vid.play() : vid.pause(); }
+ }
+
+ (function startEmbed(){
+  var src = 'https://www.youtube.com/embed/' + YT_ID +
+            '?enablejsapi=1&playsinline=1&rel=0&modestbranding=1' +
+            '&origin=' + encodeURIComponent(location.origin);
+  ytFrame.src = src;
+  /* the player answers "listening" once it is ready; keep asking briefly */
+  ytFrame.addEventListener('load', function(){
+   hand = setInterval(function(){
+    ytPost({event:'listening', id:1, channel:'widget'});
+   }, 350);
+  });
+  /* nothing came back: this page cannot frame youtube.com, so use the file */
+  setTimeout(function(){
+   if(!ytSeen){ if(hand) clearInterval(hand); adopt(false); }
+  }, 4500);
+ })();
+
+ playBtn.addEventListener('click', mediaToggle);
+ vid.addEventListener('click', mediaToggle);
+ vid.addEventListener('play',  function(){ playBtn.classList.add('hide'); });
+ vid.addEventListener('pause', function(){ playBtn.classList.remove('hide'); });
+ vid.addEventListener('seeked', paint);
+ vid.addEventListener('loadedmetadata', function(){ tend.textContent = mmss(vid.duration); paint(); });
+
+ /* click a bar, and the video goes there */
+ bandsEl.addEventListener('click', function(e){
+  var z = e.target.closest('.mz'); if(!z) return;
+  for(var i=0;i<BARS.length;i++) if(BARS[i].el === z){
+   mediaSeek(BARS[i].t);
+   held = 0; lastPaint = -1;
+   if(browsing){ at = i; setBrowse(false); mediaPlay(); }
+   return;
+  }
+ });
+ bandsEl.addEventListener('keydown', function(e){
+  if(e.key !== 'Enter' && e.key !== ' ') return;
+  var z = e.target.closest('.mz'); if(!z) return;
+  e.preventDefault(); z.click();
+ });
+ document.getElementById('track').addEventListener('click', function(e){
+  var r = this.getBoundingClientRect(), dur = mediaDur();
+  mediaSeek(Math.max(0, Math.min(dur - 0.05, (e.clientX - r.left)/r.width*dur)));
+  held = 0; lastPaint = -1;
+ });
+
+ function setBrowse(on){
+  browsing = on;
+  viewer.classList.toggle('browsing', on);
+  browseBtn.classList.toggle('on', on);
+  browseBtn.textContent = on ? 'Close the score' : 'Open the score';
+  if(on){
+   for(var i=0;i<BARS.length;i++) BARS[i].el.classList.remove('on');
+   start = BARS[at].band;      /* open on the page holding the music */
+   layout();
+  } else {
+   held = 0;
+   start = BARS[at].band;
+   layout();
+  }
+ }
+ browseBtn.addEventListener('click', function(){ setBrowse(!browsing); });
+
+ function turn(by){
+  held = Date.now() + HOLD;
+  start = Math.max(0, Math.min(BANDS.length - 1, start + by));
+  layout();
+ }
+ pprev.addEventListener('click', function(){ turn(-shown); });
+ pnext.addEventListener('click', function(){ turn(shown); });
+
+ document.getElementById('markseg').addEventListener('click', function(e){
+  var btn = e.target.closest('.sbtn'); if(!btn) return;
+  var bs = this.querySelectorAll('.sbtn');
+  for(var i=0;i<bs.length;i++) bs[i].classList.toggle('on', bs[i] === btn);
+  marker = btn.getAttribute('data-m');
+  if(marker !== 'measure') for(i=0;i<BARS.length;i++) BARS[i].el.classList.remove('on');
+  lastPaint = -1;                        /* force the next frame to redraw */
+  paint();
+ });
+ document.getElementById('seg').addEventListener('click', function(e){
+  var btn = e.target.closest('.sbtn'); if(!btn) return;
+  var bs = this.querySelectorAll('.sbtn');
+  for(var i=0;i<bs.length;i++) bs[i].classList.toggle('on', bs[i] === btn);
+  bandMode = parseInt(btn.getAttribute('data-n'), 10);
+  held = 0;
+  if(BARS.length) start = BARS[at].band;
+  layout();
+ });
+
+ document.addEventListener('keydown', function(e){
+  if(!document.body.classList.contains('watching')) return;
+  if(e.target.tagName === 'INPUT') return;
+  if(e.key === 'Escape' && browsing){ setBrowse(false); }
+  else if(browsing) return;
+  else if(e.key === 'ArrowRight') turn(shown);
+  else if(e.key === 'ArrowLeft') turn(-shown);
+  else if(e.key === ' '){ e.preventDefault(); mediaToggle(); }
+ });
+
+ window.addEventListener('resize', layout);
+ window.addEventListener('orientationchange', function(){ setTimeout(layout, 140); });
+ if(window.visualViewport) window.visualViewport.addEventListener('resize', layout);
+ var imgs = bandsEl.querySelectorAll('img');
+ for(var q=0;q<imgs.length;q++) if(!imgs[q].complete) imgs[q].addEventListener('load', layout);
+ /* a portrait screen has the height for two systems, so start with two */
+ if(window.innerHeight > window.innerWidth && window.innerHeight >= 680){
+  bandMode = 2;
+  var segbs = document.getElementById('seg').querySelectorAll('.sbtn');
+  for(var q2=0;q2<segbs.length;q2++)
+   segbs[q2].classList.toggle('on', segbs[q2].getAttribute('data-n') === '2');
+ }
+ route();
+ paint();
+})();
+</script>

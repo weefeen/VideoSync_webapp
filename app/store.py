@@ -317,7 +317,14 @@ CREATE TABLE IF NOT EXISTS performances (
     title       TEXT NOT NULL DEFAULT '',
     -- Only ever what a source states about itself. We do not infer a pianist.
     performer   TEXT NOT NULL DEFAULT '',
-    error       TEXT
+    error       TEXT,
+    -- Higher goes first. A person waiting outranks anything a collector
+    -- found on its own, and a video already queued in the background is
+    -- RAISED when somebody asks for it rather than queued a second time.
+    priority    INTEGER NOT NULL DEFAULT 0,
+    -- Why we are not going to follow this one, from a fixed vocabulary.
+    -- Recorded so discovery stops offering it back every time it looks.
+    skip_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS performances_state ON performances(state, created);
 CREATE INDEX IF NOT EXISTS performances_edition ON performances(edition, created);
@@ -345,6 +352,25 @@ CREATE TABLE IF NOT EXISTS media_sources (
 CREATE UNIQUE INDEX IF NOT EXISTS media_sources_external
     ON media_sources(provider, external_id) WHERE external_id <> '';
 CREATE INDEX IF NOT EXISTS media_sources_perf ON media_sources(performance_id);
+
+-- Every time a video is found, and by what. Many of these point at one
+-- media source: the same recording is pasted by a visitor, posted in the
+-- group and turned up by a search, and that is three discoveries of one
+-- performance -- not three performances. Keeping them apart is what lets
+-- us say where our library came from without ever aligning twice.
+CREATE TABLE IF NOT EXISTS discoveries (
+    id          TEXT PRIMARY KEY,
+    media_id    TEXT NOT NULL,
+    -- USER_PASTE | USER_UPLOAD | FACEBOOK_GROUP | TRUSTED_CHANNEL
+    -- | YOUTUBE_SEARCH | CATALOGUE_GAP | ADMIN
+    source_type TEXT NOT NULL,
+    -- Where exactly: the group post, the channel, the search that found it.
+    reference   TEXT NOT NULL DEFAULT '',
+    url         TEXT NOT NULL DEFAULT '',
+    priority    INTEGER NOT NULL DEFAULT 0,
+    at          REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS discoveries_media ON discoveries(media_id, at);
 
 CREATE TABLE IF NOT EXISTS synchronisations (
     id             TEXT PRIMARY KEY,
@@ -441,6 +467,10 @@ def connect() -> sqlite3.Connection:
 # SCHEMA as well, so a new database gets them from the CREATE and this does
 # nothing; an existing one gets them here.
 _ADDED = (
+    # Added to `performances` after the table shipped: a database written
+    # between the two commits has the table without them.
+    ("performances", "priority", "INTEGER NOT NULL DEFAULT 0"),
+    ("performances", "skip_reason", "TEXT"),
     ("jobs", "stage", "TEXT"),
     ("jobs", "detail", "TEXT NOT NULL DEFAULT ''"),
     ("jobs", "attempt", "INTEGER NOT NULL DEFAULT 1"),
@@ -1521,7 +1551,8 @@ def _public_id(length: int = 10) -> str:
 
 
 def new_performance(state: str, *, edition: str | None = None,
-                    title: str = "", performer: str = "") -> sqlite3.Row:
+                    title: str = "", performer: str = "",
+                    priority: int = 0) -> sqlite3.Row:
     """Start a performance and hand back the row, public id included."""
     now = time.time()
     for _ in range(8):                    # a collision is luck, not a bug
@@ -1530,9 +1561,10 @@ def new_performance(state: str, *, edition: str | None = None,
             with write() as conn:
                 conn.execute(
                     "INSERT INTO performances (id, public_id, created, updated,"
-                    " state, edition, title, performer) VALUES (?,?,?,?,?,?,?,?)",
+                    " state, edition, title, performer, priority)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
                     (secrets.token_hex(12), public, now, now, state,
-                     edition, title, performer))
+                     edition, title, performer, priority))
             break
         except sqlite3.IntegrityError:
             continue
@@ -1669,3 +1701,57 @@ def score_bars(edition: str) -> list[sqlite3.Row]:
 def has_score_bars(edition: str) -> bool:
     return bool(one("SELECT 1 AS yes FROM score_bars WHERE edition = ? LIMIT 1",
                     (edition,)))
+
+
+# ── discoveries: how a performance was found, however many times ─────────
+
+def add_discovery(media_id: str, *, source_type: str, reference: str = "",
+                  url: str = "", priority: int = 0) -> str:
+    """Record one sighting of a video. Many of these point at one media row."""
+    discovery_id = secrets.token_hex(12)
+    with write() as conn:
+        conn.execute(
+            "INSERT INTO discoveries (id, media_id, source_type, reference,"
+            " url, priority, at) VALUES (?,?,?,?,?,?,?)",
+            (discovery_id, media_id, source_type, reference, url, priority,
+             time.time()))
+    return discovery_id
+
+
+def discoveries_for(media_id: str) -> list[sqlite3.Row]:
+    return query("SELECT * FROM discoveries WHERE media_id = ? ORDER BY at",
+                 (media_id,))
+
+
+def discovery_counts() -> list[sqlite3.Row]:
+    """How the library was built, by source. For the admin view."""
+    return query("SELECT source_type, COUNT(*) AS n FROM discoveries"
+                 " GROUP BY source_type ORDER BY n DESC")
+
+
+def drop_performance(perf_id: str) -> None:
+    """Remove a performance that was never really started.
+
+    Only for the race in `watch.resolve`: two callers arrive with the same
+    new video, the loser's empty performance has nothing hanging off it and
+    must not be left behind as a row nobody can reach.
+    """
+    with write() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM media_sources WHERE performance_id = ? LIMIT 1",
+            (perf_id,)).fetchone()
+        if row is not None:
+            raise ValueError("that performance has media attached to it")
+        conn.execute("DELETE FROM performances WHERE id = ?", (perf_id,))
+
+
+def waiting_performances(limit: int = 50) -> list[sqlite3.Row]:
+    """What to work on next: the most wanted first, then the longest waiting.
+
+    A person waiting outranks anything a collector found on its own, which
+    is the whole point of the priority column.
+    """
+    return query(
+        "SELECT * FROM performances WHERE state NOT IN"
+        " ('READY','REJECTED','FAILED','UNAVAILABLE','REVIEW')"
+        " ORDER BY priority DESC, created ASC LIMIT ?", (limit,))
