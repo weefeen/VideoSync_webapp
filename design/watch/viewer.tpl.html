@@ -1024,9 +1024,12 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   if(!document.body.classList.contains('watching')) return;
   if(e.target.tagName === 'INPUT') return;
   if(e.key === 'Escape' && browsing){ setBrowse(false); }
-  else if(browsing) return;
-  else if(e.key === 'ArrowRight') turn(shown);
-  else if(e.key === 'ArrowLeft') turn(-shown);
+  /* The arrows turn pages in BOTH views. They were blocked while the score
+     was open -- added to stop them paging the watch view from underneath a
+     reader, which had the effect of disabling them in the one view whose
+     whole purpose is turning pages. */
+  else if(e.key === 'ArrowRight'){ e.preventDefault(); turn(shown); }
+  else if(e.key === 'ArrowLeft'){ e.preventDefault(); turn(-shown); }
   else if(e.key === ' '){ e.preventDefault(); mediaToggle(); }
  });
 
