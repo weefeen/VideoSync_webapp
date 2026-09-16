@@ -15,6 +15,8 @@ W = 1100
 
 from PIL import Image, ImageChops
 
+TMP.mkdir(parents=True, exist_ok=True)     # prep.py makes it; this may run alone
+
 src = PKG / "pages" / "page_001.svg"
 flat = TMP / "plate.svg"
 shutil.copyfile(src, flat)

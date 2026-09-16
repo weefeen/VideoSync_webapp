@@ -110,7 +110,7 @@ for idx, first in enumerate(starts):
     bands.append({"first": first, "aspect": round(im.width / im.height, 4),
                   "bars": bars,
                   "img": "data:image/webp;base64," + base64.b64encode(data).decode()})
-    if idx < 3 or idx == len(starts) - 1:
+    if bars and (idx < 3 or idx == len(starts) - 1):
         print(f"  band {first:>4}: {im.width}x{im.height}, {len(data)//1024} KB, "
               f"bars {bars[0]['m']}-{bars[-1]['m']}, "
               f"first box {bars[0]['a']:.1f}%-{bars[0]['b']:.1f}%")

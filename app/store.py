@@ -1592,6 +1592,23 @@ def set_performance(perf_id: str, **fields: Any) -> None:
                      (*fields.values(), perf_id))
 
 
+def move_state(perf_id: str, was: str, to: str, **fields: Any) -> bool:
+    """Move a performance from one state to another, if it is still in it.
+
+    The state we believe it is in is part of the WHERE, so two workers
+    racing for the same job cannot both win: the second one updates nothing
+    and is told so. `watch.advance` is the only caller.
+    """
+    fields.setdefault("updated", time.time())
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with write() as conn:
+        cur = conn.execute(
+            f"UPDATE performances SET state = ?, {sets}"
+            " WHERE id = ? AND state = ?",
+            (to, *fields.values(), perf_id, was))
+        return cur.rowcount == 1
+
+
 def performances(state: str | None = None, limit: int = 200) -> list[sqlite3.Row]:
     if state:
         return query("SELECT * FROM performances WHERE state = ?"
@@ -1751,7 +1768,11 @@ def waiting_performances(limit: int = 50) -> list[sqlite3.Row]:
     A person waiting outranks anything a collector found on its own, which
     is the whole point of the priority column.
     """
+    # Named states, not "everything unfinished": a performance that is
+    # already being validated, identified or synchronised is IN A WORKER'S
+    # HANDS, and handing it to a second one is how the same alignment gets
+    # run twice. Only work nobody has started is waiting.
     return query(
-        "SELECT * FROM performances WHERE state NOT IN"
-        " ('READY','REJECTED','FAILED','UNAVAILABLE','REVIEW')"
+        "SELECT * FROM performances WHERE state IN"
+        " ('DISCOVERED','READY_FOR_SYNC','NEEDS_WORK_CONFIRMATION')"
         " ORDER BY priority DESC, created ASC LIMIT ?", (limit,))

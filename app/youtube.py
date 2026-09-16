@@ -48,7 +48,13 @@ def video_id(text: str) -> str:
 
     # A link copied out of the group may be wrapped in Facebook's redirect,
     # which carries the real one in ?u=
-    parsed = urllib.parse.urlsplit(text if "//" in text else "https://" + text)
+    try:
+        parsed = urllib.parse.urlsplit(text if "//" in text else "https://" + text)
+    except ValueError as exc:
+        # urlsplit raises on things like "http://[abc". NotYouTube subclasses
+        # ValueError, so a caller catching that would have swallowed this and
+        # read a malformed address as merely "not YouTube".
+        raise NotYouTube("that is not a usable address") from exc
     host = (parsed.hostname or "").lower()
     if host.endswith("facebook.com") or host.endswith("l.facebook.com"):
         inner = urllib.parse.parse_qs(parsed.query).get("u")
@@ -70,9 +76,9 @@ def video_id(text: str) -> str:
     parts = [p for p in parsed.path.split("/") if p]
     if len(parts) >= 2 and parts[0] in _PATH_PREFIXES:
         return _checked(parts[1])
-    # /embed/ID sometimes arrives without the prefix we expect on mobile
-    if len(parts) == 1 and _ID.match(parts[0]):
-        return parts[0]
+    # NOT a bare single segment: `youtube.com/abcdefghijk` is a channel or a
+    # handle, and eleven characters of one look exactly like a video id. That
+    # fallback turned a channel address into a video we would try to align.
 
     raise NotYouTube("that YouTube link does not name a single video")
 

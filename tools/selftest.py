@@ -5760,6 +5760,116 @@ def check_a_state_cannot_be_set_from_anywhere() -> str:
             store._path = was
 
 
+def check_the_faults_an_adversarial_review_found() -> str:
+    """The eight ways this was broken, kept broken-proof.
+
+    Each of these was found by reading the code against the specification
+    and reproducing the failure, not by guessing. They are together in one
+    check because they share a cause: the happy path was tested and the
+    edges were reasoned about.
+
+      1. A media row whose performance had gone crashed `resolve` with a
+         TypeError. It cannot simply be skipped either -- the unique index
+         means that video could never be inserted again, so the recording
+         would be unreachable for good. It is adopted.
+      2. `advance` read the state, then wrote it. Two workers both passed
+         the check and both wrote, so the "single door" did not actually
+         stop a performance being taken twice. The state read is now part
+         of the WHERE, so the loser is told.
+      3. The work queue returned rows already in a worker's hands.
+      4. `skip` could not be called from DISCOVERED -- the very state
+         `resolve` creates -- so a collector finding a dead video had
+         nowhere to put that.
+      5. `skip` with no note nulled the diagnostic of whatever failed.
+      6. Moving to the state something is already in silently discarded
+         the reason and note that came with it.
+      7. A person pasting a link to something that failed for technical
+         reasons did not put it back in the queue.
+      8. `youtube.com/<eleven chars>` is a channel, and was read as a video.
+    """
+    import tempfile as _tmp
+    from app import store, watch, youtube
+
+    with _tmp.TemporaryDirectory() as folder:
+        was = store._path
+        try:
+            store._path = lambda: pathlib.Path(folder) / "jobs.sqlite"
+            store.close()
+
+            # 1 — a media row that has lost its performance
+            perf = store.new_performance(watch.DISCOVERED)
+            store.attach_media(perf["id"], "youtube", external_id="CCCCCCCCCCC")
+            with store.write() as conn:
+                conn.execute("DELETE FROM performances WHERE id = ?", (perf["id"],))
+            adopted, made = watch.resolve("https://youtu.be/CCCCCCCCCCC")
+            if made or adopted is None:
+                raise Failed("an orphaned recording was not adopted")
+            if store.media_by_external("youtube", "CCCCCCCCCCC")["performance_id"] \
+                    != adopted["id"]:
+                raise Failed("the media row was not re-attached")
+
+            # 2 — two workers, one job
+            racer = store.new_performance(watch.DISCOVERED)
+            watch.advance(racer["id"], watch.VALIDATING)
+            if store.move_state(racer["id"], watch.DISCOVERED, watch.VALIDATING):
+                raise Failed("a stale claim was allowed to win")
+
+            # 3 — work in flight is not handed out again
+            ids = {r["id"] for r in store.waiting_performances()}
+            if racer["id"] in ids:
+                raise Failed("a performance being validated was offered as waiting")
+
+            # 4 — a collector can refuse what it just found
+            fresh, _ = watch.resolve("https://youtu.be/DDDDDDDDDDD",
+                                     source_type=watch.FACEBOOK_GROUP)
+            dead = watch.skip(fresh["id"], watch.VIDEO_UNAVAILABLE, note="410")
+            if dead["state"] != watch.UNAVAILABLE:
+                raise Failed("a dead video could not be marked from DISCOVERED")
+
+            # 5 + 6 — a second reason records, and does not wipe the note
+            again = watch.skip(fresh["id"], watch.EMBED_UNAVAILABLE)
+            if again["error"] != "410":
+                raise Failed("the diagnostic was nulled by a later skip")
+            if again["skip_reason"] != watch.EMBED_UNAVAILABLE:
+                raise Failed("a reason given at the same state was dropped")
+
+            # 7 — somebody asks for something that broke
+            broken, _ = watch.resolve("https://youtu.be/EEEEEEEEEEE",
+                                      source_type=watch.YOUTUBE_SEARCH)
+            watch.advance(broken["id"], watch.VALIDATING)
+            watch.advance(broken["id"], watch.FAILED, error="the node died")
+            asked, _ = watch.resolve("https://youtu.be/EEEEEEEEEEE",
+                                     source_type=watch.USER_PASTE)
+            if asked["state"] != watch.VALIDATING:
+                raise Failed(f"a person asking did not re-queue it: {asked['state']}")
+
+            # ...but a candidate refused on its merits stays refused
+            junk, _ = watch.resolve("https://youtu.be/FFFFFFFFFFF",
+                                    source_type=watch.YOUTUBE_SEARCH)
+            watch.skip(junk["id"], watch.NOT_CHOPIN)
+            once_more, _ = watch.resolve("https://youtu.be/FFFFFFFFFFF",
+                                         source_type=watch.USER_PASTE)
+            if once_more["state"] != watch.REJECTED:
+                raise Failed("a refused candidate was reopened by a paste")
+
+            # 8 — a channel is not a video
+            for not_a_video in ("https://www.youtube.com/abcdefghijk",
+                                "https://www.youtube.com/@chopininstitute",
+                                "http://[abc"):
+                try:
+                    youtube.video_id(not_a_video)
+                except youtube.NotYouTube:
+                    continue
+                raise Failed(f"{not_a_video!r} was read as a video")
+
+            return ("orphans adopted, stale claims refused, in-flight work not "
+                    "re-handed, skips work from DISCOVERED, notes survive, "
+                    "failures re-queue for a person but refusals do not")
+        finally:
+            store.close()
+            store._path = was
+
+
 def main() -> int:
     checks = [
         check_every_module_imports,
@@ -5839,6 +5949,7 @@ def main() -> int:
         check_the_same_video_is_one_performance,
         check_one_video_however_many_ways_it_is_found,
         check_a_state_cannot_be_set_from_anywhere,
+        check_the_faults_an_adversarial_review_found,
     ]
     print(f"  {sys.platform}  python {sys.version.split()[0]}  "
           f"os.pathsep {os.pathsep!r}\n")

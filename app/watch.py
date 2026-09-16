@@ -49,8 +49,11 @@ UNAVAILABLE = "UNAVAILABLE"
 #: Where a performance may go from where it is. Anything else is a bug in
 #: the caller, and is refused loudly rather than written to the row.
 MOVES: dict[str, set[str]] = {
-    DISCOVERED:     {VALIDATING, REJECTED, FAILED},
-    VALIDATING:     {IDENTIFYING, REJECTED, UNAVAILABLE, FAILED},
+    # UNAVAILABLE and REVIEW belong here: `resolve` creates a performance
+    # in DISCOVERED, and a collector that finds the video already dead or
+    # the work un-engraved must be able to say so from the state it is in.
+    DISCOVERED:     {VALIDATING, REVIEW, REJECTED, FAILED, UNAVAILABLE},
+    VALIDATING:     {IDENTIFYING, REVIEW, REJECTED, UNAVAILABLE, FAILED},
     # REVIEW is reachable from here too: "we know the work and nobody has
     # engraved it" is a real outcome of identification, and it is a wait
     # rather than a refusal.
@@ -127,17 +130,30 @@ def advance(performance_id: str, to: str, *, reason: str | None = None,
     row = store.performance_by_id(performance_id)
     if row is None:
         raise BadTransition(f"no performance {performance_id}")
-    was = row["state"]
-    if to == was:
-        return row
-    if to not in MOVES.get(was, set()):
-        raise BadTransition(f"{was} -> {to} is not a move this model allows")
     if reason is not None and reason not in SKIP_REASONS:
         raise ValueError(f"{reason!r} is not one of the recorded reasons")
-
     if reason is not None:
         fields["skip_reason"] = reason
-    store.set_performance(performance_id, state=to, **fields)
+
+    was = row["state"]
+    if to == was:
+        # Already there. The move is a no-op but whatever was passed with it
+        # is not: a second `skip` carrying a better reason must still record
+        # it rather than returning a row that looks like it was written.
+        if fields:
+            store.set_performance(performance_id, **fields)
+        return store.performance_by_id(performance_id)
+    if to not in MOVES.get(was, set()):
+        raise BadTransition(f"{was} -> {to} is not a move this model allows")
+
+    # Claimed, not merely checked. Between reading the state above and
+    # writing it, another worker may have moved the same performance on; a
+    # plain UPDATE would overwrite that and two workers would both believe
+    # they had taken the job. The state we read is part of the WHERE.
+    if not store.move_state(performance_id, was, to, **fields):
+        current = store.performance_by_id(performance_id)
+        raise BadTransition(
+            f"{performance_id} moved to {current['state']} while we held {was}")
     logger.info("performance %s: %s -> %s%s", row["public_id"], was, to,
                 f" ({reason})" if reason else "")
     return store.performance_by_id(performance_id)
@@ -171,15 +187,11 @@ def resolve(text: str, *, source_type: str = USER_PASTE,
 
     existing = store.media_by_external("youtube", vid)
     if existing is not None:
-        performance = store.performance_by_id(existing["performance_id"])
-        if performance is not None:
-            _record(existing["id"], source_type, reference, url, weight)
-            _raise_priority(performance, weight)
-            return store.performance_by_id(performance["id"]), False
-        # A media row whose performance vanished is not something we can
-        # repair by guessing; treat it as unseen and let the insert below
-        # fail loudly on the unique index if it is still really there.
-        logger.warning("media %s has no performance", existing["id"])
+        performance = _behind(existing)
+        _record(existing["id"], source_type, reference, url, weight)
+        _raise_priority(performance, weight)
+        _requeue_if_wanted(performance, source_type)
+        return store.performance_by_id(performance["id"]), False
 
     performance = store.new_performance(DISCOVERED, priority=weight)
     try:
@@ -192,13 +204,49 @@ def resolve(text: str, *, source_type: str = USER_PASTE,
         other = store.media_by_external("youtube", vid)
         if other is None:                        # cannot happen; say so if it does
             raise
-        performance = store.performance_by_id(other["performance_id"])
+        performance = _behind(other)
         _record(other["id"], source_type, reference, url, weight)
         _raise_priority(performance, weight)
+        _requeue_if_wanted(performance, source_type)
         return store.performance_by_id(performance["id"]), False
 
     _record(media_id, source_type, reference, url, weight)
     return store.performance_by_id(performance["id"]), True
+
+
+def _behind(media: sqlite3.Row) -> sqlite3.Row:
+    """The performance a media row belongs to, repaired if it has lost it.
+
+    A media row whose performance is missing is a database nobody can use:
+    the unique index means we can never insert that video again, so the
+    recording would be permanently unreachable. Adopting it into a fresh
+    performance costs one row and keeps the library whole.
+    """
+    performance = store.performance_by_id(media["performance_id"] or "")
+    if performance is not None:
+        return performance
+    logger.warning("media %s had no performance; adopting it", media["id"])
+    performance = store.new_performance(DISCOVERED)
+    store.set_media(media["id"], performance_id=performance["id"])
+    return performance
+
+
+def _requeue_if_wanted(performance: sqlite3.Row, source_type: str) -> None:
+    """A person asking for something that failed puts it back in the queue.
+
+    Only a technical failure, and only for a person. A candidate refused on
+    its merits carries a reason and stays refused, or the collectors would
+    hand back the same unusable video forever -- and REJECTED is final by
+    design, so it is never reopened here.
+    """
+    if performance["state"] != FAILED or performance["skip_reason"]:
+        return
+    if source_type not in (USER_PASTE, USER_UPLOAD, ADMIN):
+        return
+    try:
+        advance(performance["id"], VALIDATING)
+    except BadTransition:                       # it moved under us; fine
+        logger.info("performance %s could not be re-queued", performance["public_id"])
 
 
 def _record(media_id: str, source_type: str, reference: str,
@@ -238,4 +286,7 @@ def skip(performance_id: str, reason: str, *, note: str = "") -> sqlite3.Row:
         to = REVIEW
     else:
         to = REJECTED
-    return advance(performance_id, to, reason=reason, error=note or None)
+    # Only overwrite the diagnostic when there is a new one: a technical
+    # failure's message is how anybody finds out what went wrong.
+    extra = {"error": note} if note else {}
+    return advance(performance_id, to, reason=reason, **extra)
