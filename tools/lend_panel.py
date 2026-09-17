@@ -693,7 +693,9 @@ function drawAsks(rows){
 
   // NEW ONES ONLY, and never on the first draw -- otherwise opening the
   // page plays a sound for a backlog somebody already knows about.
-  const ids = rows.map(r => r.job);
+  // `job` is null on every link row, so keying on it alone made them all
+  // the same item and the chime stopped noticing new ones.
+  const ids = rows.map(r => r.job || ('p:' + r.perf));
   if(knownAsks !== null){
     if(ids.some(id => !knownAsks.includes(id))) bip();
   }
@@ -701,13 +703,41 @@ function drawAsks(rows){
 
   if(!rows.length){
     box.innerHTML = '<p class="none">Nothing waiting. Every piece anybody '
-      + 'uploaded, we had the score for.</p>';
+      + 'uploaded or linked, we had the score for.</p>';
     return;
   }
   box.innerHTML = rows.map(r => {
     const ready = (r.ready || []).length ? r.ready[0] : '';
     const folders = (r.editions || []).map(e =>
       '<span class="fold">' + e + '</span>').join(' ');
+
+    /* A LINK IS NOT AN UPLOAD and must not borrow its words. Nobody is
+       waiting on an email, there is no file of theirs to render, and when
+       the score is published the alignment starts itself -- so "Make it
+       now" would be a button lying about who does the work. What a link row
+       has to say instead is how many videos one engraving would release,
+       and the exact folder name to publish under, because that name is what
+       finds them again. */
+    if(r.kind === 'link'){
+      const n = r.waiting || 1;
+      const vids = (r.videos || []).map(v =>
+        '<div class="mt">· <a href="' + v.url + '" target="_blank" rel="noopener">'
+        + (v.title || v.id) + '</a></div>').join('');
+      return '<div class="ask' + (ready ? ' ready' : '') + '">'
+        + '<span class="pc">' + (r.piece || 'an unnamed piece') + '</span>'
+        + '<span class="mt">' + ago(r.at) + ' · ' + n + ' video'
+        + (n === 1 ? '' : 's') + ' waiting on this score · audio already here'
+        + '</span>'
+        + '<div class="row">' + folders + '</div>'
+        + vids
+        + '<div class="row"><span class="mt">'
+        + (ready
+           ? 'The score is published — these finish on their own, nothing to press.'
+           : 'Engrave it under exactly that folder name and publish it; '
+             + 'the videos then align themselves.')
+        + '</span></div></div>';
+    }
+
     const act = (ready
       ? '<button class="plain" data-job="' + r.job + '" data-score="' + ready
         + '">Make it now</button>'

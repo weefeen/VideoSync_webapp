@@ -44,6 +44,16 @@ class NotPreparable(RuntimeError):
     """This performance is not something `prepare` can act on."""
 
 
+class NotUsableHere(RuntimeError):
+    """The score exists but THIS machine cannot read it.
+
+    A host deficiency, never a verdict on the music. It is raised rather
+    than parked so the performance is left untouched for a machine that can
+    do the work -- the same class as yt-dlp being absent, and the opposite
+    of NOT_ENGRAVED, which means nobody has made the score at all.
+    """
+
+
 class TooBigHere(RuntimeError):
     """This recording needs more memory than this machine has free.
 
@@ -185,6 +195,27 @@ def prepare(performance_id: str, *, force: bool = False) -> str:
 
     editions = _editions(heard)
     published = [name for name in editions if library.find(name) is not None]
+
+    # "NOT IN THE CATALOGUE HERE" IS NOT "NOBODY ENGRAVED IT", and treating
+    # them as the same thing parks recordings whose score exists.
+    #
+    # Three of the four packages installed on this project ship .svg bands
+    # only, and an interpreter without cairosvg calls every one of them
+    # broken -- so `library.find` answers None under `2026liszt` and finds
+    # the package under `VideoScoreSync`, for the same folder on the same
+    # disk. The first parked test here "passed" for exactly that reason: it
+    # parked Op.23, which IS engraved.
+    #
+    # A deficiency of this host belongs in the same class as yt-dlp being
+    # missing: the performance is left untouched for a machine that can do
+    # the work, never written off.
+    if not published:
+        blocked = [(name, library.unusable_here(name)) for name in editions]
+        blocked = [(n, why) for n, why in blocked if why]
+        if blocked:
+            name, why = blocked[0]
+            raise NotUsableHere(f"{name} cannot be read on this machine: {why}")
+
     if not published:
         # THE COMMON CASE. The piece is known and nobody has engraved it.
         # Parked, audio kept, and recorded where it will be seen.

@@ -486,8 +486,82 @@ def api_wanted():
             "confirmed": bool(address) and store.may_mail(address),
             "state": job["state"],
             "recording": bool(job["upload"]),
+            # An UPLOAD: somebody sent a file and is waiting to be told.
+            "kind": "upload",
         })
+
+    out.extend(_wanted_links(published))
     return jsonify(out)
+
+
+def _wanted_links(published: set) -> list:
+    """Scores wanted by a LINK rather than by an upload.
+
+    A pasted or collected YouTube link whose piece nobody has engraved is
+    parked in REVIEW by `app.prepare`, its audio kept and the package it is
+    waiting for written on its row. Those never reached this list, because
+    this list read JOBS and a performance is not a job -- so the engraving
+    loop this panel exists to drive was blind to exactly the requests the
+    watch pipeline produces.
+
+    GROUPED BY EDITION, NOT ONE ROW PER VIDEO, and that is the point rather
+    than tidiness: engraving one score releases every link waiting on it, so
+    the number of links behind a package is what should rank the queue.
+    Four scores are engraved of roughly two hundred and thirty-five, and
+    what to engrave next is the only real question this list answers.
+
+    THE FOLDER NAME IS THE CONTRACT. `prepare.resume` finds the score by the
+    exact package name the recogniser offered, so a piece engraved under any
+    other name leaves its links parked for ever with nothing to say why. It
+    is shown verbatim for that reason.
+    """
+    rows = store.query(
+        "SELECT * FROM performances WHERE state = ? AND edition IS NOT NULL"
+        " AND edition != '' ORDER BY priority DESC, created ASC LIMIT 200",
+        (watch.REVIEW,))
+
+    by_edition: dict = {}
+    for row in rows:
+        # NOT_ENGRAVED is the one parked reason this list can act on. A
+        # performance in REVIEW for another reason is a different problem
+        # and must not be offered as engraving work.
+        if row["skip_reason"] and row["skip_reason"] != watch.NOT_ENGRAVED:
+            continue
+        by_edition.setdefault(row["edition"], []).append(row)
+
+    out = []
+    for edition, waiting in sorted(by_edition.items(),
+                                   key=lambda kv: (-len(kv[1]), kv[0])):
+        first = waiting[0]
+        videos = []
+        for row in waiting[:8]:
+            media = store.media_for(row["id"])
+            primary = media[0] if media else None
+            videos.append({"id": row["public_id"],
+                           "title": row["title"] or "",
+                           "url": (primary["url"] if primary else "")})
+        out.append({
+            "kind": "link",
+            # NO JOB ID, deliberately. The panel keys its buttons on `job`,
+            # so leaving it out is what stops a link row growing a "Make it
+            # now" button it could not honour: a link needs no operator
+            # afterwards, it finishes itself when the score lands.
+            "job": None,
+            "perf": first["public_id"],
+            "at": int((first["created"] or 0) * 1000),
+            "piece": first["title"] or edition,
+            "editions": [edition],
+            "ready": [edition] if edition in published else [],
+            "waiting": len(waiting),
+            "videos": videos,
+            "minutes": None,
+            "country": "",
+            "address": False,
+            "confirmed": False,
+            "state": watch.REVIEW,
+            "recording": True,        # the audio is already on a disk here
+        })
+    return out
 
 
 @bp.post("/api/wanted/dismiss")

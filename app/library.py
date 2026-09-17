@@ -265,3 +265,21 @@ def _readable(candidate) -> str:
         if parts:
             return parts[0]
     return candidate.piece_id
+
+
+def unusable_here(name: str) -> str | None:
+    """Why this package is in the score roots but not in the catalogue.
+
+    THE DIFFERENCE BETWEEN "NOBODY ENGRAVED IT" AND "THIS MACHINE CANNOT
+    READ IT", which `find` returning None cannot express and which is not a
+    detail: three of the four packages installed here ship .svg bands only,
+    and an interpreter without cairosvg calls every one of them broken. The
+    catalogue is then a property of the environment rather than of the
+    library, and `app.prepare` -- which parks a performance when `find`
+    says None -- would park recordings whose score exists, for ever, with
+    nothing anywhere saying why.
+
+    Returns the reason when the folder is present but unusable here, and
+    None when the package is either fine or genuinely absent.
+    """
+    return _catalogue.snapshot().broken.get(_key(name))
