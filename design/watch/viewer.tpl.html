@@ -857,7 +857,42 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   if(!document.body.classList.contains('watching')) return;
   var portrait = window.innerHeight > window.innerWidth * 1.02;
   viewer.classList.toggle('tall', portrait);
-  viewer.classList.toggle('wide', !portrait);
+
+  /* `wide` IS A HAND-HELD SCREEN TURNED SIDEWAYS, NOT ANY LANDSCAPE ONE.
+     It puts the video beside the score, each column capped at half the
+     width, because a phone held sideways has no height to stack them in.
+
+     A desktop monitor is landscape too. Keyed on the aspect ratio alone
+     this fired on every PC, and the layout it was written for -- two
+     half-width columns -- left a 1745x978 window showing a small video
+     and a small system marooned in empty space. The class had been
+     toggled that way for a while and meant nothing until the CSS keyed
+     to it arrived, which is why it read as a phone fix breaking the desk.
+
+     Three things must hold, and a desktop fails the last two:
+
+       landscape   the shapes only conflict when width leads height
+       hand-held   a finger rather than a mouse, or a viewport too short
+                   to stack in whatever is pointing at it
+       not big     no wider than the largest tablet in landscape. A
+                   Windows laptop with a touch screen reports a coarse
+                   pointer and is not a tablet; its width says so.
+
+     1366 is the 12.9" iPad in landscape, the widest thing this is for.
+     Checked against the sizes the original was verified at -- 390x844
+     portrait, 844x390 sideways, 1194x834 tablet -- which all still take
+     the layout they were given, and against 1745x978, which no longer
+     does.
+
+     ONE ANSWER DRIVES BOTH THE CLASS AND THE SIZING. The stylesheet turns
+     the row, and the block near `var videoW` below works out the two
+     half-width columns; keyed on two different tests they disagreed, and
+     a desktop got the column maths with none of the layout. `sideBySide`
+     is that one answer, and nothing below may ask the question again. */
+  var handheld = matchMedia('(pointer: coarse)').matches
+                 || window.innerHeight <= 520;
+  var sideBySide = !portrait && handheld && window.innerWidth <= 1366;
+  viewer.classList.toggle('wide', sideBySide);
 
   var cs = getComputedStyle(vbody);
   var column = vbody.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
@@ -908,7 +943,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    shown = n;
    var videoW = W;
 
-   if(!portrait){
+   if(sideBySide){
     /* Side by side. Each column takes half the width; the video is limited
        by the height it has, the score by the height ITS column has once the
        controls are out of it. */
