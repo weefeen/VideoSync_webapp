@@ -2543,3 +2543,40 @@ async function handleDroppedLink(text){
     });
   });
 })();
+
+
+/* ── a link handed to us in the address ───────────────────────────────
+   /app/?url=https://www.youtube.com/watch?v=...
+
+   The same thing a drop does, arriving by a different door. Everything
+   that cannot drag onto a dropzone posts here instead: the browser
+   extension's "Open with Weefeen score", a bookmarklet, an iOS Shortcut,
+   and — when it is built — the Android share target.
+
+   ONE PARAMETER, ONE MEANING. `url` is whatever the other side had: a
+   watch address, a youtu.be share link, a Short. It is not parsed out
+   there and does not have to be, because handleDroppedLink reads it with
+   the same reader the server uses, and the server reads it again.
+
+   THE ADDRESS IS CLEANED BEFORE THE REQUEST GOES OUT. Left in place, a
+   refresh would submit the same link a second time and a copied address
+   would carry somebody else's video into a friend's tab. replaceState
+   rather than pushState, so Back still leaves the site rather than
+   walking through states of the same page. */
+(function(){
+  const params = new URLSearchParams(location.search);
+  const handed = (params.get('url') || params.get('u') || '').trim();
+  if(!handed) return;
+
+  params.delete('url');
+  params.delete('u');
+  const rest = params.toString();
+  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+
+  /* After the library, not before it. handleDroppedLink writes its answer
+     under the dropzone, and loadLibrary's completion is what draws the
+     page the first time — answering into a page that is about to be
+     redrawn would put the box up and then take it away. */
+  READY.then(() => handleDroppedLink(handed))
+       .catch(() => handleDroppedLink(handed));
+})();
