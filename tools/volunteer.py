@@ -129,6 +129,25 @@ def _job_event(event) -> None:
         if _job is None or getattr(event, "job_id", "") != _job["id"]:
             return
         kind = getattr(event, "type", "")
+        # A LINK SAYS WHAT IT IS AND HOW IT ENDED. Its task names only a
+        # video id; the title arrives with the first stage, and the outcome
+        # with `prepared` -- which is neither `done` nor `failed`, so without
+        # this the panel went on showing the last stage after the work had
+        # stopped.
+        data = getattr(event, "data", None) or {}
+        if data.get("title"):
+            _job["piece"] = data["title"]
+        if kind == "prepared":
+            _job["stage"] = "done"
+            _job["detail"] = {
+                "READY": "Aligned. The performance can be watched with its score.",
+                "REVIEW": "Its score is not engraved yet. It is on the waiting "
+                          "list below and resumes by itself once the score is "
+                          "published.",
+                "REJECTED": "Not a piece we can follow with a score.",
+                "UNAVAILABLE": "The video cannot be used.",
+            }.get(data.get("outcome"), data.get("note") or "")
+            return
         if kind in ("done", "failed"):
             _job["stage"] = "done" if kind == "done" else _job["stage"]
             _job["detail"] = ("" if kind == "done"

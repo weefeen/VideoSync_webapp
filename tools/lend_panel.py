@@ -515,10 +515,11 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 <p class="problem" id="problem"></p>
 
 <h2>Asked for, not engraved</h2>
-<p class="hint" id="askhint">Videos somebody asked for that we cannot make
-  yet. Each one is a real request — a piece chosen and an address left —
-  waiting on an engraving. Publish the score and the render starts from
-  here, for the person who asked.</p>
+<p class="hint" id="askhint">Pieces somebody wants that have no score yet.
+  An <b>upload</b> is a person who chose a piece and left an address: publish
+  the score and start their render from here. A <b>YouTube link</b> needs
+  nothing from you but the score: publish it under the folder name shown and
+  every link waiting on it aligns by itself.</p>
 <div id="asks"></div>
 
 <h2>What this computer can take</h2>
@@ -544,6 +545,19 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 <script>
 const STAGES = [['prepare','ready'],['align','align'],['bands','bands'],
                 ['strip','time'],['encode','encode'],['done','done']];
+/* A YOUTUBE LINK IS NOT A RENDER, and must not be called "Making a video":
+   no video is made, and on a piece nobody has engraved nothing is aligned
+   either. Its steps are its own. `identify` has to happen before anything
+   else can be decided -- it is how we know which score the link needs, and
+   so which folder name will release it from the waiting list. */
+const LINK_STAGES = [['VALIDATING','fetch'],['IDENTIFYING','identify'],
+                     ['SYNCHRONISING','align'],['done','done']];
+const LINK_NOW = {
+  VALIDATING: 'Fetching the sound of the video. No picture is downloaded.',
+  IDENTIFYING: 'Listening to find which piece it is, so we know which score it needs. '
+             + 'If nobody has engraved that score, it goes on the waiting list below and stops there.',
+  SYNCHRONISING: 'The score exists: lining it up with the playing, bar by bar.',
+};
 let busy = false;
 
 async function send(path, body){
@@ -577,15 +591,18 @@ function paint(s){
   const extra = document.getElementById('extra');
 
   if(job){
+    const link = String(job.id || '').indexOf('perf:') === 0;
+    const steps = link ? LINK_STAGES : STAGES;
     box.className = 'status busy'; dot.className = 'dot live';
-    text.textContent = 'Making a video';
+    text.textContent = link ? 'Preparing a YouTube link' : 'Making a video';
     sub.textContent = job.piece + ' · running ' + clock(job.running_for) +
       (job.minutes ? ' · ' + job.minutes.toFixed(1) + ' min of music' : '');
-    const at = STAGES.findIndex(([k]) => k === job.stage);
-    extra.innerHTML = '<div class="stages">' + STAGES.map(([k,l],i) =>
+    const at = steps.findIndex(([k]) => k === job.stage);
+    const said = job.detail || (link ? (LINK_NOW[job.stage] || '') : '');
+    extra.innerHTML = '<div class="stages">' + steps.map(([k,l],i) =>
       '<div class="stg ' + (i < at ? 'done' : i === at ? 'now' : '') +
       '"><i></i><span>' + l + '</span></div>').join('') + '</div>' +
-      (job.detail ? '<p class="detail">' + job.detail + '</p>' : '') +
+      (said ? '<p class="detail">' + said + '</p>' : '') +
       '<div class="after"><button class="plain" id="stop">Finish this one, ' +
       'then stop</button></div>';
     document.getElementById('stop').onclick = () => send('/stop');
@@ -594,7 +611,7 @@ function paint(s){
     text.textContent = 'Ready';
     sub.textContent = s.quiet_for > 0
       ? 'Standing aside for ' + clock(s.quiet_for) + ' after handing one back.'
-      : 'Waiting for someone to upload a performance.';
+      : 'Waiting for an upload or a YouTube link.';
     extra.innerHTML = '';
   }else if(s.quiet_for > 0){
     // NOT THE SAME AS "on hold", and saying so mattered: a machine standing
