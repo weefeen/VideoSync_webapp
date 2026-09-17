@@ -250,8 +250,17 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    a box that steps from one to the next */
 .viewer.browsing .vidwrap,.viewer.browsing .vscrub,
 .viewer.browsing .cursor{display:none}
+/* Nothing to play: the alignment belongs to the reference recording the
+   score was prepared against, and there is no video of it. Building an
+   embed with no id is how that became "an error occurred". */
+.viewer.noplayer .vidwrap,.viewer.noplayer .vscrub,
+.viewer.noplayer #browsebtn{display:none}
 .viewer.browsing .bands{overflow:hidden;justify-content:center;gap:16px}
-.viewer.browsing .band{display:block;width:100%}
+/* `show` decides which systems are on the page, in BOTH views. This used
+   to force display:block on every band while browsing, so turning the page
+   changed the class and the reader saw no difference: all seventy were on
+   screen the whole time. */
+.viewer.browsing .band{width:100%}
 .viewer.browsing .mz{cursor:pointer}
 .viewer.browsing .mz:hover{background:rgba(102,56,147,.13)}
 .browsehint{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.15em;
@@ -904,6 +913,10 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
     nothing has to be loaded from youtube.com. If no message ever comes back
     -- a host that will not frame youtube.com -- the local file takes over. */
  var YT_ID = (DATA.media && DATA.media.external_id) || '';
+ /* Only a video can be played. A performance aligned to a reference
+    recording has none, and the page is then a score to read rather than a
+    player with an empty frame in it. */
+ var PLAYABLE = !!YT_ID;
  var ytFrame = document.getElementById('yt'), vframeEl = document.getElementById('vframe');
  var useYT = false, ytSeen = false, ytTime = 0, ytDur = 0, ytState = -1, hand = null;
  var ytStamp = 0;
@@ -958,6 +971,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
  }
 
  (function startEmbed(){
+  if(!PLAYABLE){ adopt(false); return; }
   var src = 'https://www.youtube.com/embed/' + YT_ID +
             '?enablejsapi=1&playsinline=1&rel=0&modestbranding=1' +
             '&origin=' + encodeURIComponent(location.origin);
@@ -1070,6 +1084,10 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   var segbs = document.getElementById('seg').querySelectorAll('.sbtn');
   for(var q2=0;q2<segbs.length;q2++)
    segbs[q2].classList.toggle('on', segbs[q2].getAttribute('data-n') === '2');
+ }
+ if(!PLAYABLE){
+  viewer.classList.add('noplayer');
+  setBrowse(true);                    /* the score IS the page here */
  }
  route();
  paint();
