@@ -541,7 +541,13 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    var el = document.createElement('span');
    el.className = 'band';
    var img = document.createElement('img');
-   img.src = d.img;
+   // The address, NOT the picture. A piece is seventy systems and each is a
+   // third of a megabyte of engraving: setting every src here made the
+   // browser fetch and decode the whole score -- tens of megabytes -- before
+   // anybody had clicked anything, and the controls sat behind that work.
+   // A system is fetched when it is about to be read. See `need`.
+   img.setAttribute('data-src', d.img);
+   img.decoding = 'async';
    img.alt = 'Scherzo No. 3, bars ' + d.bars[0].m + ' to ' + d.bars[d.bars.length-1].m;
    el.appendChild(img);
    for(var j=0;j<d.bars.length;j++){
@@ -742,6 +748,24 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   return (forPanes - (n-1)*GAPB) / (9/16 + worstStack(n));
  }
 
+ /* Fetch a system, once, shortly before it is read. The one after the last
+    visible is fetched too, so turning the page shows music rather than a
+    gap while the engraving arrives. */
+ function need(i){
+  if(i < 0 || i >= BANDS.length) return;
+  var img = BANDS[i].el.querySelector('img');
+  if(!img || img.getAttribute('src')) return;
+  img.addEventListener('load', function(){
+   // A system that lands while it is on screen can change what fits.
+   if(BANDS[i].el.classList.contains('show')) layout();
+  });
+  img.src = img.getAttribute('data-src');
+ }
+
+ function needAround(from, count){
+  for(var i = from; i < from + count + 2; i++) need(i);
+ }
+
  function layout(){
   if(!document.body.classList.contains('watching')) return;
   var portrait = window.innerHeight > window.innerWidth * 1.02;
@@ -776,6 +800,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
      BANDS[k].el.classList.toggle('show', on);
      BANDS[k].el.style.width = '100%';
     }
+    needAround(start, shown);
     pprev.disabled = start <= 0;
     pnext.disabled = start + shown >= BANDS.length;
     continue;
@@ -824,6 +849,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    if(!on && BANDS[i].el.contains(cursorEl)) cursorEl.classList.remove('on');
    BANDS[i].el.style.width = (on && scale < 1) ? (scale*100)+'%' : '100%';
   }
+  needAround(start, shown);
   pprev.disabled = start <= 0;
   pnext.disabled = start + shown >= BANDS.length;
  }
@@ -1036,8 +1062,8 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
  window.addEventListener('resize', layout);
  window.addEventListener('orientationchange', function(){ setTimeout(layout, 140); });
  if(window.visualViewport) window.visualViewport.addEventListener('resize', layout);
- var imgs = bandsEl.querySelectorAll('img');
- for(var q=0;q<imgs.length;q++) if(!imgs[q].complete) imgs[q].addEventListener('load', layout);
+ /* Systems are fetched as they are needed, so there is no list of images to
+    wait on here; `need` attaches a listener to the one it starts. */
  /* a portrait screen has the height for two systems, so start with two */
  if(window.innerHeight > window.innerWidth && window.innerHeight >= 680){
   bandMode = 2;
