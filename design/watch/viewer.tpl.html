@@ -598,7 +598,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   <div class="vidwrap" id="vidwrap">
     <div class="vframe" id="vframe">
      <iframe id="yt" title="The performance"
-             allow="accelerometer; encrypted-media; picture-in-picture; fullscreen"
+             allow="accelerometer; autoplay; encrypted-media; picture-in-picture; fullscreen"
              allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
      <video id="vid" playsinline webkit-playsinline preload="metadata"></video>
      <button class="playbtn" id="play" aria-label="Play">
@@ -1187,7 +1187,15 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   for(var i=0;i<BARS.length;i++) if(BARS[i].el === z){
    mediaSeek(BARS[i].t);
    held = 0; lastPaint = -1;
-   if(browsing){ at = i; setBrowse(false); mediaPlay(); }
+   if(browsing){ at = i; setBrowse(false); }
+   /* A CLICK ON A BAR MEANS "PLAY FROM HERE", paused or not. It used to
+      start the video only from the open score and merely seek from the
+      normal view -- so on a paused performance the cursor jumped to the
+      bar and then nothing happened, which reads as the click not working.
+      Asked only when paused: playVideo on a playing player is harmless,
+      but the guard keeps a click from racing a state YouTube has not
+      reported yet. */
+   if(!mediaPlaying()) mediaPlay();
    return;
   }
  });
