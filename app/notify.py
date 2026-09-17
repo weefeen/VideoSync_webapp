@@ -59,7 +59,10 @@ def _link(job_id: str) -> str:
     so the mail and the bookmark agree.
     """
     base = (settings.public_base_url or "").rstrip("/")
-    return f"{base}/app/#job={job_id}"
+    # THE HOME PAGE, not /app/. /app is the minimal tool now; the page that
+    # reads `#job=` and shows the download is the same page, and the home is
+    # where somebody who clicked a mail should arrive.
+    return f"{base}/#job={job_id}"
 
 
 # Deliberately strict rather than clever. Anything unusual but valid gets

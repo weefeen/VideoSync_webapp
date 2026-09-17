@@ -111,13 +111,18 @@ def _uploads() -> pathlib.Path:
 # --------------------------------------------------------------------------
 @bp.get("/")
 def index():
-    """The site root is the designed interface.
+    """The home page: what this is, the sample, and the upload.
 
-    A development page used to live here, with its own controls and an SSE
-    stream. It is gone; this redirects rather than 404s because the bare
-    domain is what people type and what the mail links resolve against.
+    SERVED HERE, NO LONGER A REDIRECT to /app/. The two addresses are two
+    pages now: the root explains, and /app is the tool with the explanation
+    taken away (see `studio`). Same file for both, so a change to the upload
+    flow is made once.
+
+    The page loads its scripts and assets by RELATIVE path -- `svs-min.js`,
+    `assets/sample.mp4` -- which from the root means `/svs-min.js`, so the
+    design folder is served at the root as well (`site_file`).
     """
-    return redirect("/app/", code=302)
+    return send_file(_design_dir() / "index.html")
 
 
 def _design_dir() -> pathlib.Path:
@@ -131,13 +136,38 @@ def _design_dir() -> pathlib.Path:
 # from anywhere else, the page asks for /svs-min.js and gets nothing.
 @bp.get("/app/")
 def studio():
-    """The designed interface."""
-    return send_file(_design_dir() / "index.html")
+    """The tool, with nothing in front of it.
+
+    The same page as the home, marked `minimal` on its <html> element: the
+    headline, the sample video, the group card and the score sources are
+    hidden, and what is left is the upload and the link. A video dropped
+    here starts the upload in place; a link opens its performance at once.
+
+    Marked in the markup the server sends rather than by a script, so the
+    hidden parts are never painted and then taken away.
+    """
+    page = (_design_dir() / "index.html").read_text(encoding="utf-8")
+    page = page.replace('<html lang="en">', '<html lang="en" class="minimal">', 1)
+    response = Response(page, mimetype="text/html")
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @bp.get("/app/<path:filename>")
 def studio_file(filename: str):
     """Everything the page asks for beside itself."""
+    return send_from_directory(_design_dir(), filename)
+
+
+@bp.get("/<path:filename>")
+def site_file(filename: str):
+    """The design folder, at the root, for the home page's relative links.
+
+    Registered with a path converter, which routing ranks below every rule
+    with a fixed first segment -- /api, /p, /app, /confirm, /metrics all
+    still match first. Only files that exist in the design folder are
+    served; anything else is the 404 it always was.
+    """
     return send_from_directory(_design_dir(), filename)
 
 

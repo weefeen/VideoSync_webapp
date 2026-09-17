@@ -2418,8 +2418,6 @@ function linkRefused(reason){
    say "It is not ready to watch yet" whatever the state -- which is a
    promise, and for a video we have refused or a piece nobody has engraved
    it is a promise the page cannot keep. */
-const LINK_WORKING = ['DISCOVERED', 'VALIDATING', 'IDENTIFYING',
-                      'READY_FOR_SYNC', 'SYNCHRONISING', 'QC'];
 const LINK_REFUSED = ['REJECTED', 'UNAVAILABLE', 'FAILED'];
 
 function linkPending(vid, state, opts){
@@ -2458,49 +2456,6 @@ function linkPending(vid, state, opts){
      page back to the box on each redraw would fight anybody reading
      anything else. */
   if(!opts.quiet) centerOn('#linkbox', 60);
-}
-
-/* ── following a link until it can be watched ───────────────────────────
-   Preparing is a download, a recognition and an alignment: about three
-   minutes for a seven-minute piece when a volunteer is free, and nothing at
-   all until one is. So the page asks where the performance has got to,
-   says so in words, and opens it the moment it is READY.
-
-   It STOPS ASKING when the answer is settled -- refused, or waiting for an
-   engraving that may be weeks away -- and after half an hour of no
-   progress, when it says the link is queued rather than implying somebody
-   is working on it now. */
-const FOLLOW_EVERY = 5000;
-const FOLLOW_FOR = 30 * 60 * 1000;
-
-function followLink(vid, id){
-  const began = Date.now();
-  let last = '', lastMove = Date.now();
-  const tick = async () => {
-    if(!$('#linkbox')) return;                       // dismissed
-    let d;
-    try{
-      const r = await fetch('/api/performance/' + encodeURIComponent(id) + '/state',
-                            {cache: 'no-store'});
-      if(!r.ok) throw new Error(String(r.status));
-      d = await r.json();
-    }catch(err){
-      setTimeout(tick, FOLLOW_EVERY * 2);            // the network blinked
-      return;
-    }
-    if(d.state === 'READY'){ location.href = '/p/' + encodeURIComponent(id); return; }
-    if(d.state !== last){ last = d.state; lastMove = Date.now(); }
-    const title = d.performer && d.title ? d.title : '';
-    if(d.state === 'REVIEW' || LINK_REFUSED.indexOf(d.state) >= 0){
-      linkPending(vid, d.state, {quiet: true, title: title});
-      return;
-    }
-    const stalled = Date.now() - lastMove > FOLLOW_FOR;
-    linkPending(vid, d.state, {quiet: true, title: title, queued: stalled});
-    if(stalled || Date.now() - began > 4 * FOLLOW_FOR) return;
-    setTimeout(tick, FOLLOW_EVERY);
-  };
-  setTimeout(tick, FOLLOW_EVERY);
 }
 
 /* The state vocabulary is watch.py's. Said in words rather than shown as a
@@ -2563,11 +2518,19 @@ async function handleDroppedLink(text){
      performance with no bands yet throws before it draws and leaves a
      blank page. Sending somebody there to watch it fail is worse than
      telling them plainly that it is not ready. */
-  if(data.state === 'READY' && data.where){ location.href = data.where; return; }
-  linkPending(vid, data.state);
-  if(data.id && data.state !== 'REVIEW' && LINK_REFUSED.indexOf(data.state) < 0){
-    followLink(vid, data.id);
+  /* STRAIGHT TO THE PLAYER, whatever state the performance is in. The video
+     plays at once; the player shows where the score has got to and reloads
+     itself when it is READY. This used to wait here for three to five
+     minutes before opening anything -- the one part of the product that
+     could be instant was the part that was made to wait.
+
+     Only a performance we have already refused stays here, with its reason:
+     there is nothing to watch it for. */
+  if(data.where && LINK_REFUSED.indexOf(data.state) < 0){
+    location.href = data.where;
+    return;
   }
+  linkPending(vid, data.state);
 }
 
 /* ── drop anywhere on the page ────────────────────────────────────────

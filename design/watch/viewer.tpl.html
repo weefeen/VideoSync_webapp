@@ -269,6 +269,29 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
 .viewer.browsing .vleft{display:none}
 .vidwrap{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:100%}
 .scorearea{flex:0 0 auto;min-height:0;display:flex;flex-direction:column;gap:9px}
+/* A PERFORMANCE WITH NO SCORE YET IS STILL A PAGE TO WATCH. A link opens here
+   the moment it is given, before it has been recognised or aligned: the
+   video plays at once, and this panel stands where the score will be and
+   says, in words, how far it has got. When the score is ready the page
+   reloads itself and the panel is the score. */
+.vwait{display:none;flex:0 0 auto;box-sizing:border-box;padding:18px 22px;
+  border:1px solid var(--hair);border-radius:4px;background:var(--surface,#fffdf9)}
+.viewer.noscore .vwait{display:block}
+.viewer.noscore .scorearea,.viewer.noscore .vbarnum{display:none}
+.vwait .lab{display:block;font-family:"JetBrains Mono",monospace;font-size:9.5px;
+  letter-spacing:.19em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+.vwait h3{font-family:Fraunces,serif;font-weight:300;font-size:21px;
+  letter-spacing:-.02em;line-height:1.2;margin:0 0 6px;color:var(--ink)}
+.vwait h3 em{font-style:italic;color:var(--b2)}
+.vwait p{margin:0;font-size:13px;line-height:1.6;color:var(--soft)}
+.vwait p a{color:var(--b2)}
+.vwait .wrail{display:block;position:relative;height:4px;border-radius:3px;
+  background:var(--hair);overflow:hidden;margin:14px 0 2px}
+.vwait .wrail::after{content:"";position:absolute;top:0;bottom:0;width:30%;
+  border-radius:3px;background:var(--b3);animation:wrail 1.8s ease-in-out infinite}
+.vwait.settled .wrail{display:none}
+@keyframes wrail{0%{left:-30%}100%{left:100%}}
+@media (prefers-reduced-motion:reduce){.vwait .wrail::after{animation:none;left:0;width:100%;opacity:.35}}
 .vframe{position:relative;overflow:hidden;border-radius:10px;background:#0d0b11;
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.07),0 14px 34px -20px rgba(25,19,32,.5)}
 .vframe video,.vframe iframe{position:absolute;inset:0;width:100%;height:100%;
@@ -613,6 +636,12 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
    </div>
   </div>
 
+  <div class="vwait" id="vwait" aria-live="polite">
+   <span class="lab">the score</span>
+   <h3 id="vwaith">Lining the score up to this <em>performance</em></h3>
+   <p id="vwaitp">The video plays now. The score appears here by itself when it is ready.</p>
+   <span class="wrail" aria-hidden="true"></span>
+  </div>
   <div class="scorearea" id="scorearea">
    <div class="scorerow" id="scorerow">
     <button class="pturn prev" id="pprev" aria-label="Previous system"><i><svg width="15" height="24" viewBox="0 0 11 18" fill="none" aria-hidden="true"><path d="M9 1 2 9l7 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></i></button>
@@ -682,6 +711,9 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   }
   BARS.sort(function(a,b){ return a.t - b.t; });
  })();
+ /* Whether there is a score to follow at all. False for a link that was
+    given a moment ago and is still being prepared -- see `waitForScore`. */
+ var SCORED = BARS.length > 0;
 
  /* the masthead says which performance this is */
  (function name(){
@@ -700,6 +732,11 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
 
  /* the hero on page 1 uses the same engraving and the same bar box */
  (function hero(){
+  /* THIS THREW ON EVERY PERFORMANCE WITHOUT A SCORE. `DATA.bands[1] ||
+     DATA.bands[0]` is undefined when there are no bands, `.bars` of that
+     throws, and the whole script stopped here -- a blank page for any link
+     opened before it was aligned. */
+  if(!DATA.bands.length) return;
   var d = DATA.bands[1] || DATA.bands[0], b = d.bars[0];
   document.getElementById('heroband').src = d.img;
   var hl = document.getElementById('herohl');
@@ -957,6 +994,22 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   var avail  = vbody.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
   if(column <= 0 || avail <= 0) return;
   var full = Math.max(MINW, column - gutters());   /* what the music may use */
+
+  /* NO SCORE YET: the video takes the room the score would have shared, and
+     the waiting panel sits under it at the same width. Everything below
+     sizes systems, and with none to size it would divide by nothing. */
+  if(!SCORED){
+   var waitEl = document.getElementById('vwait');
+   var waitH = (waitEl ? waitEl.offsetHeight : 120) + 12;
+   var vw = Math.max(160, Math.min(column,
+              (avail - vscrub.offsetHeight - waitH - 12) * 16 / 9));
+   vframe.style.width   = Math.round(vw)+'px';
+   vframe.style.height  = Math.round(vw * 9/16)+'px';
+   vidwrap.style.height = Math.round(vw * 9/16)+'px';
+   vscrub.style.width   = Math.round(vw)+'px';
+   if(waitEl) waitEl.style.width = Math.round(vw)+'px';
+   return;
+  }
 
   /* Twice: setting the widths can rewrap the control row, which changes the
      height everything else was sized against. The second pass sees it. */
@@ -1252,6 +1305,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
  }, {passive: true});
 
  function turn(by){
+  if(!BANDS.length) return;             /* nothing to turn yet */
   held = Date.now() + HOLD;
   if(browsing){
    // a page at a time, to a boundary -- never a count of systems
@@ -1312,10 +1366,78 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
  }
  if(!PLAYABLE){
   viewer.classList.add('noplayer');
-  setBrowse(true);                    /* the score IS the page here */
+  if(SCORED) setBrowse(true);         /* the score IS the page here */
+ }
+ if(!SCORED){
+  viewer.classList.add('noscore');
+  waitForScore();
  }
  route();
  paint();
+
+ /* ── waiting for the score ───────────────────────────────────────────
+    Asked every few seconds while the link is being worked on, and the page
+    reloads itself the moment it is READY -- the reload brings the bars.
+    Settled answers stop the asking: a video we cannot follow is said once;
+    a piece nobody has engraved yet is asked about only once a minute, since
+    the score may come days later and the page should still notice it. */
+ function waitForScore(){
+  var WORKING = ['DISCOVERED','VALIDATING','IDENTIFYING','READY_FOR_SYNC','SYNCHRONISING','QC'];
+  var REFUSED = ['REJECTED','UNAVAILABLE','FAILED'];
+  var h = document.getElementById('vwaith'), p = document.getElementById('vwaitp');
+  var box = document.getElementById('vwait');
+  function words(state){
+   switch(state){
+    case 'DISCOVERED':    return 'The video plays now. The link is waiting its turn to be prepared; the score appears here by itself when it is ready.';
+    case 'VALIDATING':    return 'The video plays now. We are looking at it; the score appears here by itself when it is ready.';
+    case 'IDENTIFYING':   return 'The video plays now. We are working out which piece is being played.';
+    case 'READY_FOR_SYNC':
+    case 'SYNCHRONISING':
+    case 'QC':            return 'The video plays now. The score is being matched to the playing, bar by bar.';
+    default:              return 'The video plays now. The score appears here by itself when it is ready.';
+   }
+  }
+  function show(d){
+   var state = d.state || DATA.state;
+   if(d.title){
+    var el = document.getElementById('vwork');
+    if(el && !DATA.title){
+     el.innerHTML = '<b>' + String(d.title).replace(/[<>&]/g, function(c){
+      return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c]; }) + '</b>';
+    }
+   }
+   if(state === 'REVIEW'){
+    box.classList.add('settled');
+    h.innerHTML = 'Its score is not <em>engraved</em> yet';
+    p.textContent = 'We know the piece, and nobody has engraved its score yet. The video plays; the score appears here as soon as it is made.';
+    return 60000;
+   }
+   if(REFUSED.indexOf(state) >= 0){
+    box.classList.add('settled');
+    h.innerHTML = 'We cannot <em>follow</em> this one';
+    p.textContent = state === 'UNAVAILABLE'
+      ? 'The video cannot be used here, so there is no score to follow.'
+      : 'We listened, and this is not a piece we can follow with a score.';
+    return 0;
+   }
+   box.classList.remove('settled');
+   h.innerHTML = 'Lining the score up to this <em>performance</em>';
+   p.textContent = words(state);
+   return WORKING.indexOf(state) >= 0 ? 5000 : 15000;
+  }
+  function ask(){
+   fetch('/api/performance/' + encodeURIComponent(DATA.id) + '/state', {cache:'no-store'})
+    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function(d){
+     if(d.state === 'READY'){ location.reload(); return; }
+     var next = show(d);
+     if(next) setTimeout(ask, next);
+    })
+    .catch(function(){ setTimeout(ask, 10000); });
+  }
+  var first = show({state: DATA.state});
+  if(first) setTimeout(ask, Math.min(first, 5000));
+ }
 })();
 
 /* ── sending this page to somebody ──────────────────────────────────

@@ -25,7 +25,7 @@
 <meta property="og:site_name" content="Chopin · Weefeen"/>
 <meta property="og:title" content="Your Chopin, with the score playing along"/>
 <meta property="og:description" content="Upload your performance. We find the piece, line the score up to your playing, and email the video back. Free."/>
-<meta property="og:url" content="https://chopin.weefeen.com/app/"/>
+<meta property="og:url" content="https://chopin.weefeen.com/"/>
 <meta property="og:image" content="https://chopin.weefeen.com/app/og-cover-420daa12.png"/>
 <meta property="og:image:type" content="image/png"/>
 <meta property="og:image:width" content="1200"/>
@@ -49,6 +49,16 @@ em{font-style:italic}
 
 /* ── shell ── */
 .top{max-width:1040px;margin:0 auto;padding:34px 40px 0;display:flex;align-items:baseline;justify-content:space-between;gap:24px}
+/* /app IS THE TOOL. The same page as the home with everything that explains
+   taken away -- the headline, the sample, the group card, the score sources
+   (still credited, in Credits) -- so what is left is somewhere to drop a
+   video or a link. Marked on <html> by the server, so none of it is painted
+   first and then hidden. */
+.aboutlink{display:none}
+html.minimal .hero,html.minimal .fbwrap,html.minimal .srcfoot{display:none}
+html.minimal #uploadstate{margin-top:9vh!important}
+html.minimal .aboutlink{display:inline;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:var(--faint);text-decoration:none;border-bottom:1px solid var(--hair);padding-bottom:2px}
+html.minimal .aboutlink:hover{color:var(--b2);border-bottom-color:var(--b3)}
 .topright{display:flex;flex-direction:column;align-items:flex-end;gap:11px}
 .wordmark{font-family:Fraunces,serif;font-weight:400;font-size:15px;letter-spacing:-.01em}
 .wordmark span{color:var(--faint);font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;margin-left:10px}
@@ -581,6 +591,7 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;bac
 <header class="top">
   <div class="wordmark">Score Video Sync<span>Chopin</span></div>
   <div class="topright">
+    <a class="aboutlink" href="/">About</a>
     <div class="rights" id="rights" role="dialog" aria-modal="true" aria-labelledby="rightsTitle">
   <div class="rightscard">
     <div class="stepmark"><b>Before we upload</b></div>
