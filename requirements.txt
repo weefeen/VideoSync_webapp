@@ -43,7 +43,9 @@ fonttools[woff]>=4.50
 # Turning a YouTube link into audio the recogniser and the aligner can read;
 # see app/fetchaudio.py, which is the only module that knows about it.
 #
-# DELIBERATELY NOT PINNED, and updated daily by vsw-ytdlp-update.timer.
+# DELIBERATELY NOT PINNED, and upgraded daily by the machine that downloads
+# -- `tools/volunteer.py`, through `fetchaudio.ensure_current`. Not the web
+# box: YouTube refuses datacentre addresses, so the web box never fetches.
 # YouTube changes how a stream is addressed every few weeks and a stale
 # yt-dlp then fails every download with a message about formats -- silently,
 # as far as the rest of the system is concerned. A pin here is a guaranteed

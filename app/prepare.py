@@ -1,67 +1,107 @@
-"""Taking a discovered performance all the way to something watchable.
+"""Preparing a YouTube link: the half that does the work.
 
-    a link  ->  DISCOVERED
-                VALIDATING     what YouTube says about it, before any bytes
+    a link  ->  VALIDATING     what YouTube says about it, before any bytes
                 IDENTIFYING    which piece is being played
-                READY_FOR_SYNC / SYNCHRONISING   the score against the sound
-                QC / READY     bars, timed, on /p/<id>
+                SYNCHRONISING  the score against the sound
+                READY          bars, timed, on /p/<id>
+            or  REVIEW         the piece is known and nobody has engraved it
 
-Almost none of this is new. `identify` and `align` already do the work and
-already take a plain local file; `watch.advance` already polices the moves
-between states; `store.put_sync` already records bars. What was missing was
-the thing that walks a performance through them, and the audio to walk it
-with. This is that walk, and nothing else belongs in it.
+THIS RUNS ON A VOLUNTEER AND NEVER OPENS THE DATABASE. That is the whole
+shape of the module, and it was learned the hard way: the first version
+walked a performance through its states by calling `store` and
+`watch.advance` directly, which passes every test on one machine and, on a
+volunteer, quietly moves rows in that machine's own SQLite while production
+never hears a thing. A task arrives as a `RenderTask`; everything found
+leaves as events; `app.queue.watchledger` on the web box is the only thing
+that writes. Same rule as `app.queue.worker`, for the same reason.
 
-WHERE IT RUNS. On a machine with a residential address -- in practice
-`tools/volunteer.py` on a desktop, the same machine that already renders so
-a Linode node is not rented. YouTube scores datacentre ranges as bots and
-refuses them every format, so the web box must never be the one asking.
-That is a deployment fact, not a preference, and `worker.py` enforces it by
-refusing a `prepare` task unless `place()` says `local`.
+So nothing here imports `store`, `watch`, `viewer` or `sharecard` -- each of
+those reaches the database. States and reasons are plain strings, and the
+ledger checks every one against `watch`'s vocabulary before writing it.
 
-THE PARKED CASE IS THE COMMON ONE AND IS NOT A FAILURE. Four scores are
-engraved of roughly two hundred and thirty-five, so most recognised pieces
-have no score to align against yet. Such a performance goes to REVIEW with
-its audio KEPT, and the work it wants is recorded where an operator can see
-it. When that score is published, `resume` finishes the job from the file
-already on disk -- no second download, and nobody has to remember.
+WHERE IT RUNS. On a residential address: `tools/volunteer.py`, between
+renders. YouTube scores datacentre ranges as bots and refuses them every
+format, which is why these tasks have their own queue that only a volunteer
+reads (see `transport.PREPARE_QUEUE`).
+
+HOST FAULTS ARE NOT OUTCOMES. yt-dlp missing, cairosvg missing so the score
+looks absent, too little memory free: each raises `HandBack`, the task goes
+back on the queue untouched, and the performance is never written off
+because the wrong machine picked it up.
+
+THE PARKED CASE IS THE COMMON ONE. Four scores are engraved of roughly two
+hundred and thirty-five. A recognised piece with no engraving is reported
+as REVIEW / NOT_ENGRAVED with the edition it wants, and the audio stays on
+this disk. When the score is published the web box offers the task again
+with that edition named, and this finds the audio already here and only
+aligns.
 """
 from __future__ import annotations
 
 import logging
 import pathlib
+from typing import Callable
 
-from . import fetchaudio, identify as ident, library, store, sync as syncmod
+from . import fetchaudio, identify as ident, library, sync as syncmod
 from . import package as pkg
-from . import viewer, watch, youtube
+from . import pipeline, scorestore
 from . import settings as settings_mod
 from .settings import max_upload_minutes, settings
 
 logger = logging.getLogger(__name__)
 
+# The outcomes this reports. Plain strings on purpose -- see the module
+# docstring -- and checked against `watch` by the ledger and by selftest, so
+# a spelling that drifts from the state machine fails loudly there.
+READY = "READY"
+REVIEW = "REVIEW"
+REJECTED = "REJECTED"
+UNAVAILABLE = "UNAVAILABLE"
+FAILED = "FAILED"
+STAGES = ("VALIDATING", "IDENTIFYING", "SYNCHRONISING")
 
-class NotPreparable(RuntimeError):
-    """This performance is not something `prepare` can act on."""
+NOT_CHOPIN = "NOT_CHOPIN"
+NOT_ENGRAVED = "NOT_ENGRAVED"
+VIDEO_UNAVAILABLE = "VIDEO_UNAVAILABLE"
+PARTIAL_UNSUPPORTED = "PARTIAL_UNSUPPORTED"
+SYNC_UNSUPPORTED = "SYNC_UNSUPPORTED"
+
+#: say(event_type, stage=None, detail="", data=None) -- publishes one event.
+Say = Callable[..., None]
 
 
-class NotUsableHere(RuntimeError):
-    """The score exists but THIS machine cannot read it.
+class HandBack(RuntimeError):
+    """This machine cannot do this task. The task goes back on the queue.
 
-    A host deficiency, never a verdict on the music. It is raised rather
-    than parked so the performance is left untouched for a machine that can
-    do the work -- the same class as yt-dlp being absent, and the opposite
-    of NOT_ENGRAVED, which means nobody has made the score at all.
+    A statement about the HOST, never about the video. Raising it leaves the
+    performance exactly where it is for a machine that can do the work.
     """
 
 
-class TooBigHere(RuntimeError):
-    """This recording needs more memory than this machine has free.
+class NotUsableHere(HandBack):
+    """The score exists but this machine cannot read it.
 
-    NOT a verdict on the video. It is a statement about the host, and the
-    performance is left exactly where it was so a machine with more room
-    takes it. `worker.py` requeues the task rather than failing it, the same
-    way `tools/volunteer.py` already hands back a render it cannot finish.
+    Three of the four packages installed on this project ship .svg bands
+    only, and an interpreter without cairosvg calls every one of them
+    broken. `library.find` then answers None for a score that exists, and
+    reporting that as NOT_ENGRAVED would park a performance whose score is
+    right there -- the first parked test did exactly that with Op.23.
     """
+
+
+class TooBigHere(HandBack):
+    """This recording needs more memory than this machine has free."""
+
+
+def audio_root() -> pathlib.Path:
+    """Where fetched sound lives on THIS machine, keyed by video id.
+
+    Beside the uploads rather than in a job folder: the file outlives any
+    one attempt. A performance parked for a month still has its audio here
+    when its engraving lands, which is what makes resuming only an
+    alignment.
+    """
+    return settings.upload_dir.parent / "youtube"
 
 
 def _longest_here() -> float:
@@ -75,244 +115,213 @@ def _longest_here() -> float:
     free = settings_mod.free_memory_bytes()
     if free <= 0:
         return 0.0
-    # A third is left for the rest of the machine: the matrix is the biggest
-    # allocation but it is not the only one, and an align that just fits is
-    # an align that dies when something else opens a file.
+    # A third left for the rest of the machine: the matrix is the biggest
+    # allocation, not the only one, and an align that just fits is one that
+    # dies when something else opens a file.
     return settings_mod.safe_duration_minutes(free / 1024 ** 3 * 0.66)
 
 
-def audio_root() -> pathlib.Path:
-    """Where fetched sound lives, keyed by video id.
+def compute(task, say: Say) -> None:
+    """Prepare one link and report what happened. Raises only `HandBack`.
 
-    Beside the uploads rather than in a job folder: this file outlives any
-    one attempt at preparing it. A performance parked for a month waiting
-    for an engraving still has its audio when the engraving lands, and that
-    is the whole reason the parked case is cheap.
+    Every ordinary result -- a dead video, a recording that is not a piece
+    we know, a piece nobody has engraved, a finished alignment -- is one
+    `prepared` event. Nothing is thrown for those.
     """
-    return settings.upload_dir.parent / "youtube"
-
-
-def prepare(performance_id: str, *, force: bool = False) -> str:
-    """Walk one performance as far as it can go. Returns the state it reached.
-
-    Never raises for an ordinary bad outcome -- a dead video, an
-    unrecognisable recording, a piece nobody has engraved are all answers,
-    and each is written to the performance rather than thrown. It raises
-    only when asked to do something it cannot: no such performance, or one
-    whose media is not a YouTube video.
-    """
-    row = store.performance_by_id(performance_id)
-    if row is None:
-        raise NotPreparable(f"no performance {performance_id}")
-
-    media = (store.media_for(performance_id) or [None])[0]
-    if media is None or media["provider"] != "youtube":
-        raise NotPreparable(
-            f"{performance_id} is not a YouTube performance; "
-            "prepare has nothing to fetch")
-    video_id = media["external_id"]
-
-    if row["state"] == watch.READY and not force:
-        logger.info("%s is already READY", performance_id)
-        return watch.READY
+    meta = dict(task.meta or {})
+    vid = (meta.get("video_id") or "").strip()
+    resume = (meta.get("resume_edition") or "").strip()
+    if not vid:
+        _finish(say, FAILED, "the task named no video")
+        return
 
     # ── what YouTube says, before a single byte is downloaded ──────────
-    if row["state"] == watch.DISCOVERED:
-        watch.advance(performance_id, watch.VALIDATING)
+    # The stage is announced AFTER this machine has shown it can ask. Said
+    # first, a host without yt-dlp moved the row to VALIDATING and then
+    # handed the task back -- leaving a performance claiming to be looked
+    # at by nobody.
     try:
-        meta = fetchaudio.probe(video_id)
-    except fetchaudio.FetchUnavailable:
-        # This machine cannot fetch at all. That is OUR fault, not the
-        # video's, so the performance is left exactly where it is for a
-        # machine that can -- marking it FAILED would bury a good video
-        # because the wrong host picked up the task.
-        raise
+        info = fetchaudio.probe(vid)
+    except fetchaudio.FetchUnavailable as exc:
+        raise HandBack(str(exc)) from exc
     except fetchaudio.VideoUnusable as exc:
-        return _stop(performance_id, watch.UNAVAILABLE, str(exc))
+        _finish(say, UNAVAILABLE, str(exc), skip_reason=VIDEO_UNAVAILABLE)
+        return
     except fetchaudio.FetchError as exc:
-        return _stop(performance_id, watch.FAILED, str(exc))
+        _finish(say, FAILED, str(exc))
+        return
+    found = {"title": info["title"], "uploader": info["uploader"],
+             "duration": info["duration"]}
+    say("prepare_stage", stage="VALIDATING", data=found)
 
-    if meta["title"]:
-        store.set_performance(performance_id, title=meta["title"],
-                              performer=meta["uploader"])
-
-    # Asked BEFORE a byte is downloaded: refusing a two-hour recital costs
-    # one metadata request here, and the whole download anywhere later.
-    #
-    # THIS MACHINE'S CAP, NOT THE SITE'S. The aligner allocates the whole
-    # N x M matrix, so memory grows with the SQUARE of the duration and the
-    # only question that matters is what the box doing the aligning can hold.
-    #
-    # `max_upload_minutes` is deliberately NOT that number. It answers for
-    # the SITE -- `renderer_memory_gb` returns the web box's measured 3.9 GB
-    # rather than reading /proc, precisely so the figure shown to a visitor
-    # does not change with whoever is running the code. Using it here would
-    # have a 64 GB desktop refuse a ten-minute performance on a 3.9 GB box's
-    # behalf: on this machine it says 7.0, and the Op.39 already published on
-    # the site is 7.07.
-    #
-    # Too long FOR THIS MACHINE is also not the same as too long for us, so a
-    # recording over the local ceiling but under the site's is left alone for
-    # a bigger machine rather than refused.
-    longest_min = _longest_here()
-    minutes = meta["duration"] / 60
-    if longest_min and minutes > longest_min:
+    # THIS MACHINE'S CAP, NOT THE SITE'S. `max_upload_minutes` answers for
+    # the site -- it reports the web box's measured 3.9 GB so a visitor's
+    # figure does not change with whoever runs the code -- and used alone it
+    # had a 64 GB desktop refuse a ten-minute performance. Too long for THIS
+    # host is handed back for a bigger one; only too long for the site is a
+    # verdict on the recording.
+    longest = _longest_here()
+    minutes = (info["duration"] or 0) / 60
+    if longest and minutes > longest:
         if minutes > max_upload_minutes():
-            return _stop(performance_id, watch.UNAVAILABLE,
-                         f"{minutes:.0f} minutes long; longer than anything "
-                         f"here can align",
-                         skip_reason=watch.SYNC_UNSUPPORTED)
-        raise TooBigHere(
-            f"{minutes:.1f} minutes needs more memory than this machine has "
-            f"free ({longest_min:.1f} minutes' worth); another will take it")
+            _finish(say, UNAVAILABLE,
+                    f"{minutes:.0f} minutes long; longer than anything here "
+                    f"can align", skip_reason=SYNC_UNSUPPORTED, found=found)
+            return
+        raise TooBigHere(f"{minutes:.1f} minutes needs more memory than this "
+                         f"machine has free ({longest:.1f} minutes' worth)")
 
     # ── the sound ──────────────────────────────────────────────────────
     try:
-        media_path = fetchaudio.audio(video_id, audio_root())
-    except fetchaudio.FetchUnavailable:
-        raise
+        media = fetchaudio.audio(vid, audio_root())
+    except fetchaudio.FetchUnavailable as exc:
+        raise HandBack(str(exc)) from exc
     except fetchaudio.VideoUnusable as exc:
-        return _stop(performance_id, watch.UNAVAILABLE, str(exc))
+        _finish(say, UNAVAILABLE, str(exc), skip_reason=VIDEO_UNAVAILABLE,
+                found=found)
+        return
     except fetchaudio.FetchError as exc:
-        return _stop(performance_id, watch.FAILED, str(exc))
+        _finish(say, FAILED, str(exc), found=found)
+        return
 
-    # ── which piece ────────────────────────────────────────────────────
-    if store.performance_by_id(performance_id)["state"] == watch.VALIDATING:
-        watch.advance(performance_id, watch.IDENTIFYING)
-    try:
-        heard = ident.identify(media_path, duration=meta["duration"] or None)
-    except ident.IdentifyUnavailable:
-        raise                      # a deployment fault again; leave it be
-    except ident.IdentifyError as exc:
-        return _stop(performance_id, watch.FAILED, str(exc))
+    # ── which piece, unless the web box already told us ────────────────
+    # A RESUME NAMES ITS EDITION. The piece was identified when the link was
+    # first prepared, and nothing about the recording has changed since; the
+    # web box offers it again only because that edition is now published.
+    # Listening a second time would spend forty seconds of GPU on an answer
+    # already written on the row.
+    edition = ""
+    if resume:
+        if library.find(resume) is not None:
+            edition = resume
+        elif library.unusable_here(resume):
+            raise NotUsableHere(f"{resume} cannot be read on this machine: "
+                                f"{library.unusable_here(resume)}")
+        # Otherwise the score the web box saw is not here yet (a volunteer
+        # whose library is behind): identify afresh rather than guess.
 
-    if heard.outcome != ident.MATCHED:
-        # Not "we failed" -- we listened and it is not something we know.
-        # REJECTED with a reason from the fixed vocabulary, so discovery
-        # stops offering the same video back forever.
-        return _stop(performance_id, watch.REJECTED, "not a piece we know",
-                     skip_reason=watch.NOT_CHOPIN)
+    winner = ""
+    if not edition:
+        say("prepare_stage", stage="IDENTIFYING", data=found)
+        try:
+            heard = ident.identify(media, duration=info["duration"] or None)
+        except ident.IdentifyUnavailable as exc:
+            raise HandBack(str(exc)) from exc
+        except ident.IdentifyError as exc:
+            _finish(say, FAILED, str(exc), found=found)
+            return
+        winner = heard.winner or ""
+        if heard.outcome != ident.MATCHED:
+            # Not "we failed": we listened, and it is not something we know.
+            # A reason from the fixed vocabulary, so discovery stops offering
+            # the same video back for ever.
+            _finish(say, REJECTED, "not a piece we know",
+                    skip_reason=NOT_CHOPIN, found=found)
+            return
 
-    editions = _editions(heard)
-    published = [name for name in editions if library.find(name) is not None]
+        editions = _editions(heard)
+        published = [n for n in editions if library.find(n) is not None]
+        if not published:
+            blocked = [(n, library.unusable_here(n)) for n in editions]
+            blocked = [(n, why) for n, why in blocked if why]
+            if blocked:
+                name, why = blocked[0]
+                raise NotUsableHere(f"{name} cannot be read on this machine: "
+                                    f"{why}")
+            # THE COMMON CASE. Known, and nobody has engraved it. The edition
+            # it WANTS travels with the verdict: it is what the web box
+            # watches for, and what it names when it offers this again.
+            _finish(say, REVIEW, f"{winner}: no engraving published",
+                    skip_reason=NOT_ENGRAVED, found=found,
+                    edition=editions[0] if editions else "", winner=winner)
+            return
+        edition = published[0]
 
-    # "NOT IN THE CATALOGUE HERE" IS NOT "NOBODY ENGRAVED IT", and treating
-    # them as the same thing parks recordings whose score exists.
-    #
-    # Three of the four packages installed on this project ship .svg bands
-    # only, and an interpreter without cairosvg calls every one of them
-    # broken -- so `library.find` answers None under `2026liszt` and finds
-    # the package under `VideoScoreSync`, for the same folder on the same
-    # disk. The first parked test here "passed" for exactly that reason: it
-    # parked Op.23, which IS engraved.
-    #
-    # A deficiency of this host belongs in the same class as yt-dlp being
-    # missing: the performance is left untouched for a machine that can do
-    # the work, never written off.
-    if not published:
-        blocked = [(name, library.unusable_here(name)) for name in editions]
-        blocked = [(n, why) for n, why in blocked if why]
-        if blocked:
-            name, why = blocked[0]
-            raise NotUsableHere(f"{name} cannot be read on this machine: {why}")
-
-    if not published:
-        # THE COMMON CASE. The piece is known and nobody has engraved it.
-        # Parked, audio kept, and recorded where it will be seen.
-        # NOT `store.put_recognition`: that table is keyed by job id and
-        # belongs to the upload path. A performance records what it wants on
-        # its own row.
-        #
-        # The edition it WANTS is written even though no such package is
-        # published here. That is what `resume` reads when the engraving
-        # lands, and it is what makes "has this score arrived yet" a
-        # question about a folder name rather than one that needs the
-        # recording listened to a second time.
-        if editions:
-            store.set_performance(performance_id, edition=editions[0])
-        return _stop(performance_id, watch.REVIEW,
-                     f"{heard.winner}: no engraving published",
-                     skip_reason=watch.NOT_ENGRAVED)
-
-    edition = published[0]
-    return _align(performance_id, edition, media_path)
-
-
-def resume(performance_id: str) -> str:
-    """Finish a parked performance now that its score exists.
-
-    The audio is already on this disk, so this is the alignment and nothing
-    else. Safe to call on one that is not parked: it says so and stops.
-    """
-    row = store.performance_by_id(performance_id)
-    if row is None:
-        raise NotPreparable(f"no performance {performance_id}")
-    if row["state"] != watch.REVIEW:
-        logger.info("%s is %s, not parked", performance_id, row["state"])
-        return row["state"]
-
-    media = (store.media_for(performance_id) or [None])[0]
-    if media is None or media["provider"] != "youtube":
-        raise NotPreparable(f"{performance_id} has no YouTube media")
-
-    audio = fetchaudio._already(audio_root(), media["external_id"])  # noqa: SLF001
-    if audio is None:
-        # The file was reclaimed. Not an error: prepare will fetch it again.
-        logger.info("%s: the audio is gone; preparing from the start",
-                    performance_id)
-        return prepare(performance_id, force=True)
-
-    edition = _parked_edition(performance_id)
-    if edition is None:
-        return prepare(performance_id, force=True)
-    return _align(performance_id, edition, audio)
-
-
-def _align(performance_id: str, edition: str, media_path: pathlib.Path) -> str:
-    """The score against the sound, and the bars that come out of it."""
-    package = library.find(edition)
+    # ── the score against the sound ────────────────────────────────────
+    say("prepare_stage", stage="SYNCHRONISING", data={**found, "edition": edition})
+    package = _on_this_disk(edition)
     if package is None:
-        return _stop(performance_id, watch.REVIEW,
-                     f"{edition} is not published here")
-
-    state = store.performance_by_id(performance_id)["state"]
-    if state in (watch.IDENTIFYING, watch.REVIEW):
-        watch.advance(performance_id, watch.READY_FOR_SYNC)
-    watch.advance(performance_id, watch.SYNCHRONISING)
-
-    job_dir = audio_root() / "work" / performance_id
-    job_dir.mkdir(parents=True, exist_ok=True)
+        _finish(say, FAILED, f"{edition} is in the catalogue but could not be "
+                f"fetched from the bucket", found=found, edition=edition,
+                winner=winner)
+        return
+    work = audio_root() / "work" / task.job_id.replace(":", "_")
+    work.mkdir(parents=True, exist_ok=True)
     try:
-        alignment = syncmod.align(package.root, media_path, job_dir)
-    except syncmod.SyncUnavailable:
-        raise                      # deployment fault; leave the performance
+        alignment = syncmod.align(package.root, media, work)
+    except syncmod.SyncUnavailable as exc:
+        raise HandBack(str(exc)) from exc
     except syncmod.PartialRecording as exc:
-        return _stop(performance_id, watch.REJECTED, str(exc),
-                     skip_reason=watch.PARTIAL_UNSUPPORTED)
+        _finish(say, REJECTED, str(exc), skip_reason=PARTIAL_UNSUPPORTED,
+                found=found, edition=edition, winner=winner)
+        return
     except syncmod.SyncError as exc:
-        return _stop(performance_id, watch.FAILED, str(exc))
+        _finish(say, FAILED, str(exc), found=found, edition=edition,
+                winner=winner)
+        return
 
     timeline = pkg._read_measures(alignment.measures_path)       # noqa: SLF001
     if not timeline:
-        return _stop(performance_id, watch.FAILED,
-                     "the alignment produced no measures")
+        _finish(say, FAILED, "the alignment produced no measures",
+                found=found, edition=edition, winner=winner)
+        return
+    _finish(say, READY, f"{len(timeline)} bars of {edition}", found=found,
+            edition=edition, winner=winner,
+            timeline=[[int(m), float(t)] for m, t in timeline],
+            confidence=alignment.span_ratio)
 
-    store.put_sync(performance_id, edition, state="READY", method="align",
-                   confidence=alignment.span_ratio, timeline=timeline)
-    store.set_performance(performance_id, edition=edition)
-    watch.advance(performance_id, watch.QC)
-    watch.advance(performance_id, watch.READY)
 
-    # Measure the engraving now rather than on somebody's page load: it is
-    # a third of a megabyte of SVG parsed once, and the answer never changes.
+def _on_this_disk(edition: str):
+    """The score package on THIS machine's disk, fetched if it is not.
+
+    `library.find` says whether a score is PUBLISHED. Where the bucket is
+    reachable it answers from the catalogue -- entries that name a package
+    without holding a folder of it -- so its `root` is None and cannot be
+    aligned against. The first end-to-end run failed exactly there, on the
+    one link that should have worked: the volunteer runs in the interpreter
+    that has a bucket client, and every engraved link would have ended
+    FAILED with "'NoneType' object has no attribute 'is_dir'". An earlier
+    test had passed only because it ran where no bucket client is installed
+    and the library fell back to the disk.
+
+    The render worker already solved this, and this is its answer: look on
+    disk, fetch the one package from the bucket if it is missing, look
+    again. EXACT NAME ONLY -- `pipeline.find_package` also accepts a
+    fragment, and aligning a performance against the wrong score is worse
+    than not aligning it.
+
+    Fetched but still unreadable means this interpreter cannot load it (an
+    .svg-only package without cairosvg): a host fault, handed back.
+    """
+    def here():
+        found = pipeline.find_package(edition)
+        return found if found is not None and found.name == edition else None
+
+    package = here()
+    if package is not None:
+        return package
     try:
-        viewer.geometry(edition)
-    except Exception:                                            # noqa: BLE001
-        logger.warning("%s: could not pre-measure %s", performance_id, edition,
-                       exc_info=True)
+        landed = scorestore.ensure(edition)
+    except Exception as exc:                                     # noqa: BLE001
+        # The bucket blinked. Not the link's fault, and not final.
+        raise HandBack(f"could not fetch {edition}: {exc}") from exc
+    if landed is None:
+        return None
+    package = here()
+    if package is None:
+        why = (library.unusable_here(edition)
+               or "it is on disk but this machine cannot load it")
+        raise NotUsableHere(f"{edition}: {why}")
+    return package
 
-    logger.info("%s: READY, %d bars of %s", performance_id, len(timeline), edition)
-    return watch.READY
+
+def _finish(say: Say, outcome: str, note: str, *, skip_reason: str = "",
+            found: dict | None = None, **extra) -> None:
+    """The one `prepared` event a task ends with, whatever the outcome."""
+    data = {"outcome": outcome, "note": note, "skip_reason": skip_reason,
+            **(found or {}), **extra}
+    logger.info("prepared -> %s: %s", outcome, note)
+    say("prepared", detail=note, data=data)
 
 
 def _editions(heard) -> list[str]:
@@ -330,51 +339,3 @@ def _editions(heard) -> list[str]:
                 if name not in names:
                     names.append(name)
     return names
-
-
-def _parked_edition(performance_id: str) -> str | None:
-    """Which edition a parked performance was waiting for, if it is here now."""
-    row = store.performance_by_id(performance_id)
-    if row and row["edition"] and library.find(row["edition"]) is not None:
-        return row["edition"]
-    return None
-
-
-def _stop(performance_id: str, state: str, note: str,
-          *, skip_reason: str | None = None) -> str:
-    """Record an outcome and return the state ACTUALLY reached.
-
-    Everything that is not READY comes through here, so there is one place
-    that writes an outcome and one place to read when asking why a link did
-    nothing.
-
-    TWO FIELDS, NOT ONE, and confusing them cost a silent failure.
-    `watch.advance`'s `reason` is a CONTROLLED VOCABULARY -- it becomes
-    `skip_reason` and anything outside SKIP_REASONS is refused -- while
-    `error` is the free text column. This function passed its human
-    sentence as `reason`, so every parked performance raised ValueError on
-    the way into REVIEW.
-
-    AND IT RETURNED THE STATE IT MEANT TO REACH. The exception was caught,
-    logged as a warning and the intended state returned anyway, so
-    `prepare` answered REVIEW while the row sat in IDENTIFYING. A caller
-    that believes that answer parks nothing and retries nothing. The state
-    is now read back from the database and returned, so a move that did not
-    happen cannot be reported as one that did.
-    """
-    extra: dict = {}
-    # The note explains; it is not itself a verdict. Kept only where the
-    # column's name is honest -- a parked performance is not an error, and
-    # what it is waiting for is written on its `edition`.
-    if state in (watch.FAILED, watch.REJECTED, watch.UNAVAILABLE):
-        extra["error"] = note
-    try:
-        row = watch.advance(performance_id, state, reason=skip_reason, **extra)
-        reached = row["state"]
-    except Exception:                                            # noqa: BLE001
-        logger.warning("%s: could not move to %s (%s)", performance_id, state,
-                       note, exc_info=True)
-        current = store.performance_by_id(performance_id)
-        reached = current["state"] if current else state
-    logger.info("%s -> %s: %s", performance_id, reached, note)
-    return reached

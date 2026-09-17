@@ -121,6 +121,16 @@ class Event:
     command: str = ""
     returncode: int | None = None
     stderr_tail: str = ""
+    # What PREPARING A LINK found, for `app.queue.watchledger` to write.
+    # A render's result is a file in the bucket and fits the flat fields
+    # above; preparing a YouTube link produces a verdict, a title, a pianist
+    # and a timeline of every bar, which do not. One dict rather than a dozen
+    # fields only this kind of task would ever set.
+    #
+    # Safe to add without bumping VERSION: `_load` drops fields a reader
+    # does not know, so a web box still on the previous build ignores it
+    # rather than refusing the message.
+    data: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     def to_json(self) -> str:
         return _dump(self, "type")

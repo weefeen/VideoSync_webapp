@@ -159,6 +159,56 @@ def _backdrop_here(style):
     return dataclasses.replace(style, background_path=mine)
 
 
+def handle_prepare(task: RenderTask, publish: Publish) -> bool:
+    """Prepare one YouTube link and report it. False to hand the task back.
+
+    The same contract as a render: everything found leaves as events and
+    nothing here opens the database -- `app.prepare` is written to that rule
+    and `app.queue.watchledger` on the web box does the writing.
+
+    False only for `prepare.HandBack`: a fault of THIS machine (no yt-dlp, no
+    cairosvg, too little memory free). The task then returns to the queue
+    untouched. Any other exception is reported as a FAILED outcome rather
+    than handed back, because a task that breaks the same way every time
+    would otherwise be taken, returned and taken again for ever.
+    """
+    from .. import prepare                          # noqa: PLC0415
+
+    seq = itertools.count(1)
+    me, where = name(), place()
+
+    def say(kind: str, stage: str | None = None, detail: str = "",
+            data: dict | None = None) -> None:
+        try:
+            publish(Event(job_id=task.job_id, type=kind, attempt=task.attempt,
+                          seq=next(seq), worker=me, place=where, stage=stage,
+                          detail=detail, data=dict(data or {})))
+        except Exception:                              # noqa: BLE001
+            # As for a render: a dropped report is recovered by the sweep,
+            # and must not turn finished work into a failure.
+            logger.warning("%s: could not publish %s", task.job_id, kind,
+                           exc_info=True)
+
+    if where != "local":
+        # Belt and braces. Only a volunteer reads the prepare queue, but a
+        # link fetched from a datacentre address is refused by YouTube, so
+        # a misconfigured consumer hands it back rather than burning it.
+        logger.warning("%s: this machine is %r, not a volunteer; handing the "
+                       "link back", task.job_id, where)
+        return False
+    try:
+        prepare.compute(task, say)
+    except prepare.HandBack as exc:
+        logger.warning("%s: handed back -- %s", task.job_id, exc)
+        return False
+    except Exception as exc:                           # noqa: BLE001
+        logger.exception("%s: preparing broke", task.job_id)
+        say("prepared", detail=str(exc),
+            data={"outcome": "FAILED", "note": f"{type(exc).__name__}: {exc}",
+                  "skip_reason": ""})
+    return True
+
+
 def handle_task(task: RenderTask, publish: Publish) -> bool:
     """Run one task and report it. True if it produced a video.
 

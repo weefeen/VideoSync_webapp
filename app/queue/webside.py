@@ -191,6 +191,15 @@ def _apply(event) -> None:
         # the decision is this machine's, so this one is too.
         store.volunteer_seen(getattr(event, "worker", ""))
         return
+    # A PERFORMANCE, NOT A JOB. Preparing a YouTube link reports on the same
+    # events queue as a render, keyed `perf:<id>`; the job ledger would log
+    # each one as an event for an unknown job and drop it. Imported here
+    # rather than at the top because it reaches the share card and the
+    # viewer, which this module has no other reason to load.
+    from . import watchledger                      # noqa: PLC0415
+    if watchledger.is_mine(event):
+        watchledger.apply(event)
+        return
     ledger.apply(event)
 
 
@@ -380,6 +389,14 @@ def _sweep_forever(bus: Transport) -> None:
             sweep(bus)
         except Exception:                         # noqa: BLE001
             logger.exception("the janitor tripped; it will try again")
+        # Links as well as jobs: lost offers re-made, and parked performances
+        # resumed the moment the score they wait for is published. Its own
+        # try, so a fault in one sweep never stops the other.
+        try:
+            from . import watchledger              # noqa: PLC0415
+            watchledger.sweep(bus)
+        except Exception:                         # noqa: BLE001
+            logger.exception("the performance sweep tripped; it will try again")
         # Hourly, not every sweep: it walks the finished jobs, and nothing
         # about it is urgent to the minute.
         if time.time() - last_reclaim > RECLAIM_SECONDS:

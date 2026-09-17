@@ -50,6 +50,8 @@ class Transport(Protocol):
 
     def publish_task(self, task: RenderTask) -> None: ...
     def consume_tasks(self, handle: Callable[[RenderTask, Ack], None], accept=None) -> None: ...
+    def take_prepare(self, handle: "Callable[[RenderTask], bool]") -> str: ...
+    def prepare_depth(self) -> int | None: ...
     def publish_event(self, event: Event) -> None: ...
     def consume_events(self, apply: Callable[[Event], None]) -> None: ...
     def render_depth(self) -> tuple[int, int] | None: ...
@@ -68,13 +70,39 @@ class LocalTransport:
 
     def __init__(self) -> None:
         self._tasks: queue.Queue[str] = queue.Queue()
+        # Preparing a link has its own queue here for the same reasons it
+        # has one on the broker -- see PREPARE_QUEUE.
+        self._prepare: queue.Queue[str] = queue.Queue()
         self._events: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
         self._in_flight = 0
 
     # -- down ------------------------------------------------------------
     def publish_task(self, task: RenderTask) -> None:
+        if task.kind == PREPARE_KIND:
+            self._prepare.put(task.to_json())
+            return
         self._tasks.put(task.to_json())
+
+    def take_prepare(self, handle: "Callable[[RenderTask], bool]") -> str:
+        """Run at most one waiting link, now. 'none', 'done' or 'declined'.
+
+        Polled, not consumed: see `AmqpTransport.take_prepare`, which this
+        mirrors so the decline path exists on a machine with no broker.
+        """
+        try:
+            body = self._prepare.get_nowait()
+        except queue.Empty:
+            return "none"
+        try:
+            task = RenderTask.from_json(body)
+        except Exception:                         # noqa: BLE001
+            logger.exception("unreadable prepare task, dropped: %.400s", body)
+            return "done"
+        if handle(task):
+            return "done"
+        self._prepare.put(body)
+        return "declined"
 
     def consume_tasks(self, handle: Callable[[RenderTask, Ack], None], accept=None) -> None:
         """Take tasks and run them, one at a time, forever."""
@@ -130,12 +158,34 @@ class LocalTransport:
         with self._lock:
             return self._tasks.qsize() + self._in_flight, 1
 
+    def prepare_depth(self) -> int | None:
+        """Links waiting to be prepared."""
+        return self._prepare.qsize()
+
 
 # --------------------------------------------------------------------------
 # the broker
 # --------------------------------------------------------------------------
 RENDER_QUEUE = "vsw.render"
 EVENTS_QUEUE = "vsw.events"
+
+# PREPARING A YOUTUBE LINK IS NOT A RENDER, and must not queue as one.
+#
+#   * The scaler rents a paid node from the depth of `vsw.render`. A link
+#     waiting there would count as render work, rent a machine, and that
+#     machine could not take it -- a link has to be fetched from a
+#     residential address, and a node is a datacentre one. Paid for, and
+#     then refused for ever.
+#   * Anything consuming `vsw.render` without an accept rule -- the web
+#     box's own worker, an image built before this existed -- could take a
+#     link and ask YouTube for it from exactly the address YouTube refuses.
+#
+# So links wait here, the only thing that reads this queue is a volunteer,
+# and only between renders: preparing aligns a recording, a render aligns
+# one too, and two DTW matrices at once is the out-of-memory failure
+# `tools/volunteer.py` exists to prevent.
+PREPARE_QUEUE = "vsw.prepare"
+PREPARE_KIND = "prepare"
 DEAD_EXCHANGE = "vsw.dlx"
 
 # Declared by BOTH sides on every connect, from this one table, so the two
@@ -156,8 +206,15 @@ TOPOLOGY = {
                    "x-consumer-timeout": 10_800_000,
                    "x-max-priority": 10},
     EVENTS_QUEUE: {"x-dead-letter-exchange": DEAD_EXCHANGE},
+    # The render queue's arguments, set on day one for the same reason: the
+    # broker refuses to redeclare a queue with different ones. Preparing is
+    # minutes rather than hours, but a delivery timeout that ends a slow
+    # alignment half way is the failure the render queue already learned.
+    PREPARE_QUEUE: {"x-dead-letter-exchange": DEAD_EXCHANGE,
+                    "x-consumer-timeout": 10_800_000},
     f"{RENDER_QUEUE}.dead": {},
     f"{EVENTS_QUEUE}.dead": {},
+    f"{PREPARE_QUEUE}.dead": {},
 }
 
 
@@ -169,7 +226,7 @@ def declare(channel) -> None:
         channel.queue_declare(queue=name, durable=True, arguments=arguments)
     # Dead letters keep their original routing key, so one exchange serves
     # both queues and each lands somewhere named after where it came from.
-    for name in (RENDER_QUEUE, EVENTS_QUEUE):
+    for name in (RENDER_QUEUE, EVENTS_QUEUE, PREPARE_QUEUE):
         channel.queue_bind(f"{name}.dead", DEAD_EXCHANGE, routing_key=name)
 
 
@@ -242,7 +299,75 @@ class AmqpTransport:
 
     # -- down ------------------------------------------------------------
     def publish_task(self, task: RenderTask) -> None:
-        self._publish(RENDER_QUEUE, task.to_json())
+        queue_name = PREPARE_QUEUE if task.kind == PREPARE_KIND else RENDER_QUEUE
+        self._publish(queue_name, task.to_json())
+
+    def take_prepare(self, handle: "Callable[[RenderTask], bool]") -> str:
+        """Run at most one waiting link, now. 'none', 'done' or 'declined'.
+
+        POLLED WITH basic_get, NOT CONSUMED. A consumer is handed a delivery
+        the moment one arrives, and this machine may be half way through a
+        render when it does -- so the link would sit unacknowledged behind
+        twenty minutes of encoding when it could have gone elsewhere. Asked
+        for only when the volunteer is idle, a link is either done now or
+        not taken at all.
+
+        `handle` returns False to hand the task back. A host fault -- no
+        yt-dlp, no cairosvg, not enough memory free -- is this machine's
+        problem and not the link's, so the link returns to the queue intact.
+        """
+        connection = self._open()
+        try:
+            channel = connection.channel()
+            if self._may_declare:
+                declare(channel)
+            method, _props, body = channel.basic_get(PREPARE_QUEUE,
+                                                     auto_ack=False)
+            if method is None:
+                return "none"
+            try:
+                task = RenderTask.from_json(body)
+            except Exception:                     # noqa: BLE001
+                logger.exception("unreadable prepare task, dead-lettering: "
+                                 "%.400s", body)
+                channel.basic_reject(method.delivery_tag, requeue=False)
+                return "done"
+
+            outcome = {"ok": False}
+            done = threading.Event()
+
+            def run() -> None:
+                try:
+                    outcome["ok"] = bool(handle(task))
+                except Exception:                 # noqa: BLE001
+                    # `handle` reports its own failures as events. Reaching
+                    # here means the reporting broke, so the link goes back
+                    # rather than being acknowledged as finished.
+                    logger.exception("preparing %s raised past its own "
+                                     "reporting", task.job_id)
+                finally:
+                    done.set()
+
+            threading.Thread(target=run, name=f"prepare-{task.job_id}",
+                             daemon=True).start()
+            try:
+                # The reason `_run_off_thread` exists: a BlockingConnection
+                # services heartbeats only while control is back with it,
+                # and an alignment is minutes of silence otherwise.
+                while not done.wait(timeout=0):
+                    connection.process_data_events(time_limit=1.0)
+            except KeyboardInterrupt:
+                with contextlib.suppress(Exception):
+                    channel.basic_reject(method.delivery_tag, requeue=True)
+                raise
+            if outcome["ok"]:
+                channel.basic_ack(method.delivery_tag)
+                return "done"
+            channel.basic_reject(method.delivery_tag, requeue=True)
+            return "declined"
+        finally:
+            with contextlib.suppress(Exception):
+                connection.close()
 
     def consume_tasks(self, handle: Callable[[RenderTask, Ack], None], accept=None) -> None:
         """Take one task at a time and run it, reconnecting for ever."""
@@ -402,6 +527,29 @@ class AmqpTransport:
                     connection.close()
         except Exception as exc:                  # noqa: BLE001
             logger.warning("could not measure the queue: %s", exc)
+            return None
+
+    def prepare_depth(self) -> int | None:
+        """Links waiting to be prepared, or None if the broker could not say.
+
+        READY messages only: a link a volunteer has taken and is working on
+        is unacknowledged and not counted, which the sweep allows for with
+        its grace periods rather than by guessing at in-flight work.
+        """
+        try:
+            connection = self._open()
+            try:
+                channel = connection.channel()
+                if self._may_declare:
+                    declare(channel)
+                result = channel.queue_declare(
+                    queue=PREPARE_QUEUE, durable=True, passive=True)
+                return result.method.message_count
+            finally:
+                with contextlib.suppress(Exception):
+                    connection.close()
+        except Exception as exc:                  # noqa: BLE001
+            logger.warning("could not measure the prepare queue: %s", exc)
             return None
 
 

@@ -92,6 +92,58 @@ def _argv() -> list[str]:
     return where.split(" ") if " -m " in where else [where]
 
 
+def ensure_current(stamp: pathlib.Path, *, every: float = 86400.0) -> str:
+    """Upgrade yt-dlp in THIS interpreter, at most once per `every` seconds.
+
+    ON THE MACHINE THAT DOWNLOADS. This was a systemd timer on the web box,
+    written when the web box was going to fetch; once fetching moved to the
+    volunteer -- YouTube refuses datacentre addresses -- that timer kept a
+    copy nobody used up to date, while the one that mattered sat at
+    2025.03.31 on a desktop. YouTube changes how a stream is addressed every
+    few weeks and a stale yt-dlp then fails every download with a message
+    about formats, so the check lives with the downloads.
+
+    The same interpreter the downloads run under (`sys.executable -m
+    yt_dlp`), so the upgrade reaches the copy actually used, and it takes
+    effect on the next download without a restart because each download is
+    its own process. Returns the version afterwards, '' if unknown. Never
+    raises: a failed upgrade leaves the previous version working.
+    """
+    import time as _time
+    try:
+        if stamp.is_file() and _time.time() - stamp.stat().st_mtime < every:
+            return version()
+    except OSError:
+        pass
+    before = version()
+    try:
+        done = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "--quiet",
+             "yt-dlp"], capture_output=True, text=True, timeout=600)
+        if done.returncode != 0:
+            logger.warning("could not upgrade yt-dlp (staying on %s): %s",
+                           before or "none",
+                           (done.stderr or done.stdout or "").strip()[-300:])
+            return before
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("could not upgrade yt-dlp (staying on %s): %s",
+                       before or "none", exc)
+        return before
+    global _BINARY
+    _BINARY = False                   # it may not have been installed before
+    after = version()
+    try:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+    except OSError:
+        pass
+    if after != before:
+        logger.info("yt-dlp upgraded %s -> %s", before or "none", after)
+    else:
+        logger.info("yt-dlp is current (%s)", after)
+    return after
+
+
 def version() -> str:
     """The yt-dlp version string, or '' if it cannot be asked.
 

@@ -1931,6 +1931,26 @@ def _preview_names() -> set:
         return set()
 
 
+@bp.get("/api/performance/<public_id>/state")
+def api_performance_state(public_id: str):
+    """Where one performance has got to, and nothing else.
+
+    What the upload page asks every few seconds while a link it submitted
+    is being prepared. The full `/api/performance/<id>` carries every bar
+    and where it sits -- tens of kilobytes for a long piece -- which is the
+    wrong thing to fetch on a timer to learn one word.
+    """
+    row = store.performance(public_id)
+    if row is None:
+        return jsonify({"error": "No such performance."}), 404
+    response = jsonify({"id": row["public_id"], "state": row["state"],
+                        "title": row["title"] or "",
+                        "performer": row["performer"] or "",
+                        "skip_reason": row["skip_reason"] or ""})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @bp.get("/api/performance/<public_id>")
 def api_performance(public_id: str):
     """One performance, with its bars and where they sit.
@@ -1974,6 +1994,11 @@ def api_watch():
         return jsonify({"error": str(exc)}), 400
     if made:
         limits.charge("watch_ip", who)
+        # Offered the moment it exists. A failure to publish is not the
+        # visitor's problem -- the sweep offers anything the queue is short
+        # of -- so the answer below is the same either way.
+        from .queue import watchledger              # noqa: PLC0415
+        watchledger.offer(performance["id"])
     return jsonify({"id": performance["public_id"],
                     "state": performance["state"],
                     "created": made,
@@ -2191,6 +2216,13 @@ def api_ingest():
             reference=(data.get("reference") or "").strip())
     except youtube.NotYouTube as exc:
         return jsonify({"error": str(exc)}), 400
+    if made:
+        # A collector's find is prepared like a pasted link. Its lower
+        # priority decides nothing on this queue yet -- one volunteer takes
+        # links in the order they arrive -- and is recorded for when that
+        # changes.
+        from .queue import watchledger              # noqa: PLC0415
+        watchledger.offer(performance["id"])
     return jsonify({"id": performance["public_id"],
                     "state": performance["state"],
                     "priority": performance["priority"],

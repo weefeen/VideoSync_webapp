@@ -74,10 +74,23 @@ rabbitmqctl -q add_user vsw-compute "$COMPUTE_PASS" >/dev/null
 # connected, consumed, rendered, and then could not report the result --
 # "ACCESS_REFUSED - write access to exchange 'amq.default'". Configure stays
 # empty: a node still may not declare, delete or reshape anything.
+# READ vsw.prepare TOO. A volunteer connects as this user and prepares
+# YouTube links from that queue between renders; without read on it, every
+# poll is ACCESS_REFUSED and a pasted link waits for ever with nothing
+# saying why. A rented node holds the same permission and never uses it --
+# it does not read that queue, and a link must not be fetched from a
+# datacentre address anyway.
+#
+# ON AN EXISTING BROKER, DO NOT RE-RUN THIS SCRIPT to get it: it deletes and
+# recreates the user with a new password, which disconnects every volunteer
+# and node. Set the permission on its own instead:
+#   rabbitmqctl set_permissions -p vsw vsw-compute '^$' \
+#     '^(amq\.default|vsw\.events|vsw\.render)$' \
+#     '^(vsw\.events|vsw\.render|vsw\.prepare)$'
 rabbitmqctl -q set_permissions -p vsw vsw-compute \
     '^$' '^(amq\.default|vsw\.events|vsw\.render)$' \
-    '^(vsw\.events|vsw\.render)$' >/dev/null
-echo "  user vsw-compute created, limited to vsw.render and vsw.events"
+    '^(vsw\.events|vsw\.render|vsw\.prepare)$' >/dev/null
+echo "  user vsw-compute created, limited to vsw.render, vsw.prepare and vsw.events"
 
 # THE FIREWALL HAS TO LET THEM IN. ufw allows 22/80/443 and nothing else, so
 # a node on the VLAN could reach the broker's port only after this rule --

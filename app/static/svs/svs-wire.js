@@ -2414,24 +2414,93 @@ function linkRefused(reason){
   centerOn('#linkbox', 60);
 }
 
-function linkPending(vid, state){
+/* What each kind of state is called in the heading. The heading used to
+   say "It is not ready to watch yet" whatever the state -- which is a
+   promise, and for a video we have refused or a piece nobody has engraved
+   it is a promise the page cannot keep. */
+const LINK_WORKING = ['DISCOVERED', 'VALIDATING', 'IDENTIFYING',
+                      'READY_FOR_SYNC', 'SYNCHRONISING', 'QC'];
+const LINK_REFUSED = ['REJECTED', 'UNAVAILABLE', 'FAILED'];
+
+function linkPending(vid, state, opts){
+  opts = opts || {};
   const box = linkBox();
   box.className = 'linkbox';
+  let heading, after;
+  if(state === 'REVIEW'){
+    heading = 'Its score is not <em>engraved</em> yet';
+    after = ' We keep the link, and it opens with the score as soon as the score is made.';
+  }else if(LINK_REFUSED.indexOf(state) >= 0){
+    heading = 'We cannot <em>follow</em> this one';
+    after = '';
+  }else if(opts.queued){
+    heading = 'It is <em>queued</em>';
+    after = ' It is prepared as soon as a machine is free; you can close this page.';
+  }else{
+    heading = 'Preparing it to <em>watch</em>';
+    after = ' Keep this page open and it opens the performance when it is ready.';
+  }
   /* YouTube's own still, straight from their CDN — the one picture we can
      show without having fetched, stored or re-encoded anything. */
   box.innerHTML = '<img src="https://i.ytimg.com/vi/'
     + encodeURIComponent(vid) + '/mqdefault.jpg" alt="" loading="lazy"/>'
     + '<div>'
-    + '<span class="lab">we have this performance</span>'
-    + '<h3>It is not ready to <em>watch</em> yet</h3>'
-    + '<p>' + esc(stateInWords(state)) + ' Nothing more is needed from you. '
+    + '<span class="lab">' + esc(opts.title || 'we have this performance') + '</span>'
+    + '<h3>' + heading + '</h3>'
+    + '<p>' + esc(stateInWords(state)) + esc(after) + ' '
     + '<button class="linkdrop" type="button" id="linkdismiss">dismiss</button></p>'
     + '</div>';
   const img = box.querySelector('img');
   if(img) img.onerror = function(){ this.style.visibility = 'hidden'; };
   const x = $('#linkdismiss');
   if(x) x.onclick = clearLinkBox;
-  centerOn('#linkbox', 60);
+  /* Centred once. Redrawn every time the state moves, and scrolling the
+     page back to the box on each redraw would fight anybody reading
+     anything else. */
+  if(!opts.quiet) centerOn('#linkbox', 60);
+}
+
+/* ── following a link until it can be watched ───────────────────────────
+   Preparing is a download, a recognition and an alignment: about three
+   minutes for a seven-minute piece when a volunteer is free, and nothing at
+   all until one is. So the page asks where the performance has got to,
+   says so in words, and opens it the moment it is READY.
+
+   It STOPS ASKING when the answer is settled -- refused, or waiting for an
+   engraving that may be weeks away -- and after half an hour of no
+   progress, when it says the link is queued rather than implying somebody
+   is working on it now. */
+const FOLLOW_EVERY = 5000;
+const FOLLOW_FOR = 30 * 60 * 1000;
+
+function followLink(vid, id){
+  const began = Date.now();
+  let last = '', lastMove = Date.now();
+  const tick = async () => {
+    if(!$('#linkbox')) return;                       // dismissed
+    let d;
+    try{
+      const r = await fetch('/api/performance/' + encodeURIComponent(id) + '/state',
+                            {cache: 'no-store'});
+      if(!r.ok) throw new Error(String(r.status));
+      d = await r.json();
+    }catch(err){
+      setTimeout(tick, FOLLOW_EVERY * 2);            // the network blinked
+      return;
+    }
+    if(d.state === 'READY'){ location.href = '/p/' + encodeURIComponent(id); return; }
+    if(d.state !== last){ last = d.state; lastMove = Date.now(); }
+    const title = d.performer && d.title ? d.title : '';
+    if(d.state === 'REVIEW' || LINK_REFUSED.indexOf(d.state) >= 0){
+      linkPending(vid, d.state, {quiet: true, title: title});
+      return;
+    }
+    const stalled = Date.now() - lastMove > FOLLOW_FOR;
+    linkPending(vid, d.state, {quiet: true, title: title, queued: stalled});
+    if(stalled || Date.now() - began > 4 * FOLLOW_FOR) return;
+    setTimeout(tick, FOLLOW_EVERY);
+  };
+  setTimeout(tick, FOLLOW_EVERY);
 }
 
 /* The state vocabulary is watch.py's. Said in words rather than shown as a
@@ -2440,8 +2509,11 @@ function linkPending(vid, state){
    somebody. */
 function stateInWords(state){
   switch(state){
-    case 'DISCOVERED':
-    case 'VALIDATING':   return 'We have taken the link and are looking at the video.';
+    /* DISCOVERED is WAITING, not working. With a real queue behind it a
+       link can sit here until a volunteer is free, and "we are looking at
+       the video" would be said about nothing happening. */
+    case 'DISCOVERED':   return 'We have the link, and it is waiting its turn.';
+    case 'VALIDATING':   return 'We are looking at the video.';
     case 'IDENTIFYING':  return 'We are working out which piece is being played.';
     case 'NEEDS_WORK_CONFIRMATION':
     case 'REVIEW':       return 'We know the piece. The score it needs has not been engraved yet.';
@@ -2493,6 +2565,9 @@ async function handleDroppedLink(text){
      telling them plainly that it is not ready. */
   if(data.state === 'READY' && data.where){ location.href = data.where; return; }
   linkPending(vid, data.state);
+  if(data.id && data.state !== 'REVIEW' && LINK_REFUSED.indexOf(data.state) < 0){
+    followLink(vid, data.id);
+  }
 }
 
 /* ── wiring ───────────────────────────────────────────────────────────

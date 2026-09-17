@@ -67,6 +67,7 @@ os.environ.setdefault("VSW_PLACE", "local")
 
 from app import render as rnd                   # noqa: E402
 from app import scorestore, storage, store      # noqa: E402
+from app import fetchaudio                      # noqa: E402
 from app import settings as settings_mod        # noqa: E402
 from app import svg as appsvg                   # noqa: E402
 from app.queue import webside, worker           # noqa: E402
@@ -88,6 +89,19 @@ QUIET_POLL = 5.0
 # Set while a render is in flight, so the library warmer gets out of the way
 # -- the visitor's own upload is coming down the same connection.
 _rendering = threading.Event()
+
+# ONE PIECE OF WORK AT A TIME: a render or a link, never both. Both align a
+# recording, and two DTW matrices at once is the out-of-memory failure the
+# memory gate below exists to prevent. A render delivered while a link is
+# being prepared waits here for it -- minutes -- with its delivery held and
+# its heartbeats still answered.
+_work_lock = threading.Lock()
+
+# How long to leave the link queue alone after handing a link back. A host
+# fault (no cairosvg, too little memory) will fault again on the next poll,
+# and taking and returning the same link every few seconds helps nobody.
+PREPARE_IDLE = 30.0
+PREPARE_BACKOFF = 600.0
 
 # What this machine is doing, for the page to show. Held here rather than
 # asked of the web box: everything a render reports goes to the BROKER, so
@@ -440,13 +454,68 @@ def _watch_mode(panel, stop: threading.Event) -> None:
 
 def _handle(task, ack) -> None:
     """The worker's own handler, with the warmer held off around it."""
-    _rendering.set()
-    _job_started(task)
-    try:
-        webside._handle(task, ack, observe=_job_event)  # noqa: SLF001
-    finally:
-        _rendering.clear()
-        _job_finished()
+    with _work_lock:
+        _rendering.set()
+        _job_started(task)
+        try:
+            webside._handle(task, ack, observe=_job_event)  # noqa: SLF001
+        finally:
+            _rendering.clear()
+            _job_finished()
+
+
+def _prepare_loop(bus, stop: threading.Event) -> None:
+    """Prepare YouTube links, one at a time, whenever nothing else is running.
+
+    Polled rather than consumed -- see `transport.take_prepare` -- so a link
+    is only ever taken by a machine that is free to do it now.
+    """
+    stamp = settings.work_dir / ".yt-dlp-checked"
+    while not stop.is_set():
+        if _paused.is_set() or _rendering.is_set():
+            stop.wait(PREPARE_IDLE)
+            continue
+        # Checked here rather than once at start: a volunteer left running
+        # for a week must not drift a week behind YouTube.
+        fetchaudio.ensure_current(stamp)
+        if not _work_lock.acquire(blocking=False):
+            stop.wait(PREPARE_IDLE)
+            continue
+        try:
+            result = bus.take_prepare(_prepare_one(bus))
+        except Exception:                              # noqa: BLE001
+            logger.warning("could not look at the link queue", exc_info=True)
+            result = "none"
+        finally:
+            _work_lock.release()
+        if result == "done":
+            stop.wait(2.0)                # there may be another one waiting
+        elif result == "declined":
+            logger.info("a link was handed back; leaving the link queue alone "
+                        "for %.0f minutes", PREPARE_BACKOFF / 60)
+            stop.wait(PREPARE_BACKOFF)
+        else:
+            stop.wait(PREPARE_IDLE)
+
+
+def _prepare_one(bus):
+    def handle(task) -> bool:
+        _rendering.set()                  # keeps the warmer off the line too
+        with _job_lock:
+            global _job
+            _job = {"id": task.job_id,
+                    "piece": "a YouTube link " + (task.meta or {}).get("video_id", ""),
+                    "minutes": None, "stage": "prepare", "detail": "",
+                    "began": time.time()}
+        try:
+            def publish(event) -> None:
+                _job_event(event)
+                bus.publish_event(event)
+            return worker.handle_prepare(task, publish)
+        finally:
+            _rendering.clear()
+            _job_finished()
+    return handle
 
 
 def main() -> int:
@@ -498,6 +567,8 @@ def main() -> int:
     threading.Thread(target=_beat, args=(bus, stop), name="beat",
                      daemon=True).start()
     threading.Thread(target=_warm, args=(stop,), name="warm",
+                     daemon=True).start()
+    threading.Thread(target=_prepare_loop, args=(bus, stop), name="links",
                      daemon=True).start()
     threading.Thread(target=_keys, args=(stop,), name="keys",
                      daemon=True).start()
