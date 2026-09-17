@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+from html import escape
 import logging
 import os
 import pathlib
@@ -1952,12 +1953,26 @@ def api_watch():
     """
     data = request.get_json(silent=True) or request.form
     link = (data.get("url") or data.get("link") or "").strip()
+
+    # CHECKED BEFORE, CHARGED AFTER, and only for a video we did not already
+    # hold. `resolve` is idempotent by design and by database, so a link
+    # somebody shares twice costs a lookup and returns the performance we
+    # already made -- charging for that would put a price on sharing
+    # something that works. What is rationed is the NEW link, because that
+    # is what buys a download, a recognition and an alignment.
+    who = limits.client_key(request)
+    refusal = limits.peek("watch_ip", who)
+    if refusal is not None:
+        return (jsonify({"error": str(refusal)}), 429,
+                {"Retry-After": str(refusal.retry_after)})
     try:
         performance, made = watch.resolve(link, source_type=watch.USER_PASTE)
     except youtube.NotYouTube as exc:
         # The visitor's words, not a stack trace: this is the most common
         # thing to get wrong and the message is the whole of the help.
         return jsonify({"error": str(exc)}), 400
+    if made:
+        limits.charge("watch_ip", who)
     return jsonify({"id": performance["public_id"],
                     "state": performance["state"],
                     "created": made,
@@ -1978,10 +1993,74 @@ def watch_page(public_id: str):
     page = _viewer_html()
     if page is None:
         return jsonify({"error": "The viewer is not installed here."}), 500
-    body = page.replace("__PERFORMANCE__", json.dumps(viewer.payload(row)))
+    payload = viewer.payload(row)
+    body = page.replace("__PERFORMANCE__", json.dumps(payload))
+    body = body.replace("<title>Watch With Score</title>",
+                        _watch_head(payload, public_id), 1)
     response = Response(body, mimetype="text/html")
+    # no-store for the PAGE, which carries a performance's current state and
+    # must not come back from a cache after it changes. Crawlers are
+    # unaffected: they read it once, when the link is shared, and keep their
+    # own copy of what they found.
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+def _watch_head(payload: dict, public_id: str) -> str:
+    """Title and share card for one performance.
+
+    WHAT A SHARED LINK LOOKS LIKE. `/app/` has carried these tags since it
+    was built and this page never did, so a performance posted to the Chopin
+    group arrived as a bare URL: no picture, no title, nothing saying it is
+    a score that follows the playing. The note beside `/app/`'s own tags
+    says a per-piece card "would need the job in the path and the server to
+    render these tags for it, which is the next step" -- on this route the
+    id IS in the path, so this is that step.
+
+    THE PICTURE IS YOUTUBE'S OWN STILL, not a card we draw. A performance
+    here is somebody else's video that we never download a frame of, so
+    there is no footage to build a card from, and their thumbnail is the one
+    image certainly of this performance -- already the right shape, already
+    on a CDN. `tools/make_share_card.py` stays what it is for: a video WE
+    rendered.
+    """
+    piece = (payload.get("title") or "").strip()
+    who = (payload.get("performer") or "").strip()
+    bars = payload.get("total_bars")
+    base = (settings.public_base_url or "").rstrip("/")
+    url = f"{base}/p/{public_id}" if base else f"/p/{public_id}"
+
+    headline = f"{piece} — with the score" if piece else "Chopin, with the score"
+    told = f"{who}, played" if who else "Played"
+    blurb = (f"{told} with the engraved score following bar by bar"
+             + (f", all {bars} of them." if bars else ".")
+             + " Click any bar to hear it from there.")
+
+    vid = ((payload.get("media") or {}).get("external_id") or "").strip()
+    # hqdefault, not maxresdefault: the larger one is absent on plenty of
+    # uploads and YouTube answers 404 rather than falling back, which would
+    # leave the card with a broken picture. 480x360 clears Facebook's 200px
+    # floor comfortably.
+    image = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else ""
+
+    tags = [f"<title>{escape(headline)}</title>",
+            f'<meta name="description" content="{escape(blurb)}"/>',
+            '<meta property="og:type" content="video.other"/>',
+            '<meta property="og:site_name" content="Chopin · Weefeen"/>',
+            f'<meta property="og:title" content="{escape(headline)}"/>',
+            f'<meta property="og:description" content="{escape(blurb)}"/>',
+            f'<meta property="og:url" content="{escape(url)}"/>']
+    if image:
+        tags += [f'<meta property="og:image" content="{escape(image)}"/>',
+                 '<meta property="og:image:width" content="480"/>',
+                 '<meta property="og:image:height" content="360"/>',
+                 '<meta name="twitter:card" content="summary_large_image"/>',
+                 f'<meta name="twitter:image" content="{escape(image)}"/>']
+    else:
+        tags.append('<meta name="twitter:card" content="summary"/>')
+    tags += [f'<meta name="twitter:title" content="{escape(headline)}"/>',
+             f'<meta name="twitter:description" content="{escape(blurb)}"/>']
+    return "\n".join(tags)
 
 
 def _viewer_html() -> str | None:
