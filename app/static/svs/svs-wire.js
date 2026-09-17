@@ -2570,6 +2570,164 @@ async function handleDroppedLink(text){
   }
 }
 
+/* ── drop anywhere on the page ────────────────────────────────────────
+   The dropzone was the only place a drop counted, and it is a box in the
+   middle of a long page: a video or a link let go a few centimetres off it
+   did nothing -- or, for a file, the browser opened the video in the tab
+   and the page was gone. People drop onto a WINDOW, not a rectangle.
+
+   So on the upload step the whole window takes the drop, and the moment
+   something is dragged over it a veil says, in the site's own words, that
+   it is fine to let go -- and which of the two things it is about to
+   receive, because a video and a link go to different places.
+
+   ONLY ON THE UPLOAD STEP. Later steps have drop targets of their own (the
+   inspector, a backdrop image), and those keep working exactly as before.
+   And not while an upload is running: the dropzone is lent to its progress
+   rail then, and a second drop is refused rather than started. */
+const veilCSS = document.createElement('style');
+veilCSS.textContent = `
+  .dropveil{position:fixed;inset:0;z-index:300;display:none;align-items:center;
+    justify-content:center;background:rgba(246,241,232,.93);
+    -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+  .dropveil.on{display:flex}
+  /* Everything inside ignores the pointer, so the drop lands on the veil
+     itself and there is exactly one place that handles it. */
+  .dropveil *{pointer-events:none}
+  .dropveil .vframe{position:absolute;inset:18px;border:2px dashed var(--b3);
+    border-radius:10px;animation:veilpulse 1.6s ease-in-out infinite}
+  @keyframes veilpulse{0%,100%{border-color:rgba(102,56,147,.45)}
+    50%{border-color:rgba(102,56,147,1)}}
+  .dropveil .vinner{text-align:center;padding:0 24px}
+  .dropveil .vglyph{width:84px;height:84px;margin:0 auto 24px;display:grid;
+    place-items:center;border:1px solid var(--b3);border-radius:50%;
+    color:var(--b3);background:#fdfbf7;
+    box-shadow:0 10px 30px rgba(102,56,147,.12)}
+  .dropveil h2{font-family:Fraunces,serif;font-weight:300;letter-spacing:-.02em;
+    font-size:clamp(30px,4.2vw,46px);line-height:1.1;margin:0;color:var(--ink)}
+  .dropveil h2 em{font-style:italic;color:var(--b2)}
+  .dropveil .lab{display:block;margin-top:16px}
+  @media (prefers-reduced-motion:reduce){.dropveil .vframe{animation:none}}
+`;
+document.head.appendChild(veilCSS);
+
+const VEIL_ICON = {
+  file: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V3"/><path d="M7.5 7.5 12 3l4.5 4.5"/><path d="M3.5 14v4.5A2.5 2.5 0 0 0 6 21h12a2.5 2.5 0 0 0 2.5-2.5V14"/></svg>',
+  link: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>'
+};
+const VEIL_WORDS = {
+  file: '<h2>Drop your <em>performance</em> video</h2>'
+      + '<span class="lab">anywhere on the page &mdash; mp4 · mov · avi · mkv · webm</span>',
+  /* "the link", never "the YouTube link": what is being dragged cannot be
+     read until it is dropped, so the veil does not claim to know. */
+  link: '<h2>Drop the <em>link</em></h2>'
+      + '<span class="lab">anywhere on the page &mdash; we find the performance</span>'
+};
+
+function fileRefused(name){
+  const box = linkBox();
+  box.className = 'linkbox bad';
+  box.innerHTML = '<div>'
+    + '<span class="lab"><span class="alert">not a video</span></span>'
+    + '<p><b>' + esc(name) + '</b> is not a video file. A recording of the '
+    + 'performance works &mdash; mp4, mov, avi, mkv or webm &mdash; or a '
+    + 'YouTube link. '
+    + '<button class="linkdrop" type="button" id="linkdismiss">dismiss</button></p>'
+    + '</div>';
+  const x = $('#linkdismiss');
+  if(x) x.onclick = clearLinkBox;
+  centerOn('#linkbox', 60);
+}
+
+(function(){
+  const drop = $('#drop');
+  if(!drop) return;
+  const veil = document.createElement('div');
+  veil.className = 'dropveil';
+  veil.id = 'dropveil';
+  veil.setAttribute('aria-hidden', 'true');
+  veil.innerHTML = '<div class="vframe"></div><div class="vinner">'
+                 + '<div class="vglyph"></div><div class="vwords"></div></div>';
+  document.body.appendChild(veil);
+
+  let shown = '', internal = false;
+  const onUploadStep = () => !!drop.offsetParent && !drop.classList.contains('busy');
+  const kindOf = (dt) => dragHasFile(dt) ? 'file' : (dragHasText(dt) ? 'link' : '');
+
+  function show(kind){
+    if(shown === kind) return;
+    shown = kind;
+    veil.querySelector('.vglyph').innerHTML = VEIL_ICON[kind];
+    veil.querySelector('.vwords').innerHTML = VEIL_WORDS[kind];
+    veil.classList.add('on');
+  }
+  function hide(){
+    shown = '';
+    veil.classList.remove('on');
+  }
+
+  /* A drag that STARTED on this page -- text somebody selected, an image
+     on it -- is not somebody bringing a video or a link in, and must not
+     raise the veil. */
+  document.addEventListener('dragstart', () => { internal = true; });
+  document.addEventListener('dragend', () => { internal = false; hide(); });
+
+  window.addEventListener('dragenter', function(e){
+    if(internal || !onUploadStep()) return;
+    const kind = kindOf(e.dataTransfer);
+    if(!kind) return;
+    e.preventDefault();
+    show(kind);
+  });
+  veil.addEventListener('dragover', function(e){
+    e.preventDefault();
+    try{ e.dataTransfer.dropEffect = 'copy'; }catch(err){ /* read-only */ }
+  });
+  /* Out of the window: Chrome and Firefox report no relatedTarget when the
+     pointer leaves the page altogether, which is the only leave that should
+     take the veil down -- every other one is the pointer crossing the veil. */
+  veil.addEventListener('dragleave', function(e){
+    if(!e.relatedTarget) hide();
+  });
+  veil.addEventListener('drop', function(e){
+    e.preventDefault();
+    e.stopPropagation();
+    hide();
+    const dt = e.dataTransfer;
+    if(dragHasFile(dt)){
+      const f = dt.files && dt.files[0];
+      if(!f) return;
+      if(f.type && f.type.indexOf('video/') !== 0){ fileRefused(f.name); return; }
+      clearLinkBox();
+      /* The same door the dropzone uses: the rights gate first, then the
+         upload `#rightsGo` already starts. Nothing about a video dropped
+         here is different from one dropped on the box. */
+      pendingBlob = f;
+      askRights(f.name);
+      return;
+    }
+    const text = droppedText(dt);
+    if(!text) return;
+    clearLinkBox();
+    const field = $('#linkurl');
+    if(field) field.value = text;
+    handleDroppedLink(text);
+  });
+
+  /* On the upload step, a FILE let go outside the veil (it can happen in the
+     instant before the veil is drawn) must not become the browser opening
+     the video and throwing the page away. Other steps are left alone: their
+     own drop targets decide. */
+  ['dragover', 'drop'].forEach(function(ev){
+    window.addEventListener(ev, function(e){
+      if(!onUploadStep() || e.target === veil) return;
+      if(e.target === drop || drop.contains(e.target)) return;
+      e.preventDefault();
+      if(ev === 'drop') hide();
+    });
+  });
+})();
+
 /* ── a link you can SEE ───────────────────────────────────────────────
    Dropping a link onto the dropzone and the /app/?url= address both worked,
    and nothing on the page said so: the dropzone reads "Drop your
