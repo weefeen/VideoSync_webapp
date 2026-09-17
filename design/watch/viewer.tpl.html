@@ -204,6 +204,29 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 .vwork{flex:1;min-width:0;font-family:Fraunces,serif;font-size:14px;font-weight:400;
   color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vwork b{color:var(--ink);font-weight:400}
+/* SHARING IS THE POINT OF A PAGE LIKE THIS, so the control is in the bar
+   rather than hidden at the bottom: somebody who has just watched a bar
+   light up under the playing is exactly who wants to send it on. Quiet
+   until hovered, because the music is what the page is for. */
+.vshare{position:relative;flex:0 0 auto}
+.vsb{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono",monospace;
+  font-size:9.5px;letter-spacing:.17em;text-transform:uppercase;color:var(--faint);
+  background:none;border:1px solid var(--hair-2);border-radius:3px;
+  padding:6px 11px;cursor:pointer;transition:color .15s,border-color .15s}
+.vsb:hover,.vsb[aria-expanded="true"]{color:var(--b3);border-color:var(--b3)}
+.vsb svg{opacity:.75}
+.vmenu{position:absolute;top:calc(100% + 7px);right:0;z-index:40;
+  display:flex;flex-direction:column;min-width:172px;
+  background:var(--surface,#fffdf9);border:1px solid var(--hair);border-radius:4px;
+  box-shadow:0 8px 26px rgba(28,22,34,.13);overflow:hidden}
+.vmenu[hidden]{display:none}
+.vmi{font-family:Inter,sans-serif;font-size:13px;text-align:left;color:var(--ink);
+  background:none;border:0;padding:10px 14px;cursor:pointer;white-space:nowrap}
+.vmi:hover{background:var(--tint,#faf7f1);color:var(--b2)}
+.vmi.done{color:#2f6b3a}
+/* On a phone the bar is tight and the word is the first thing to go; the
+   mark still says what the button is. */
+@media (max-width:560px){.vsb{padding:6px 8px}.vsb span{display:none}}
 .vbarnum{flex:0 0 auto;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.17em;
   text-transform:uppercase;color:var(--faint);font-variant-numeric:tabular-nums}
 .vbarnum b{font-family:Fraunces,serif;font-size:17px;letter-spacing:0;color:var(--ink);
@@ -535,6 +558,16 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    <svg width="15" height="10" viewBox="0 0 17 10" fill="none" aria-hidden="true"><path d="M17 5H2M6 1L2 5l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
    Score Video Sync</button>
   <span class="vwork" id="vwork"></span>
+  <span class="vshare">
+   <button class="vsb" id="sharebtn" aria-haspopup="true" aria-expanded="false">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>
+    Share</button>
+   <span class="vmenu" id="sharemenu" hidden>
+    <button class="vmi" data-share="fb">Post to Facebook</button>
+    <button class="vmi" data-share="wa">WhatsApp</button>
+    <button class="vmi" data-share="copy">Copy the link</button>
+   </span>
+  </span>
   <span class="vbarnum">Bar <b id="barnum">1</b></span>
  </div>
 
@@ -1250,5 +1283,97 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
  }
  route();
  paint();
+})();
+
+/* ── sending this page to somebody ──────────────────────────────────
+ *
+ * WHAT FACEBOOK ACTUALLY ALLOWS. The sharer takes a URL and nothing else:
+ * `quote` was deprecated and is ignored, so a post cannot be written for
+ * somebody. What fills the card is the Open Graph tags the server writes
+ * into this page's head per performance -- the piece, the performer, the
+ * bar count and YouTube's own still. The person adds their own words,
+ * which is the only part that was ever theirs to add.
+ *
+ * ON A PHONE THE OS SHEET BEATS ANY MENU WE COULD DRAW: it holds every app
+ * they actually use, in their order, including the Facebook app rather
+ * than a browser tab logged into nothing. So `navigator.share` wins where
+ * it exists, and the menu is the desktop fallback.
+ */
+(function(){
+ var btn = document.getElementById('sharebtn');
+ var menu = document.getElementById('sharemenu');
+ if(!btn || !menu) return;
+
+ function here(){ return location.href.split('#')[0]; }
+ function title(){
+  return (DATA && DATA.title ? DATA.title + ' — with the score'
+                             : 'Chopin, with the score');
+ }
+ function open_(w, h, url){
+  /* A centred popup rather than a new tab: it reads as a dialog belonging
+     to this page, and closing it returns here instead of leaving the
+     performance in a tab nobody goes back to. */
+  var y = (screen.height - h) / 2, x = (screen.width - w) / 2;
+  window.open(url, 'share',
+              'width='+w+',height='+h+',left='+x+',top='+y+',noopener');
+ }
+
+ btn.onclick = function(e){
+  e.stopPropagation();
+  /* The native sheet where the browser has one. A cancel is an AbortError
+     and is not a failure -- dropping to the menu on a deliberate cancel
+     would be arguing with the person. */
+  if(navigator.share){
+   navigator.share({title: title(), url: here()}).catch(function(){});
+   return;
+  }
+  var on = menu.hasAttribute('hidden');
+  if(on){ menu.removeAttribute('hidden'); } else { menu.setAttribute('hidden',''); }
+  btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+ };
+
+ Array.prototype.forEach.call(menu.querySelectorAll('[data-share]'), function(b){
+  b.onclick = function(e){
+   e.stopPropagation();
+   var url = here();
+   if(b.dataset.share === 'fb'){
+    open_(620, 640, 'https://www.facebook.com/sharer/sharer.php?u='
+                    + encodeURIComponent(url));
+   }else if(b.dataset.share === 'wa'){
+    open_(620, 640, 'https://api.whatsapp.com/send?text='
+                    + encodeURIComponent(title() + ' ' + url));
+   }else{
+    /* The clipboard needs a secure context and can be refused, so a
+       failure shows the link to copy by hand rather than doing nothing. */
+    var said = function(ok){
+     b.textContent = ok ? 'Copied' : url;
+     if(ok){ b.classList.add('done'); }
+     setTimeout(function(){ b.textContent = 'Copy the link';
+                            b.classList.remove('done'); }, 2600);
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+     navigator.clipboard.writeText(url).then(function(){ said(true); },
+                                             function(){ said(false); });
+    }else{ said(false); }
+    return;
+   }
+   menu.setAttribute('hidden', '');
+   btn.setAttribute('aria-expanded', 'false');
+  };
+ });
+
+ document.addEventListener('click', function(){
+  if(!menu.hasAttribute('hidden')){
+   menu.setAttribute('hidden', '');
+   btn.setAttribute('aria-expanded', 'false');
+  }
+ });
+ document.addEventListener('keydown', function(e){
+  if(e.key === 'Escape' && !menu.hasAttribute('hidden')){
+   menu.setAttribute('hidden', '');
+   btn.setAttribute('aria-expanded', 'false');
+   btn.focus();
+  }
+ });
 })();
 </script>

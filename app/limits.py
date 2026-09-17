@@ -60,6 +60,20 @@ RULES = {
     "identify_ip": Rule(_n("LIMIT_IDENTIFY_PER_HOUR", 8), HOUR,
                         "That is a lot of recognitions in a short time. "
                         "Try again a little later."),
+    # A LINK IS CHEAP TO SEND AND EXPENSIVE TO ACCEPT. /api/watch is public
+    # and unauthenticated, and each new link it accepts costs a download, a
+    # recognition and an alignment -- measured at 196 seconds of a machine
+    # for one seven-minute recording. Left ungated it is an open tap on
+    # somebody else's computer, and the cheapest possible request to send.
+    #
+    # Counted per hour rather than per week, unlike renders: pasting several
+    # links in a sitting is what an enthusiast does, while a script does
+    # hundreds. Repeats of a video we already hold are NOT counted -- they
+    # cost a database lookup and return the performance we already made, so
+    # charging for them would punish sharing a link that works.
+    "watch_ip": Rule(_n("LIMIT_WATCH_PER_HOUR", 12), HOUR,
+                     "That is a lot of links in a short time. "
+                     "Try again a little later."),
     # Minutes of work and a file that has to be kept. There is no sign-in,
     # so the address someone came from is the only thing that persists
     # between visits — a weak identity, and the reason the allowance is
@@ -225,6 +239,30 @@ def guard(bucket: str, key: str) -> None:
         logger.info("refused %s for %s (%ds)", bucket, key, wait)
         raise Refused(RULES[bucket].message, wait)
     _counters.record(bucket, key)
+
+
+def peek(bucket: str, key: str) -> "Refused | None":
+    """Would this be refused? Ask WITHOUT counting it.
+
+    `guard` checks and charges in one step, which is right when the work is
+    unconditional. It is wrong when whether the work happens is only known
+    afterwards: /api/watch is idempotent, so a link somebody shares twice
+    costs a database lookup and returns the performance we already made, and
+    charging for that puts a price on sharing something that works. Pair
+    this with `charge`, and charge only what turned out to be new.
+    """
+    if not key:
+        key = "unknown"
+    ok, wait = _counters.check(bucket, key)
+    if ok:
+        return None
+    logger.info("refused %s for %s (%ds)", bucket, key, wait)
+    return Refused(RULES[bucket].message, wait)
+
+
+def charge(bucket: str, key: str) -> None:
+    """Count one, having already decided it is allowed. See `peek`."""
+    _counters.record(bucket, key or "unknown")
 
 
 def allowed(bucket: str, key: str) -> bool:
