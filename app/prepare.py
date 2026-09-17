@@ -309,25 +309,41 @@ def _parked_edition(performance_id: str) -> str | None:
     return None
 
 
-def _stop(performance_id: str, state: str, reason: str,
+def _stop(performance_id: str, state: str, note: str,
           *, skip_reason: str | None = None) -> str:
-    """Record an outcome and return the state reached.
+    """Record an outcome and return the state ACTUALLY reached.
 
     Everything that is not READY comes through here, so there is one place
-    that writes a reason and one place to read when asking why a link did
+    that writes an outcome and one place to read when asking why a link did
     nothing.
+
+    TWO FIELDS, NOT ONE, and confusing them cost a silent failure.
+    `watch.advance`'s `reason` is a CONTROLLED VOCABULARY -- it becomes
+    `skip_reason` and anything outside SKIP_REASONS is refused -- while
+    `error` is the free text column. This function passed its human
+    sentence as `reason`, so every parked performance raised ValueError on
+    the way into REVIEW.
+
+    AND IT RETURNED THE STATE IT MEANT TO REACH. The exception was caught,
+    logged as a warning and the intended state returned anyway, so
+    `prepare` answered REVIEW while the row sat in IDENTIFYING. A caller
+    that believes that answer parks nothing and retries nothing. The state
+    is now read back from the database and returned, so a move that did not
+    happen cannot be reported as one that did.
     """
-    extra = {}
-    if skip_reason:
-        extra["skip_reason"] = skip_reason
-    if state in (watch.FAILED,):
-        extra["error"] = reason
+    extra: dict = {}
+    # The note explains; it is not itself a verdict. Kept only where the
+    # column's name is honest -- a parked performance is not an error, and
+    # what it is waiting for is written on its `edition`.
+    if state in (watch.FAILED, watch.REJECTED, watch.UNAVAILABLE):
+        extra["error"] = note
     try:
-        watch.advance(performance_id, state, reason=reason, **extra)
+        row = watch.advance(performance_id, state, reason=skip_reason, **extra)
+        reached = row["state"]
     except Exception:                                            # noqa: BLE001
-        # An illegal move is a bug in this module, not a reason to lose the
-        # log line that says what happened.
         logger.warning("%s: could not move to %s (%s)", performance_id, state,
-                       reason, exc_info=True)
-    logger.info("%s -> %s: %s", performance_id, state, reason)
-    return state
+                       note, exc_info=True)
+        current = store.performance_by_id(performance_id)
+        reached = current["state"] if current else state
+    logger.info("%s -> %s: %s", performance_id, reached, note)
+    return reached
