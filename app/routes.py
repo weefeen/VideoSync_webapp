@@ -27,6 +27,7 @@ from . import botcheck
 from . import identify as ident
 from . import proof
 from . import scorestore
+from . import sharecard
 from . import library
 from . import limits
 from . import metrics
@@ -1932,6 +1933,40 @@ def watch_page(public_id: str):
     return response
 
 
+@bp.get("/p/<public_id>/card.png")
+def watch_card(public_id: str):
+    """The share card for one performance.
+
+    SERVED FROM A CACHE, NEVER BUILT WHILE A CRAWLER WAITS. Drawing it
+    fetches a still from YouTube and rasterises a system of engraving,
+    which is seconds -- and Facebook's crawler gives a few before it gives
+    up and shows a card with no picture at all. `app.prepare` draws it when
+    a performance reaches READY, so by the time anybody can share the link
+    the file is already here.
+
+    When it is not -- a performance from before this existed, or a draw
+    that failed -- this redirects to YouTube's own still rather than
+    answering 404. A plainer card is a smaller loss than no card, and the
+    redirect is what `og:image` would have pointed at anyway.
+    """
+    row = store.performance(public_id)
+    if row is None:
+        return jsonify({"error": "No such performance."}), 404
+    made = sharecard.card_path(public_id)
+    if made.is_file():
+        response = send_file(made, mimetype="image/png")
+        # A card changes only when the performance does, and crawlers
+        # re-fetch on their own schedule; a day is long enough to spare the
+        # disk and short enough that a corrected title is not stuck for a
+        # week.
+        response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
+    vid = (store.media_for(row["id"]) or [{}])[0].get("external_id") or ""
+    if vid:
+        return redirect(f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", code=302)
+    return jsonify({"error": "No card for that performance."}), 404
+
+
 def _watch_head(payload: dict, public_id: str) -> str:
     """Title and share card for one performance.
 
@@ -1963,11 +1998,21 @@ def _watch_head(payload: dict, public_id: str) -> str:
              + " Click any bar to hear it from there.")
 
     vid = ((payload.get("media") or {}).get("external_id") or "").strip()
-    # hqdefault, not maxresdefault: the larger one is absent on plenty of
-    # uploads and YouTube answers 404 rather than falling back, which would
-    # leave the card with a broken picture. 480x360 clears Facebook's 200px
-    # floor comfortably.
-    image = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else ""
+    # OUR OWN CARD: the site's card with this performance's words in it --
+    # the piece, the pianist, and the piece's own first system of engraving
+    # along the foot. A bare YouTube still says only "a video", and the
+    # whole point of this page is the score beside it, so the picture in
+    # the feed has to show one.
+    #
+    # NAMED WHETHER OR NOT THE FILE EXISTS YET. The route redirects to
+    # YouTube's still when there is no card, so the tag is correct either
+    # way and never has to be rewritten for an older performance.
+    #
+    # Without a PUBLIC_BASE_URL there is no absolute address to give -- and
+    # og:image must be absolute -- so that install falls back to the still.
+    image = (f"{base}/p/{public_id}/card.png" if (base and vid)
+             else (f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else ""))
+    ours = bool(base and vid)
 
     tags = [f"<title>{escape(headline)}</title>",
             f'<meta name="description" content="{escape(blurb)}"/>',
@@ -1977,8 +2022,19 @@ def _watch_head(payload: dict, public_id: str) -> str:
             f'<meta property="og:description" content="{escape(blurb)}"/>',
             f'<meta property="og:url" content="{escape(url)}"/>']
     if image:
+        # The dimensions have to match the picture actually served, so they
+        # follow which one it is: our card is 1200x630, YouTube's still is
+        # 480x360, and a tag that lies about the shape gets the card
+        # cropped by whoever believes it.
         tags += [f'<meta property="og:image" content="{escape(image)}"/>',
+                 '<meta property="og:image:type" content="image/png"/>'
+                 if ours else
+                 '<meta property="og:image:type" content="image/jpeg"/>',
+                 '<meta property="og:image:width" content="1200"/>'
+                 if ours else
                  '<meta property="og:image:width" content="480"/>',
+                 '<meta property="og:image:height" content="630"/>'
+                 if ours else
                  '<meta property="og:image:height" content="360"/>',
                  '<meta name="twitter:card" content="summary_large_image"/>',
                  f'<meta name="twitter:image" content="{escape(image)}"/>']
