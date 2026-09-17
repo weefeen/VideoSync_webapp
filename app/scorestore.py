@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tarfile
@@ -242,6 +243,13 @@ PREVIEW_BAND = "band.svg"
 # box cannot open the tar to get it.
 ALIGNMENT = "alignment.data"
 
+# Where the reference recording came from. The alignment in a package was
+# made against a real performance, and for these it is a video on YouTube --
+# so a package is not merely a score, it is a performance we can already
+# show. Without this the web box knows the timings and not what they are the
+# timings OF, and the page has nothing to play.
+REFERENCE = "reference.json"
+
 
 def preview_key(name: str, relative: str) -> str:
     """Where one preview asset lives in the bucket."""
@@ -269,6 +277,31 @@ def band_name(first_measure: int) -> str:
     return f"bands/{int(first_measure)}.svg"
 
 
+_YT_ID = re.compile(r"([A-Za-z0-9_-]{11})\.(?:mp4|webm|mkv|m4a|wav)", re.I)
+
+
+def reference_of(folder: pathlib.Path) -> dict | None:
+    """Which recording this package's alignment was made against.
+
+    The preparation tools leave a `.meta.json` beside the audio naming the
+    file they started from, and for this library that file came from
+    YouTube with its id in the name. Read rather than guessed: an id is
+    eleven characters of URL-safe base64 and only accepted where it sits in
+    front of a media extension.
+    """
+    for candidate in sorted(folder.glob("*.meta.json")) +             sorted(folder.glob("*/*.meta.json")):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        source = str(data.get("source_video") or data.get("source") or "")
+        found = _YT_ID.search(source) or _YT_ID.search(candidate.name)
+        if found:
+            return {"provider": "youtube", "external_id": found.group(1),
+                    "from": pathlib.Path(source).name or candidate.name}
+    return None
+
+
 def _put_preview(folder: pathlib.Path) -> int:
     """The bands and the plates, as loose objects. Returns how many."""
     sent = 0
@@ -285,6 +318,16 @@ def _put_preview(folder: pathlib.Path) -> int:
         if band.stem.isdigit():
             storage.put(band, preview_key(folder.name, band_name(int(band.stem))))
             sent += 1
+    ident = reference_of(folder)
+    if ident:
+        # storage.put takes a path and confirms the object afterwards; a
+        # temporary file keeps that guarantee rather than adding a second
+        # upload path that does not check its work.
+        with tempfile.TemporaryDirectory() as hold:
+            note = pathlib.Path(hold) / REFERENCE
+            note.write_text(json.dumps(ident), encoding="utf-8")
+            storage.put(note, preview_key(folder.name, REFERENCE))
+        sent += 1
     for measures in (folder / "reference" / "measures.data",
                      folder / "performance" / "measures.data",
                      folder / "score" / "measures.data"):

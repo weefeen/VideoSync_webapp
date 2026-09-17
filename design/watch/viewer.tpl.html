@@ -265,6 +265,12 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 .viewer.browsing .mz:hover{background:rgba(102,56,147,.13)}
 .browsehint{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.15em;
   text-transform:uppercase;color:var(--faint);white-space:nowrap}
+/* Where you are in the score, and only while the score is open: in the
+   watch view the page follows the music and a number would be noise. */
+.pageno{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--ink);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.viewer:not(.browsing) .pageno{display:none}
 .viewer:not(.browsing) .browsehint{display:none}
 .scorerow{display:flex;align-items:center;justify-content:center;
   flex:0 0 auto;min-height:0;align-self:center}
@@ -519,6 +525,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    <div class="sctl" id="sctl">
     <button class="sbtn" id="browsebtn">Open<span class="lw"> the score</span></button>
     <span class="browsehint">Click a bar to play from there</span>
+    <span class="pageno" id="pageno"></span>
     <span class="sspace"></span>
     <span class="seg" id="markseg">
      <button class="sbtn" data-m="measure">Measure</button>
@@ -694,6 +701,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
  var HOLD = 8000, held = 0;
  var marker = 'cursor';                  /* cursor | measure | none */
  var browsing = false;
+ var PAGES = [0], pageIndex = 0;      /* the score cut into pages, while open */
  var cursorEl = document.createElement('span');
  cursorEl.className = 'cursor';
  var viewer  = document.getElementById('viewer'),
@@ -711,7 +719,8 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
      scorerow = document.getElementById('scorerow'),
      pprev   = document.getElementById('pprev'),
      pnext   = document.getElementById('pnext'),
-     browseBtn = document.getElementById('browsebtn');
+     browseBtn = document.getElementById('browsebtn'),
+     pageno = document.getElementById('pageno');
 
  var GAPB = 10, MINW = 240;
  /* the width the turn columns take out of the reading column */
@@ -760,6 +769,26 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
  /* Fetch a system, once, shortly before it is read. The one after the last
     visible is fetched too, so turning the page shows music rather than a
     gap while the engraving arrives. */
+ /* The score cut into pages: each takes as many WHOLE systems as the plate
+    holds, from the one before it. A partition rather than a moving window,
+    so "page 3 of 18" means something and turning cannot land half a system
+    into the next page -- which is where the overlap between pages came
+    from when turning moved by a count instead of to a boundary. */
+ function paginate(W, H){
+  var pages = [], i = 0;
+  while(i < BANDS.length){
+   pages.push(i);
+   var used = 0, count = 0;
+   for(var k = i; k < BANDS.length; k++){
+    var add = bandH(k, W) + (count ? 16 : 0);
+    if(used + add > H && count) break;
+    used += add; count++;
+   }
+   i += Math.max(1, count);
+  }
+  return pages;
+ }
+
  function need(i){
   if(i < 0 || i >= BANDS.length) return;
   var img = BANDS[i].el.querySelector('img');
@@ -796,22 +825,22 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
     plate.style.height = Math.round(ph)+'px';
     scorerow.style.height = Math.round(ph)+'px';
 
-    var used = 0, count = 0;
-    for(var k=start;k<BANDS.length;k++){
-     var add = bandH(k, full) + (count ? 16 : 0);
-     if(used + add > ph && count) break;
-     used += add; count++;
-    }
-    shown = Math.max(1, count);
-    if(start + shown > BANDS.length) start = Math.max(0, BANDS.length - shown);
-    for(k=0;k<BANDS.length;k++){
+    PAGES = paginate(full, ph);
+    // stay on the page holding whatever system we were showing
+    pageIndex = 0;
+    for(var q = 0; q < PAGES.length; q++) if(PAGES[q] <= start) pageIndex = q;
+    start = PAGES[pageIndex];
+    shown = (PAGES[pageIndex + 1] !== undefined ? PAGES[pageIndex + 1]
+                                                : BANDS.length) - start;
+    pageno.textContent = (pageIndex + 1) + ' / ' + PAGES.length;
+    for(var k = 0; k < BANDS.length; k++){
      var on = k >= start && k < start + shown;
      BANDS[k].el.classList.toggle('show', on);
      BANDS[k].el.style.width = '100%';
     }
     needAround(start, shown);
-    pprev.disabled = start <= 0;
-    pnext.disabled = start + shown >= BANDS.length;
+    pprev.disabled = pageIndex <= 0;
+    pnext.disabled = pageIndex >= PAGES.length - 1;
     continue;
    }
 
@@ -1035,7 +1064,14 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 
  function turn(by){
   held = Date.now() + HOLD;
-  start = Math.max(0, Math.min(BANDS.length - 1, start + by));
+  if(browsing){
+   // a page at a time, to a boundary -- never a count of systems
+   pageIndex = Math.max(0, Math.min(PAGES.length - 1,
+                                    pageIndex + (by > 0 ? 1 : -1)));
+   start = PAGES[pageIndex];
+  } else {
+   start = Math.max(0, Math.min(BANDS.length - 1, start + by));
+  }
   layout();
  }
  pprev.addEventListener('click', function(){ turn(-shown); });

@@ -14,12 +14,13 @@ added; run it twice and nothing is duplicated.
 """
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from app import library, scorestore, store, viewer, watch   # noqa: E402
+from app import library, scorestore, store, viewer, watch, youtube  # noqa: E402
 from app import package as pkg                     # noqa: E402
 
 
@@ -35,9 +36,12 @@ def backfill(dry: bool = False) -> int:
             print(f"  skip   {name}: no alignment published for it")
             continue
 
+        ident = _reference(package)
         existing = _already(name)
         if existing is not None:
-            print(f"  have   {name}: /p/{existing['public_id']}")
+            fixed = _repair_media(existing, ident)
+            print(f"  have   {name}: /p/{existing['public_id']}"
+                  f"{' (media repaired)' if fixed else ''}")
             continue
         if dry:
             print(f"  would  {name}: {len(timeline)} bars")
@@ -49,11 +53,16 @@ def backfill(dry: bool = False) -> int:
             edition=name,
             title=package.title or package.display_name,
             priority=watch.PRIORITY[watch.ADMIN])
-        # The recording the package was prepared against. It is not a
-        # YouTube video and has no external id, so it cannot collide with
-        # one: the partial unique index only covers rows that have one.
-        store.attach_media(performance["id"], "reference",
-                           storage_uri=f"{name}/{scorestore.ALIGNMENT}")
+        # The recording the alignment was made against. For this library it
+        # is a video on YouTube, which means an installed score is already a
+        # performance somebody can watch -- not merely a score with timings.
+        if ident:
+            store.attach_media(performance["id"], "youtube",
+                               external_id=ident["external_id"],
+                               url=youtube.canonical_url(ident["external_id"]))
+        else:
+            store.attach_media(performance["id"], "reference",
+                               storage_uri=f"{name}/{scorestore.ALIGNMENT}")
         media = store.media_for(performance["id"])[0]
         store.add_discovery(media["id"], source_type=watch.ADMIN,
                             reference="installed package",
@@ -79,6 +88,38 @@ def backfill(dry: bool = False) -> int:
               f"{len(timeline)} bars, {len(geometry)} measured")
         made += 1
     return made
+
+
+def _reference(package) -> dict | None:
+    """What the package says its alignment was made against."""
+    raw = scorestore.preview_bytes(package.name, scorestore.REFERENCE)
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return None
+
+
+def _repair_media(performance, ident) -> bool:
+    """Give an already-backfilled performance its video, once we know it.
+
+    The first backfill ran before the reference recording was published, so
+    those performances point at an alignment file and have nothing to play.
+    Upgrading the row beats deleting and rebuilding it: the public id is in
+    somebody's address bar by now.
+    """
+    if not ident:
+        return False
+    for media in store.media_for(performance["id"]):
+        if media["external_id"]:
+            return False                      # already knows its video
+        if media["provider"] == "reference":
+            store.set_media(media["id"], provider="youtube",
+                            external_id=ident["external_id"],
+                            url=youtube.canonical_url(ident["external_id"]))
+            return True
+    return False
 
 
 def _timeline(package) -> list:
