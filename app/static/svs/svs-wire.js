@@ -2570,6 +2570,90 @@ async function handleDroppedLink(text){
   }
 }
 
+/* ── a link you can SEE ───────────────────────────────────────────────
+   Dropping a link onto the dropzone and the /app/?url= address both worked,
+   and nothing on the page said so: the dropzone reads "Drop your
+   performance video", and a person holding a YouTube link has no reason to
+   try dragging it there. A feature nobody can find is not live. So there is
+   a field, in words, and a paste anywhere on the step works too.
+
+   OUTSIDE THE DROPZONE, which is a <label> for the file input: any click
+   inside it opens the file picker, so a field placed there could never be
+   typed into. It sits between the dropzone and the answer box, so what a
+   link does is said directly under where it was given. */
+const linkFieldCSS = document.createElement('style');
+linkFieldCSS.textContent = `
+  .linkline{display:grid;grid-template-columns:auto 1fr auto;align-items:center;
+    gap:14px;margin-top:13px;padding:12px 14px 12px 18px;
+    border:1px solid var(--hair-2);border-radius:3px;background:var(--surface)}
+  .linkline .lab{white-space:nowrap}
+  .linkline input{font:inherit;font-size:14px;color:var(--ink);min-width:0;
+    background:transparent;border:0;border-bottom:1px solid var(--hair);
+    padding:8px 2px;outline:none;transition:border-color .15s}
+  .linkline input::placeholder{color:var(--faint)}
+  .linkline input:focus{border-bottom-color:var(--b3)}
+  .linkline button{font:inherit;font-family:"JetBrains Mono",monospace;
+    font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:#fff;
+    background:var(--b1);border:0;border-radius:2px;padding:12px 18px;
+    cursor:pointer;white-space:nowrap;transition:background .18s}
+  .linkline button:hover{background:var(--b2)}
+  .linkline button:disabled{opacity:.45;cursor:default}
+  /* A PHONE STACKS IT. Label, field and button side by side left the
+     field about ninety pixels wide -- "Paste a Chop" -- beside a button
+     that took the row, which is the field being the thing that shrank.
+     Each gets the full width instead. */
+  @media (max-width:560px){
+    .linkline{grid-template-columns:1fr;gap:10px;padding:14px}
+    .linkline button{width:100%;padding:14px 18px}
+  }
+`;
+document.head.appendChild(linkFieldCSS);
+
+(function(){
+  const drop = $('#drop');
+  if(!drop || !drop.parentNode) return;
+  const form = document.createElement('form');
+  form.className = 'linkline';
+  form.id = 'linkline';
+  form.setAttribute('novalidate', '');
+  form.innerHTML =
+      '<span class="lab">or a YouTube link</span>'
+    + '<input type="url" id="linkurl" inputmode="url" autocomplete="off" '
+    +        'spellcheck="false" aria-label="A YouTube link" '
+    +        'placeholder="Paste a Chopin performance from YouTube">'
+    + '<button type="submit" id="linkgo">Watch with the score</button>';
+  drop.parentNode.insertBefore(form, drop.nextSibling);
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    const text = ($('#linkurl').value || '').trim();
+    if(!text){ $('#linkurl').focus(); return; }
+    clearLinkBox();
+    handleDroppedLink(text);
+  });
+
+  /* PASTE ANYWHERE ON THE STEP. Ctrl-V with nothing focused is the
+     shortest path there is, and it is the one that works on a phone,
+     where nothing can be dragged. Only when the upload step is on
+     screen, only when the paste is not going into some other field, and
+     only when it reads as a YouTube link -- a paste of anything else is
+     left alone rather than answered with a refusal nobody asked for. */
+  document.addEventListener('paste', function(e){
+    if(!drop.offsetParent) return;                    // not on this step
+    const t = e.target;
+    const typing = t && (t.isContentEditable ||
+      /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''));
+    if(typing && t.id !== 'linkurl') return;
+    const text = ((e.clipboardData && e.clipboardData.getData('text')) || '').trim();
+    if(!text) return;
+    try{ ytVideoId(text); }catch(err){ return; }       // not a link we take
+    e.preventDefault();
+    $('#linkurl').value = text;
+    clearLinkBox();
+    handleDroppedLink(text);
+  });
+})();
+
 /* ── wiring ───────────────────────────────────────────────────────────
    Added, not replaced. The design's own dragover/drop listeners still run
    and still own the file path; these sit beside them and act only when
