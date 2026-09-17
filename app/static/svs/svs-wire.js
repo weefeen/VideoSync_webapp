@@ -2198,3 +2198,348 @@ function sayTheWindow(){
     el.textContent = el.textContent.replace(/seven days|7 days/i, said);
   });
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   A LINK DROPPED ON THE DROPZONE
+   ══════════════════════════════════════════════════════════════════════
+
+   Somebody watching a pianist on YouTube should be able to drag that
+   address onto this page and be shown the performance with the score
+   beside it. Dragging the link is the desktop equivalent of a share
+   sheet: no copying, no field to find, no second window.
+
+   TWO DIFFERENT THINGS CAN LAND ON THE SAME DROPZONE, and they go to
+   different places, so the distinction matters:
+
+     a FILE  -> the upload path. Your recording, your rights, rendered
+                into a video you download. Untouched by any of this.
+     a LINK  -> POST /api/watch. Somebody else's recording, playing from
+                YouTube's own player at /p/<id>, with our score beside
+                it. Nothing is downloaded and nothing is re-encoded.
+
+   WHY THE HOVER STATE ONLY SAYS "LINK" AND NEVER "YOUTUBE LINK":
+   `dataTransfer.getData` returns an empty string during `dragover` — by
+   specification, so a page cannot read what you are merely dragging past
+   it. All that is legible before the drop is `types`. So the dropzone can
+   honestly say "that is a link" and cannot say whose. Promising to
+   recognise YouTube before the drop would be a promise the browser does
+   not let us keep. */
+
+/* ── reading the link, the same way the server reads it ──────────────
+   A deliberate mirror of app/youtube.py. It exists so an address that is
+   plainly not a video is refused in the same breath as the drop, with no
+   round trip — and so the video id is known immediately, which is what
+   lets the thumbnail appear before the server has answered.
+
+   IT IS A MIRROR, NOT THE AUTHORITY. The server parses the link again and
+   its answer wins. If the two ever disagree, the page is wrong. Any
+   change to youtube.py belongs here too. */
+const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const YT_HOSTS = new Set([
+  'youtube.com', 'www.youtube.com', 'm.youtube.com',
+  'music.youtube.com', 'youtube-nocookie.com', 'www.youtube-nocookie.com',
+  'youtu.be', 'www.youtu.be',
+]);
+const YT_PATH_PREFIXES = new Set(['embed', 'shorts', 'live', 'v']);
+
+class NotYouTube extends Error {}
+
+function ytVideoId(text, depth){
+  depth = depth || 0;
+  text = (text || '').trim();
+  if(!text) throw new NotYouTube('nothing was dropped');
+  if(YT_ID_RE.test(text)) return text;
+
+  let url;
+  try{
+    url = new URL(text.indexOf('//') >= 0 ? text : 'https://' + text);
+  }catch(err){
+    throw new NotYouTube('that is not a usable address');
+  }
+  const host = (url.hostname || '').toLowerCase();
+
+  /* A link copied out of the Chopin group is wrapped in Facebook's own
+     redirect, with the real address in ?u=. Depth-limited because a
+     wrapper pointing at itself would otherwise recurse forever — the
+     server is protected by its own stack, a browser tab is not. */
+  if(host.endsWith('facebook.com')){
+    const inner = url.searchParams.get('u');
+    if(inner && depth < 3) return ytVideoId(decodeURIComponent(inner), depth + 1);
+    throw new NotYouTube('that is a Facebook link with no video in it');
+  }
+  if(!YT_HOSTS.has(host)) throw new NotYouTube('that is not a YouTube link');
+
+  if(host.endsWith('youtu.be')){
+    return ytChecked(url.pathname.replace(/^\/+/, '').split('/')[0]);
+  }
+
+  const v = url.searchParams.get('v');
+  if(v) return ytChecked(v);
+
+  const parts = url.pathname.split('/').filter(Boolean);
+  if(parts.length >= 2 && YT_PATH_PREFIXES.has(parts[0])) return ytChecked(parts[1]);
+
+  /* NOT a bare single segment. `youtube.com/abcdefghijk` is a channel or a
+     handle, and eleven characters of one are indistinguishable from a
+     video id. The server learned this the hard way; so does this. */
+  throw new NotYouTube('that YouTube link does not name a single video');
+}
+
+function ytChecked(candidate){
+  candidate = (candidate || '').trim();
+  if(!YT_ID_RE.test(candidate)) throw new NotYouTube('that does not look like a video id');
+  return candidate;
+}
+
+/* ── what came off the drag ──────────────────────────────────────────
+   `text/uri-list` is the format a dragged link actually uses, and by its
+   RFC it may hold several lines and comment lines beginning with '#'. The
+   first real line is the one that was dragged. `text/plain` is the
+   fallback, and it is what a selection of text gives. */
+function droppedText(dt){
+  if(!dt) return '';
+  let list = '';
+  try{ list = dt.getData('text/uri-list') || ''; }catch(err){ list = ''; }
+  if(list){
+    const first = list.split(/\r?\n/)
+                      .map(s => s.trim())
+                      .find(s => s && s.charAt(0) !== '#');
+    if(first) return first;
+  }
+  try{ return (dt.getData('text/plain') || '').trim(); }catch(err){ return ''; }
+}
+
+/* Whether a drag in flight is carrying a file. During `dragover` this is
+   all that is readable, and it is enough to choose which words to show. */
+function dragHasFile(dt){
+  if(!dt) return false;
+  const types = Array.from(dt.types || []);
+  if(types.indexOf('Files') >= 0) return true;
+  return Array.from(dt.items || []).some(i => i.kind === 'file');
+}
+function dragHasText(dt){
+  const types = Array.from((dt && dt.types) || []);
+  return types.indexOf('text/uri-list') >= 0 || types.indexOf('text/plain') >= 0;
+}
+
+/* ── the dropzone's second face ──────────────────────────────────────── */
+const linkCSS = document.createElement('style');
+linkCSS.textContent = `
+  /* The link state is the purple the rest of the site reserves for the
+     live, chosen thing — the same family as .dropzone.filled — rather
+     than a new accent colour invented for one hover. */
+  .dropzone.linking{border-style:solid;border-color:var(--b3);
+    background:linear-gradient(#fdfbf7,#f4ecfa)}
+  .dropzone.linking .glyph{border-color:var(--b3);color:var(--b3)}
+  /* A dropped link answers in place. It never takes over the page: the
+     upload path has to stay one click away, because most people arriving
+     here still have a file. */
+  .linkbox{display:grid;grid-template-columns:auto 1fr;gap:16px;
+    align-items:center;margin-top:13px;padding:14px 16px;
+    border:1px solid var(--hair);border-radius:3px;background:var(--surface)}
+  .linkbox img{display:block;width:104px;height:59px;object-fit:cover;
+    border-radius:2px;background:var(--tint);border:1px solid var(--hair-2)}
+  .linkbox h3{font-family:Fraunces,serif;font-weight:300;font-size:19px;
+    letter-spacing:-.02em;line-height:1.2;margin:0 0 5px}
+  .linkbox h3 em{font-style:italic;color:var(--b2)}
+  .linkbox p{margin:0;font-size:12.5px;line-height:1.6;color:var(--soft)}
+  .linkbox .lab{display:block;margin-bottom:7px}
+  /* No thumbnail for a refusal — there is no video to show a frame of,
+     and a grey box where a picture belongs reads as something failing to
+     load rather than as an answer. */
+  .linkbox.bad{grid-template-columns:1fr;border-color:rgba(179,38,30,.3)}
+  .linkdrop{margin-left:10px;font-family:"JetBrains Mono",monospace;
+    font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;
+    color:var(--faint);background:none;border:0;cursor:pointer;padding:0}
+  .linkdrop:hover{color:var(--b2)}
+  @media (max-width:560px){
+    .linkbox{grid-template-columns:1fr}
+    .linkbox img{width:100%;height:auto;aspect-ratio:16/9}}
+`;
+document.head.appendChild(linkCSS);
+
+const LINK_COPY = '<h2>Drop the <em>link</em></h2>'
+  + '<span class="lab">a youtube address &mdash; we find the performance</span>';
+
+function linkHover(on){
+  const drop = $('#drop');
+  if(!drop) return;
+  /* Never while an upload is running: the dropzone is lent to the progress
+     rail then, and swapping its words mid-upload would wipe the bar. */
+  if(drop.classList.contains('busy')) return;
+  drop.classList.toggle('linking', on);
+  const copy = $('#dropcopy');
+  if(!copy) return;
+  if(on) copy.innerHTML = LINK_COPY;
+  else if(!S.file && typeof resetDrop === 'function') resetDrop();
+}
+
+/* The answer sits under the dropzone rather than inside it, for the reason
+   the design already gives about the "complete piece" note: the dropzone's
+   contents are rebuilt whenever a file is chosen, and an answer that
+   vanishes when you reach for it is not an answer. */
+function linkBox(){
+  let box = $('#linkbox');
+  if(!box){
+    box = document.createElement('div');
+    box.id = 'linkbox';
+    box.className = 'linkbox';
+    const note = document.querySelector('#uploadstate .dropnote');
+    if(note && note.parentNode) note.parentNode.insertBefore(box, note);
+    else{
+      const host = $('#uploadstate');
+      if(host) host.appendChild(box);
+    }
+  }
+  return box;
+}
+function clearLinkBox(){
+  const box = $('#linkbox');
+  if(box) box.remove();
+}
+
+function linkRefused(reason){
+  const box = linkBox();
+  box.className = 'linkbox bad';
+  box.innerHTML = '<div>'
+    + '<span class="lab"><span class="alert">not a performance we can open</span></span>'
+    + '<p>We read what you dropped and ' + esc(reason) + '. A link to a single '
+    + 'video works &mdash; the address bar of a YouTube page, a <b>youtu.be</b> '
+    + 'share link, or a Short. '
+    + '<button class="linkdrop" type="button" id="linkdismiss">dismiss</button></p>'
+    + '</div>';
+  const x = $('#linkdismiss');
+  if(x) x.onclick = clearLinkBox;
+  centerOn('#linkbox', 60);
+}
+
+function linkPending(vid, state){
+  const box = linkBox();
+  box.className = 'linkbox';
+  /* YouTube's own still, straight from their CDN — the one picture we can
+     show without having fetched, stored or re-encoded anything. */
+  box.innerHTML = '<img src="https://i.ytimg.com/vi/'
+    + encodeURIComponent(vid) + '/mqdefault.jpg" alt="" loading="lazy"/>'
+    + '<div>'
+    + '<span class="lab">we have this performance</span>'
+    + '<h3>It is not ready to <em>watch</em> yet</h3>'
+    + '<p>' + esc(stateInWords(state)) + ' Nothing more is needed from you. '
+    + '<button class="linkdrop" type="button" id="linkdismiss">dismiss</button></p>'
+    + '</div>';
+  const img = box.querySelector('img');
+  if(img) img.onerror = function(){ this.style.visibility = 'hidden'; };
+  const x = $('#linkdismiss');
+  if(x) x.onclick = clearLinkBox;
+  centerOn('#linkbox', 60);
+}
+
+/* The state vocabulary is watch.py's. Said in words rather than shown as a
+   constant, and deliberately incomplete: an unknown state falls back to
+   something true of all of them rather than printing SYNCHRONISING at
+   somebody. */
+function stateInWords(state){
+  switch(state){
+    case 'DISCOVERED':
+    case 'VALIDATING':   return 'We have taken the link and are looking at the video.';
+    case 'IDENTIFYING':  return 'We are working out which piece is being played.';
+    case 'NEEDS_WORK_CONFIRMATION':
+    case 'REVIEW':       return 'We know the piece. The score it needs has not been engraved yet.';
+    case 'READY_FOR_SYNC':
+    case 'SYNCHRONISING':
+    case 'QC':           return 'The score is being matched to the playing, bar by bar.';
+    case 'FAILED':
+    case 'REJECTED':
+    case 'UNAVAILABLE':  return 'We looked at this one and cannot follow it.';
+    default:             return 'It is in the queue.';
+  }
+}
+
+async function handleDroppedLink(text){
+  let vid;
+  try{
+    vid = ytVideoId(text);
+  }catch(err){
+    if(err instanceof NotYouTube){ linkRefused(err.message); return; }
+    throw err;
+  }
+
+  /* Said before the request goes out, because the thumbnail is the proof
+     that the right video was read off the drag, and waiting for the server
+     to confirm what we already know would be a second of nothing. */
+  linkPending(vid, 'DISCOVERED');
+
+  let r, data;
+  try{
+    r = await fetch('/api/watch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url: text}),
+    });
+    data = await r.json();
+  }catch(err){
+    linkRefused('we could not reach the server. Try again in a moment');
+    return;
+  }
+  if(!r.ok){
+    linkRefused(data && data.error ? data.error : 'the server would not take it');
+    return;
+  }
+
+  /* READY is the only state with a page worth going to. The viewer reads
+     DATA.bands[1] || DATA.bands[0] and then that band's first bar, so a
+     performance with no bands yet throws before it draws and leaves a
+     blank page. Sending somebody there to watch it fail is worse than
+     telling them plainly that it is not ready. */
+  if(data.state === 'READY' && data.where){ location.href = data.where; return; }
+  linkPending(vid, data.state);
+}
+
+/* ── wiring ───────────────────────────────────────────────────────────
+   Added, not replaced. The design's own dragover/drop listeners still run
+   and still own the file path; these sit beside them and act only when
+   there is no file in the drag. */
+(function(){
+  const drop = $('#drop');
+  if(!drop) return;
+
+  ['dragenter', 'dragover'].forEach(function(ev){
+    drop.addEventListener(ev, function(e){
+      const dt = e.dataTransfer;
+      if(dragHasFile(dt)){ linkHover(false); return; }
+      if(!dragHasText(dt)) return;
+      /* copy, not move: a link dragged out of the address bar must stay in
+         the address bar, and the cursor is what says so. */
+      try{ dt.dropEffect = 'copy'; }catch(err){ /* read-only in some browsers */ }
+      linkHover(true);
+    });
+  });
+
+  /* `dragleave` fires when the pointer crosses onto a child of the
+     dropzone as well, which would flicker the words on every pass over
+     the glyph. relatedTarget says where it went. */
+  drop.addEventListener('dragleave', function(e){
+    if(e.relatedTarget && drop.contains(e.relatedTarget)) return;
+    linkHover(false);
+  });
+
+  drop.addEventListener('drop', function(e){
+    linkHover(false);
+    if(dragHasFile(e.dataTransfer)) return;   // the design's handler has it
+    const text = droppedText(e.dataTransfer);
+    if(!text) return;
+    e.preventDefault();
+    clearLinkBox();
+    handleDroppedLink(text);
+  });
+
+  /* A link dropped anywhere else on the page would otherwise be the
+     browser navigating away from a half-finished upload. */
+  ['dragover', 'drop'].forEach(function(ev){
+    document.addEventListener(ev, function(e){
+      if(e.target === drop || drop.contains(e.target)) return;
+      if(dragHasFile(e.dataTransfer)) return;
+      e.preventDefault();
+    });
+  });
+})();

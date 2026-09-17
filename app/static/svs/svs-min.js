@@ -706,7 +706,17 @@ addEventListener('keydown', e=>{
   if(e.key === 'Escape' && $('#rights').classList.contains('on')) closeRights();
 });
 
-$('#drop').addEventListener('drop', e=>{ const f = e.dataTransfer?.files?.[0]; if(f) pendingBlob = f; askRights(f?.name); });
+/* A drop with no file in it is not an upload. It used to fall through to
+   askRights anyway, which opened the rights gate over an invented
+   `performance.mp4` and then refused to continue, because the real
+   handler wants a name AND a blob. Dropping a link was therefore a dialog
+   that could only be cancelled. Links are handled in svs-wire.js. */
+$('#drop').addEventListener('drop', e=>{
+  const f = e.dataTransfer?.files?.[0];
+  if(!f) return;
+  pendingBlob = f;
+  askRights(f.name);
+});
 $('#browse').onclick = e=>{ e.preventDefault(); $('#file').click(); };
 $('#file').onchange = e=>{ const f = e.target.files[0]; if(f){ pendingBlob = f; askRights(f.name); } };
 
