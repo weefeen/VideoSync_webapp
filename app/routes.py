@@ -1924,6 +1924,20 @@ def watch_page(public_id: str):
     body = page.replace("__PERFORMANCE__", json.dumps(payload))
     body = body.replace("<title>Watch With Score</title>",
                         _watch_head(payload, public_id), 1)
+    # STRAIGHT TO THE PERFORMANCE, WITH NO ENTRY PAGE IN FRONT OF IT.
+    # The page's own `route()` does send /p/<id> to the player, but it runs
+    # at the end of a seven-hundred-line script -- so the browser painted
+    # the entry page first and swapped afterwards, which reads as the link
+    # going to the wrong place and then correcting itself.
+    #
+    # This runs in the HEAD, before there is anything to paint. It sets the
+    # class rather than the markup because `documentElement` exists during
+    # head parsing and `body` does not.
+    body = body.replace(
+        "<style>",
+        "<script>document.documentElement.classList.add('gowatch')</script>"
+        "\n<style>",
+        1)
     response = Response(body, mimetype="text/html")
     # no-store for the PAGE, which carries a performance's current state and
     # must not come back from a cache after it changes. Crawlers are
