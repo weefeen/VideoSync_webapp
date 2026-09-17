@@ -2001,15 +2001,16 @@ def _watch_head(payload: dict, public_id: str) -> str:
     """
     piece = (payload.get("title") or "").strip()
     who = (payload.get("performer") or "").strip()
-    bars = payload.get("total_bars")
     base = (settings.public_base_url or "").rstrip("/")
     url = f"{base}/p/{public_id}" if base else f"/p/{public_id}"
 
     headline = f"{piece} — with the score" if piece else "Chopin, with the score"
     told = f"{who}, played" if who else "Played"
-    blurb = (f"{told} with the engraved score following bar by bar"
-             + (f", all {bars} of them." if bars else ".")
-             + " Click any bar to hear it from there.")
+    # The bar COUNT is left out on purpose -- "all 649 of them" is a number
+    # a reader can do nothing with, and it was crowding out the sentence
+    # that says what the page actually offers.
+    blurb = (f"{told} with the engraved score following bar by bar. "
+             "Click any bar to hear it from there.")
 
     vid = ((payload.get("media") or {}).get("external_id") or "").strip()
     # OUR OWN CARD: the site's card with this performance's words in it --

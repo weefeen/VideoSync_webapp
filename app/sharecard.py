@@ -260,8 +260,11 @@ def _note(payload: dict) -> str:
     who = (payload.get("performer") or "").strip()
     if who:
         return who
-    bars = payload.get("total_bars")
-    return f"{bars} bars, followed" if bars else "With the score"
+    # NOT THE BAR COUNT. It was the last fallback and it is the wrong kind
+    # of fact for this slot: a number nobody reading a feed has any use for,
+    # sitting where the card otherwise names a person. When there is no name
+    # to give, the card says what it is instead.
+    return "With the score"
 
 
 def _pianist(title: str) -> str:
