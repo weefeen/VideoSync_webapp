@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Weefeen — Watch with the score",
+  "short_name": "Weefeen",
+  "version": "0.1.0",
+  "description": "Open the YouTube performance you are watching next to its score, on chopin.weefeen.com.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["contextMenus", "storage"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Watch this with the score",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": false },
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

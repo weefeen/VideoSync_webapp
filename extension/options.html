@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Weefeen</title>
+<!-- One setting, and it exists for one reason: so the site can be run
+     against a local server while it is being worked on. Nobody using the
+     extension normally ever opens this. -->
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 18px 20px; min-width: 330px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 3px; }
+  p { margin: 0 0 14px; opacity: .7; font-size: 12.5px; }
+  label { display: block; font-size: 11px; text-transform: uppercase;
+          letter-spacing: .12em; opacity: .6; margin-bottom: 5px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit;
+          border: 1px solid rgba(128,128,128,.45); border-radius: 4px;
+          background: transparent; color: inherit; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  button { font: inherit; padding: 7px 15px; border: 0; border-radius: 4px;
+           background: #663893; color: #fff; cursor: pointer; }
+  button:hover { background: #552D7B; }
+  .msg { font-size: 12px; opacity: 0; transition: opacity .15s; }
+  .msg.on { opacity: .75; }
+</style>
+<h1>Weefeen — Watch with the score</h1>
+<p>Where the score site is. Leave it alone unless you are working on it.</p>
+<label for="base">Site address</label>
+<input id="base" type="url" spellcheck="false" placeholder="https://chopin.weefeen.com">
+<div class="row">
+  <button id="save" type="button">Save</button>
+  <button id="reset" type="button" style="background:transparent;color:inherit;border:1px solid rgba(128,128,128,.45)">Reset</button>
+  <span class="msg" id="msg">Saved</span>
+</div>
+<script src="options.js"></script>

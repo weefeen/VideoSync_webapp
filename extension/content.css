@@ -1,0 +1,40 @@
+/* Shaped like YouTube's own pill so it does not look bolted on, coloured
+   like Weefeen so it is not mistaken for one of theirs. Purple is --b3
+   from the site, the one the site itself uses for the live, chosen thing.
+
+   Everything is !important and every property is stated. A content script
+   lands inside someone else's cascade: YouTube styles buttons broadly, and
+   a property left unsaid is a property they set. */
+.weefeen-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 36px !important;
+  padding: 0 15px !important;
+  margin-left: 8px !important;
+  border: 0 !important;
+  border-radius: 18px !important;
+  background: #663893 !important;
+  color: #fff !important;
+  font-family: "Roboto", "Arial", sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 36px !important;
+  letter-spacing: .01em !important;
+  text-transform: none !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  vertical-align: middle !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  transition: background .15s ease !important;
+}
+.weefeen-btn:hover { background: #552D7B !important; }
+.weefeen-btn:active { background: #381C53 !important; }
+.weefeen-btn:focus-visible { outline: 2px solid #cc237e !important; outline-offset: 2px !important; }
+.weefeen-btn svg { flex: 0 0 auto !important; display: block !important; }
+.weefeen-btn span { color: #fff !important; font: inherit !important; }
+
+/* YouTube's dark theme is the default; on their light theme the same
+   purple still carries enough contrast against white, so there is no
+   second colour to keep in step. */
