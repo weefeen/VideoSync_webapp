@@ -11,14 +11,19 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The timer pulls in its own .service, but systemd needs the unit file
+# present to enable the timer, so both are installed and only the timer
+# is enabled -- enabling a oneshot .service would run it at every boot.
 UNITS=(vsw-worker.service vsw-web.service)
+TIMERS=(vsw-ytdlp-update.timer)
+EXTRA=(vsw-ytdlp-update.service)
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 [ "$(id -u)" -eq 0 ] || { echo "run this as root" >&2; exit 1; }
 
 say "Installing units"
-for unit in "${UNITS[@]}"; do
+for unit in "${UNITS[@]}" "${TIMERS[@]}" "${EXTRA[@]}"; do
     install -m 0644 "$HERE/$unit" "/etc/systemd/system/$unit"
     echo "  /etc/systemd/system/$unit"
 done
@@ -27,6 +32,9 @@ systemctl daemon-reload
 
 say "Enabling and starting"
 for unit in "${UNITS[@]}"; do
+    systemctl enable --now "$unit"
+done
+for unit in "${TIMERS[@]}"; do
     systemctl enable --now "$unit"
 done
 
