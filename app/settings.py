@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import sys
 import os
 import pathlib
 import shutil
@@ -112,6 +113,49 @@ def safe_duration_minutes(ram_gb: float) -> float:
     if ram_gb <= 0:
         return 0.0
     return DTW_MINUTES_AT * math.sqrt(ram_gb * USABLE_RAM / DTW_GB_AT)
+
+
+def free_memory_bytes() -> int:
+    """Memory actually available on THIS machine now, with no dependency.
+
+    TOTAL RAM IS THE WRONG NUMBER. A desktop has 64 GB and perhaps 15 free
+    while it is being used for anything else, and the alignment allocates a
+    full DTW matrix whose size grows with the SQUARE of the recording.
+    Accepting a twenty-minute recording on the strength of the sticker
+    figure is how an align dies two thirds of the way through.
+
+    This lives here rather than in `tools/volunteer.py`, where it was
+    written, because `app/prepare.py` needs the same answer and a second
+    copy of it would be a second thing to keep right. `renderer_memory_gb`
+    is deliberately NOT this: that one answers for the SITE and must not
+    change with whoever is running the code.
+    """
+    if sys.platform == "win32":
+        import ctypes
+
+        class Status(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        st = Status()
+        st.dwLength = ctypes.sizeof(Status)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return int(st.ullAvailPhys)
+        return 0
+    try:
+        for line in pathlib.Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return 0
 
 
 def plan_memory_gb(plan: str) -> float:

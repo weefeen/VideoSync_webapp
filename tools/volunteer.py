@@ -67,6 +67,7 @@ os.environ.setdefault("VSW_PLACE", "local")
 
 from app import render as rnd                   # noqa: E402
 from app import scorestore, storage, store      # noqa: E402
+from app import settings as settings_mod        # noqa: E402
 from app import svg as appsvg                   # noqa: E402
 from app.queue import webside, worker           # noqa: E402
 from app.queue.messages import Event            # noqa: E402
@@ -290,40 +291,14 @@ def _go_quiet() -> None:
 
 
 def free_memory_bytes() -> int:
-    """Memory actually available now, without adding a dependency for it.
+    """Memory available now. The implementation moved to app.settings.
 
-    TOTAL RAM IS THE WRONG NUMBER. This desktop has 64 GB and perhaps 15 GB
-    free while it is being used for anything else, and the alignment
-    allocates a full DTW matrix whose size grows with the SQUARE of the
-    recording. Accepting a twenty-minute upload on the strength of the
-    sticker figure is how a render dies two thirds of the way through.
+    It was written here, and then app/prepare.py needed the same answer --
+    a recording too long for THIS machine has to be handed on rather than
+    refused. Two copies of a memory probe is two things to get wrong, so
+    there is one, and this is the name the rest of this file calls it by.
     """
-    if sys.platform == "win32":
-        import ctypes
-
-        class Status(ctypes.Structure):
-            _fields_ = [("dwLength", ctypes.c_ulong),
-                        ("dwMemoryLoad", ctypes.c_ulong),
-                        ("ullTotalPhys", ctypes.c_ulonglong),
-                        ("ullAvailPhys", ctypes.c_ulonglong),
-                        ("ullTotalPageFile", ctypes.c_ulonglong),
-                        ("ullAvailPageFile", ctypes.c_ulonglong),
-                        ("ullTotalVirtual", ctypes.c_ulonglong),
-                        ("ullAvailVirtual", ctypes.c_ulonglong),
-                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-
-        st = Status()
-        st.dwLength = ctypes.sizeof(Status)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
-            return int(st.ullAvailPhys)
-        return 0
-    try:
-        for line in pathlib.Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemAvailable:"):
-                return int(line.split()[1]) * 1024
-    except OSError:
-        pass
-    return 0
+    return settings_mod.free_memory_bytes()
 
 
 def _needed_bytes(minutes: float) -> float:
