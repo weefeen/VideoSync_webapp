@@ -211,6 +211,17 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 .vbody{max-width:1040px;margin:0 auto;width:100%;overflow:hidden;
   display:flex;flex-direction:column;justify-content:center;align-items:center;
   min-height:0;gap:10px;padding:13px 40px 15px}
+.vleft{display:flex;flex-direction:column;gap:9px;min-width:0;min-height:0;
+  align-items:center}
+/* Landscape puts the video beside the score rather than above it: a 16:9
+   picture and a system five times wider than tall are the two shapes that
+   least want to be stacked on a short screen. */
+.viewer.wide .vbody{flex-direction:row;align-items:center;justify-content:center;
+  gap:16px}
+/* Half each, and no more: sized by content they grew to whatever the
+   controls wanted and pushed the whole row off the screen. */
+.viewer.wide .vleft,.viewer.wide .scorearea{flex:0 1 50%;min-width:0;max-width:50%}
+.viewer.browsing .vleft{display:none}
 .vidwrap{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:100%}
 .scorearea{flex:0 0 auto;min-height:0;display:flex;flex-direction:column;gap:9px}
 .vframe{position:relative;overflow:hidden;border-radius:10px;background:#0d0b11;
@@ -290,6 +301,28 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 .pturn[disabled]:hover i{border-color:var(--hair-2);transform:none;box-shadow:none}
 @media (max-width:640px){.pturn{flex-basis:42px;width:42px}
   .pturn i{width:34px;height:34px}}
+/* A touch screen turns pages by swiping the score, so the two columns are
+   pure loss there -- on a phone they took nearly a quarter of the width
+   away from the music. Keyed on the POINTER, not the width: a small window
+   on a desktop still has a mouse and still wants something to click. */
+/* No turn columns where a finger can swipe. Two tests, not one: a tablet
+   reports a coarse pointer at any width, and a phone is narrow whatever it
+   reports -- and a device that gets the pointer test wrong still has a
+   small screen. */
+@media (pointer: coarse), (max-width: 760px){
+  .pturn{display:none}
+  .swipehint{display:inline}
+}
+/* Edge to edge on a small screen whatever is pointing at it. A phone has
+   no width to spare on margins, and this must not depend on the pointer
+   test: a device that reports the wrong one still has a small screen. */
+@media (max-width: 760px), (max-height: 520px){
+  .vbody{padding-left:0;padding-right:0}
+  .plate{border-radius:0}
+}
+.swipehint{display:none;font-family:"JetBrains Mono",monospace;font-size:9px;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.viewer:not(.browsing) .swipehint{display:none}
 .cursor{position:absolute;top:4%;bottom:4%;width:2px;margin-left:-1px;display:none;
   background:rgba(204,35,126,.58);border-radius:2px;pointer-events:none;
   box-shadow:0 0 5px rgba(204,35,126,.20)}
@@ -307,10 +340,17 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 .sbtn.on{background:var(--mag);border-color:var(--mag);color:#fff}
 .sbtn.on:hover{color:#fff}
 .sspace{flex:1 1 auto;min-width:4px}
-@media (max-width:760px){
+/* A SHORT viewport is a phone held sideways, which has as little room for
+   long labels as a narrow one has. */
+@media (max-width:760px), (max-height:520px){
   .lw{display:none}
   .sctl{gap:5px}
   .sbtn{padding:0 9px;min-width:36px;font-size:8.5px}
+  .browsehint,.swipehint{display:none}
+}
+@media (max-height:520px){
+  .vbar{min-height:38px;padding-top:4px;padding-bottom:4px}
+  .vbody{gap:7px;padding-top:7px;padding-bottom:8px}
 }
 .seg{display:inline-flex;border:1px solid var(--hair);border-radius:3px;overflow:hidden}
 .seg .sbtn{border:0;border-left:1px solid var(--hair);border-radius:0;min-width:38px;padding:0 10px}
@@ -499,6 +539,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
  </div>
 
  <div class="vbody">
+  <div class="vleft" id="vleft">
   <div class="vidwrap" id="vidwrap">
     <div class="vframe" id="vframe">
      <iframe id="yt" title="The performance"
@@ -510,13 +551,14 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
      </button>
     </div>
    </div>
-
-  <div class="scorearea" id="scorearea">
    <div class="vscrub">
     <span class="tc" id="tnow">00:00</span>
     <span class="vtrack" id="track"><i id="fill" style="width:0%"></i></span>
     <span class="tc" id="tend">07:04</span>
    </div>
+  </div>
+
+  <div class="scorearea" id="scorearea">
    <div class="scorerow" id="scorerow">
     <button class="pturn prev" id="pprev" aria-label="Previous system"><i><svg width="15" height="24" viewBox="0 0 11 18" fill="none" aria-hidden="true"><path d="M9 1 2 9l7 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></i></button>
     <div class="plate" id="plate"><div class="bands" id="bands"></div></div>
@@ -526,6 +568,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
     <button class="sbtn" id="browsebtn">Open<span class="lw"> the score</span></button>
     <span class="browsehint">Click a bar to play from there</span>
     <span class="pageno" id="pageno"></span>
+    <span class="swipehint">Swipe to turn</span>
     <span class="sspace"></span>
     <span class="seg" id="markseg">
      <button class="sbtn" data-m="measure">Measure</button>
@@ -717,6 +760,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
      barnum  = document.getElementById('barnum'),
      playBtn = document.getElementById('play'),
      scorerow = document.getElementById('scorerow'),
+     vleft   = document.getElementById('vleft'),
      pprev   = document.getElementById('pprev'),
      pnext   = document.getElementById('pnext'),
      browseBtn = document.getElementById('browsebtn'),
@@ -724,7 +768,12 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 
  var GAPB = 10, MINW = 240;
  /* the width the turn columns take out of the reading column */
- function gutters(){ return 2 * (window.innerWidth <= 640 ? 42 : 78); }
+ function gutters(){
+  // Nothing is reserved for controls that are not there: the turn columns
+  // are hidden on a touch screen, where a swipe does the same job.
+  if(!pprev || pprev.offsetParent === null) return 0;
+  return 2 * (window.innerWidth <= 640 ? 42 : 78);
+ }
 
  function mmss(s){
   if(!isFinite(s) || s < 0) s = 0;
@@ -850,8 +899,6 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    var n = Math.min(bandMode, BANDS.length - start);
    var W = Math.max(MINW, Math.min(full, widthFor(n, forPanes)));
 
-   /* the box the systems play inside: the tallest they will ever need,
-      so a page turn moves the music and nothing else */
    /* what the score may occupy, fixed for the whole piece... */
    var boxH = (n - 1) * GAPB + W * worstStack(n);
    /* ...and what these particular systems actually need */
@@ -859,10 +906,26 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
    for(var i=0;i<n && start+i<BANDS.length;i++) ink += W / BANDS[start+i].aspect;
 
    shown = n;
-   vframe.style.width   = Math.round(W)+'px';
-   vframe.style.height  = Math.round(W * 9/16)+'px';
-   vidwrap.style.height = Math.round(W * 9/16)+'px';
-   vscrub.style.width   = Math.round(W)+'px';
+   var videoW = W;
+
+   if(!portrait){
+    /* Side by side. Each column takes half the width; the video is limited
+       by the height it has, the score by the height ITS column has once the
+       controls are out of it. */
+    var colW = Math.max(MINW, (column - 16) / 2);
+    var forScore = Math.max(60, avail - sctl.offsetHeight - 9);
+    W = Math.max(MINW, Math.min(colW - gutters(),
+                                (forScore - (n - 1) * GAPB) / worstStack(n)));
+    boxH = (n - 1) * GAPB + W * worstStack(n);
+    ink = (n - 1) * GAPB;
+    for(var j=0;j<n && start+j<BANDS.length;j++) ink += W / BANDS[start+j].aspect;
+    videoW = Math.max(160, Math.min(colW, (avail - vscrub.offsetHeight - 9) * 16/9));
+   }
+
+   vframe.style.width   = Math.round(videoW)+'px';
+   vframe.style.height  = Math.round(videoW * 9/16)+'px';
+   vidwrap.style.height = Math.round(videoW * 9/16)+'px';
+   vscrub.style.width   = Math.round(videoW)+'px';
    plate.style.width    = Math.round(W)+'px';
    plate.style.height   = Math.round(ink)+'px';
    scorerow.style.height = Math.round(boxH)+'px';
@@ -1026,6 +1089,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 
  /* click a bar, and the video goes there */
  bandsEl.addEventListener('click', function(e){
+  if(swallowClick) return;              // that was the end of a swipe
   var z = e.target.closest('.mz'); if(!z) return;
   for(var i=0;i<BARS.length;i++) if(BARS[i].el === z){
    mediaSeek(BARS[i].t);
@@ -1061,6 +1125,30 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   }
  }
  browseBtn.addEventListener('click', function(){ setBrowse(!browsing); });
+
+ /* A swipe across the score turns the page, which is what a hand does with
+    paper: left is forward, as in every reader. A swipe must not also read
+    as a tap on a bar -- that would seek the video to wherever the finger
+    happened to land -- so the click that follows one is swallowed. */
+ var touchX = 0, touchY = 0, swiping = false, swallowClick = false;
+ bandsEl.addEventListener('touchstart', function(e){
+  if(e.touches.length !== 1) return;
+  touchX = e.touches[0].clientX;
+  touchY = e.touches[0].clientY;
+  swiping = true;
+ }, {passive: true});
+ bandsEl.addEventListener('touchend', function(e){
+  if(!swiping) return;
+  swiping = false;
+  var t = e.changedTouches && e.changedTouches[0];
+  if(!t) return;
+  var dx = t.clientX - touchX, dy = t.clientY - touchY;
+  // far enough, and more across than down, or a scroll becomes a page turn
+  if(Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+  swallowClick = true;
+  setTimeout(function(){ swallowClick = false; }, 400);
+  turn(dx < 0 ? 1 : -1);
+ }, {passive: true});
 
  function turn(by){
   held = Date.now() + HOLD;
