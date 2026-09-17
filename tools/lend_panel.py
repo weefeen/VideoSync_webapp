@@ -68,6 +68,27 @@ ENV_PATH = "/srv/vsw/shared/.env"
 HELD_AT = "manual"
 
 
+def _local_project(edition: str) -> "pathlib.Path | None":
+    """The folder engraved on THIS computer under exactly this name, if any.
+
+    Searched in the score roots this computer is configured with -- the
+    project directory the engraving tool writes to is one of them. Exact
+    name and a `score/` folder inside, because the name is the contract that
+    releases the waiting links and a near-miss releases nothing.
+    """
+    if not edition or "/" in edition or "\\" in edition or edition in (".", ".."):
+        return None
+    try:
+        from app.settings import settings                 # noqa: PLC0415
+    except Exception:                                      # noqa: BLE001
+        return None
+    for root in settings.score_roots:
+        folder = pathlib.Path(root.path) / edition
+        if (folder / "score").is_dir():
+            return folder
+    return None
+
+
 class Panel:
     """What the page may ask of the volunteer, and nothing else."""
 
@@ -88,12 +109,26 @@ class Panel:
         # about rendering had changed. Nothing is said until several looks
         # in a row have failed, and then it is said quietly.
         self._misses = 0
+        # Publishing a score from this page: which edition, whether it is
+        # still running, and the last lines the installer printed.
+        self._publish: dict = {}
 
     def full(self) -> dict:
         """Everything the page draws."""
         with self._lock:
-            wanted = list(self._wanted)
-        return {**self.state(), "server": self.server(), "wanted": wanted}
+            wanted = [dict(r) for r in self._wanted]
+            publish = dict(self._publish)
+        # WHETHER THE SCORE IS ALREADY ON THIS COMPUTER, asked here and not
+        # on the server: the server knows what is published, only this
+        # machine knows what has just been engraved on it. A row whose score
+        # is not published yet but whose folder is sitting in a project
+        # directory here is one button away from being released.
+        for row in wanted:
+            editions = row.get("editions") or []
+            row["local"] = bool(editions and not row.get("ready")
+                                and _local_project(editions[0]) is not None)
+        return {**self.state(), "server": self.server(), "wanted": wanted,
+                "publish": publish}
 
     def server(self) -> dict:
         with self._lock:
@@ -220,6 +255,66 @@ class Panel:
             return f"could not reach the server: {exc}"
         if done.returncode != 0:
             return (done.stderr or "").strip()[-200:] or "the change was refused"
+        return ""
+
+    def publish_score(self, edition: str) -> str:
+        """Check and install a score engraved on this computer. '' or a reason.
+
+        The same command a person would type -- `tools/check_score.py <folder>
+        --install` -- run for them, so nothing new decides whether a score is
+        fit to publish: the checker refuses what it has always refused, and
+        says why, and that is what the page shows.
+
+        THE EDITION COMES FROM OUR OWN WANTED LIST, never from what was sent:
+        it names a folder that is about to be streamed to the production
+        server. And only one runs at a time.
+        """
+        with self._lock:
+            rows = list(self._wanted)
+            running = bool(self._publish.get("running"))
+        if running:
+            return "a score is already being published"
+        if not any(edition in (r.get("editions") or []) for r in rows):
+            return "that score is not on the waiting list any more"
+        folder = _local_project(edition)
+        if folder is None:
+            return (f"there is no folder named {edition!r} on this computer; "
+                    f"engrave it under exactly that name")
+
+        with self._lock:
+            self._publish = {"edition": edition, "running": True, "ok": None,
+                             "tail": ["checking the score"],
+                             "started": __import__("time").time()}
+
+        def run() -> None:
+            checker = pathlib.Path(__file__).resolve().parent / "check_score.py"
+            lines: list = []
+            code = 1
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, str(checker), str(folder), "--install"],
+                    cwd=str(checker.parent.parent), stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                    errors="replace")
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    # The app's own logging is not the installer talking.
+                    if not line.strip() or " INFO " in line or " WARNING " in line:
+                        continue
+                    lines.append(line.strip())
+                    with self._lock:
+                        self._publish["tail"] = lines[-6:]
+                code = proc.wait(timeout=1800)
+            except Exception as exc:                       # noqa: BLE001
+                lines.append(f"could not run the installer: {exc}")
+            with self._lock:
+                self._publish.update(running=False, ok=(code == 0),
+                                     tail=lines[-8:])
+            logger.info("published %s: %s", edition,
+                        "ok" if code == 0 else f"failed ({code})")
+            self.read_wanted()
+
+        threading.Thread(target=run, name="publish", daemon=True).start()
         return ""
 
     def dismiss(self, job: str) -> str:
@@ -353,6 +448,11 @@ def serve(panel: Panel, port: int = 5055) -> str:
             elif path == "/render-now":
                 problem = panel.render_now(str(body.get("job") or ""),
                                            str(body.get("score") or ""))
+                if problem:
+                    self._json({"problem": problem}, code=400)
+                    return
+            elif path == "/publish":
+                problem = panel.publish_score(str(body.get("edition") or ""))
                 if problem:
                     self._json({"problem": problem}, code=400)
                     return
@@ -646,6 +746,7 @@ function paint(s){
     (s.server && s.server.asked && s.server.problem)
       ? 'The server could not be reached: ' + s.server.problem : '';
 
+  PUBLISH = s.publish || {};
   drawAsks(s.wanted || []);
 
   document.getElementById('facts').innerHTML = [
@@ -704,6 +805,33 @@ function ago(ms){
   return Math.round(s / 86400) + ' days ago';
 }
 
+let PUBLISH = {};
+
+/* WHAT A ROW OFFERS WHEN ITS SCORE IS NOT PUBLISHED. The folder is on this
+   computer: a button. It is being published: what the installer is saying.
+   It just was: whether it worked, and why not if it did not. Otherwise: the
+   instruction, as before. */
+function publishBit(edition, r, afterwards){
+  const p = PUBLISH || {};
+  if(p.edition === edition && p.running){
+    const last = (p.tail || []).slice(-1)[0] || '';
+    return '<span class="mt"><b>Publishing…</b> ' + last + '</span>';
+  }
+  if(p.edition === edition && p.ok === true){
+    return '<span class="mt"><b>Published.</b> ' + afterwards + '</span>';
+  }
+  const failed = (p.edition === edition && p.ok === false)
+    ? '<span class="mt"><b>Not published.</b> ' + (p.tail || []).slice(-3).join(' · ')
+      + '</span> '
+    : '';
+  if(r.local){
+    return failed + '<button class="plain" data-publish="' + edition + '">'
+      + 'Publish this score</button> <span class="mt">The folder is on this computer. '
+      + 'It is checked first, then sent to the server.</span>';
+  }
+  return failed;
+}
+
 function drawAsks(rows){
   const box = document.getElementById('asks');
   if(!box) return;
@@ -747,19 +875,23 @@ function drawAsks(rows){
         + '</span>'
         + '<div class="row">' + folders + '</div>'
         + vids
-        + '<div class="row"><span class="mt">'
+        + '<div class="row">'
         + (ready
-           ? 'The score is published — these finish on their own, nothing to press.'
-           : 'Engrave it under exactly that folder name and publish it; '
-             + 'the videos then align themselves.')
-        + '</span></div></div>';
+           ? '<span class="mt">The score is published — these finish on their own, nothing to press.</span>'
+           : (publishBit(r.editions && r.editions[0], r,
+                         'The waiting videos align by themselves; nothing else to press.')
+              || '<span class="mt">Engrave it under exactly that folder name, '
+                 + 'and a button to publish it appears here.</span>'))
+        + '</div></div>';
     }
 
     const act = (ready
       ? '<button class="plain" data-job="' + r.job + '" data-score="' + ready
         + '">Make it now</button>'
-      : '<span class="mt">Engrave one of these and publish it, then this '
-        + 'turns into a button.</span>')
+      : (publishBit(r.editions && r.editions[0], r,
+                    'Their render can be started once the list refreshes.')
+         || '<span class="mt">Engrave one of these and publish it, then this '
+            + 'turns into a button.</span>'))
       // NOT A DELETE. Somebody asked for this and is entitled to the
       // answer, so closing it tells them rather than making the request
       // disappear silently.
@@ -784,6 +916,9 @@ function drawAsks(rows){
   });
   box.querySelectorAll('button[data-drop]').forEach(b => {
     b.onclick = () => send('/dismiss', {job: b.dataset.drop});
+  });
+  box.querySelectorAll('button[data-publish]').forEach(b => {
+    b.onclick = () => send('/publish', {edition: b.dataset.publish});
   });
 }
 
