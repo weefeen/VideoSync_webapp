@@ -2691,59 +2691,100 @@ function fileRefused(name){
   });
 })();
 
-/* ── a link you can SEE ───────────────────────────────────────────────
-   Dropping a link onto the dropzone and the /app/?url= address both worked,
-   and nothing on the page said so: the dropzone reads "Drop your
-   performance video", and a person holding a YouTube link has no reason to
-   try dragging it there. A feature nobody can find is not live. So there is
-   a field, in words, and a paste anywhere on the step works too.
+/* ── two ways in, side by side ────────────────────────────────────────
+   Your own recording, or somebody's performance on YouTube: two equal
+   choices, and they have to LOOK equal. The link began as a strip under the
+   dropzone, which made it read as a footnote to the upload -- you had to
+   read the page to find out there were two things you could do. Now there
+   are two cards of the same size and weight with "or" between them, each
+   saying one thing, so the choice is made at a glance.
 
-   OUTSIDE THE DROPZONE, which is a <label> for the file input: any click
-   inside it opens the file picker, so a field placed there could never be
-   typed into. It sits between the dropzone and the answer box, so what a
-   link does is said directly under where it was given. */
-const linkFieldCSS = document.createElement('style');
-linkFieldCSS.textContent = `
-  .linkline{display:grid;grid-template-columns:auto 1fr auto;align-items:center;
-    gap:14px;margin-top:13px;padding:12px 14px 12px 18px;
-    border:1px solid var(--hair-2);border-radius:3px;background:var(--surface)}
-  .linkline .lab{white-space:nowrap}
-  .linkline input{font:inherit;font-size:14px;color:var(--ink);min-width:0;
-    background:transparent;border:0;border-bottom:1px solid var(--hair);
-    padding:8px 2px;outline:none;transition:border-color .15s}
-  .linkline input::placeholder{color:var(--faint)}
-  .linkline input:focus{border-bottom-color:var(--b3)}
-  .linkline button{font:inherit;font-family:"JetBrains Mono",monospace;
-    font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:#fff;
-    background:var(--b1);border:0;border-radius:2px;padding:12px 18px;
-    cursor:pointer;white-space:nowrap;transition:background .18s}
-  .linkline button:hover{background:var(--b2)}
-  .linkline button:disabled{opacity:.45;cursor:default}
-  /* A PHONE STACKS IT. Label, field and button side by side left the
-     field about ninety pixels wide -- "Paste a Chop" -- beside a button
-     that took the row, which is the field being the thing that shrank.
-     Each gets the full width instead. */
-  @media (max-width:560px){
-    .linkline{grid-template-columns:1fr;gap:10px;padding:14px}
-    .linkline button{width:100%;padding:14px 18px}
+   The dropzone keeps its own element, id and behaviour -- the design's
+   scripts and the upload progress all address #drop -- and is only moved
+   into the pair. While an upload runs, it takes the whole row back for its
+   progress rail.
+
+   The link card is a <form> OUTSIDE the dropzone <label>: a click anywhere
+   inside that label opens the file picker, so a field placed in it could
+   never be typed into. */
+const twoWaysCSS = document.createElement('style');
+twoWaysCSS.textContent = `
+  .twoways{display:grid;grid-template-columns:1fr auto 1fr;gap:18px;align-items:stretch}
+  .twoways .or{align-self:center;font-family:Fraunces,serif;font-style:italic;
+    font-weight:300;font-size:21px;color:var(--faint)}
+  .twoways .dropzone,.linkcard{display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;gap:16px;min-height:290px;
+    padding:38px 28px;border:1px dashed var(--hair-2);border-radius:3px;
+    background:linear-gradient(#fdfbf7,#f9f5ee);box-shadow:inset 0 1px 0 #fff;
+    box-sizing:border-box;margin:0}
+  .twoways .dropzone h2,.linkcard h2{font-family:Fraunces,serif;font-weight:300;
+    font-size:26px;line-height:1.15;letter-spacing:-.02em;margin:0;color:var(--ink)}
+  .twoways .dropzone h2 em,.linkcard h2 em{font-style:italic;color:var(--b2)}
+  .twoways .dropzone .lab,.linkcard .lab{display:block;margin-top:9px}
+  .linkcard .glyph{width:66px;height:66px;display:grid;place-items:center;
+    border:1px solid var(--hair-2);border-radius:50%;color:var(--b2);
+    transition:border-color .2s,color .2s}
+  .linkcard:focus-within{border-color:var(--b3)}
+  .linkcard:focus-within .glyph{border-color:var(--b3);color:var(--b3)}
+  .linkcard input{width:100%;max-width:330px;box-sizing:border-box;font:inherit;
+    font-size:14px;text-align:center;color:var(--ink);background:#fffdf9;
+    border:1px solid var(--hair);border-radius:2px;padding:12px 14px;outline:none}
+  .linkcard input::placeholder{color:var(--faint)}
+  .linkcard input:focus{border-color:var(--b3)}
+  .linkcard button{font:inherit;font-family:"JetBrains Mono",monospace;font-size:9.5px;
+    letter-spacing:.19em;text-transform:uppercase;color:#fff;background:var(--b1);
+    border:0;border-radius:2px;padding:15px 26px;cursor:pointer;white-space:nowrap;
+    transition:background .18s}
+  .linkcard button:hover{background:var(--b2)}
+  /* an upload in progress takes the row for its rail */
+  .twoways:has(.dropzone.busy){grid-template-columns:1fr}
+  .twoways:has(.dropzone.busy) .or,.twoways:has(.dropzone.busy) .linkcard{display:none}
+  .twoways:has(.dropzone.busy) .dropzone{min-height:0}
+  @media (max-width:760px){
+    .twoways{grid-template-columns:1fr;gap:12px}
+    .twoways .or{justify-self:center}
+    .twoways .dropzone,.linkcard{min-height:0;padding:28px 20px}
+    .linkcard .glyph{display:none}
+    /* the video card's button spans its card on a phone; this one matches */
+    .linkcard input,.linkcard button{max-width:none;width:100%}
   }
+  /* /app: the two cards and nothing around them. The step label, the frame
+     and the long note belong to the home page, which explains. */
+  html.minimal #uploadstate{border:0;background:transparent;padding:0}
+  html.minimal #uploadstate>.stepmark,html.minimal #uploadstate .dropnote{display:none}
 `;
-document.head.appendChild(linkFieldCSS);
+document.head.appendChild(twoWaysCSS);
 
 (function(){
   const drop = $('#drop');
   if(!drop || !drop.parentNode) return;
+
+  const pair = document.createElement('div');
+  pair.className = 'twoways';
+  pair.id = 'twoways';
+  drop.parentNode.insertBefore(pair, drop);
+  pair.appendChild(drop);
+
+  const or = document.createElement('span');
+  or.className = 'or';
+  or.textContent = 'or';
+  pair.appendChild(or);
+
   const form = document.createElement('form');
-  form.className = 'linkline';
+  form.className = 'linkcard';
   form.id = 'linkline';
   form.setAttribute('novalidate', '');
   form.innerHTML =
-      '<span class="lab">or a YouTube link</span>'
+      '<span class="glyph" aria-hidden="true">'
+    +   '<svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>'
+    + '</span>'
+    + '<div><h2>Paste a <em>YouTube</em> link</h2>'
+    +   '<span class="lab">a performance somebody posted</span></div>'
     + '<input type="url" id="linkurl" inputmode="url" autocomplete="off" '
     +        'spellcheck="false" aria-label="A YouTube link" '
-    +        'placeholder="Paste a Chopin performance from YouTube">'
+    +        'placeholder="https://www.youtube.com/watch?v=…">'
     + '<button type="submit" id="linkgo">Watch with the score</button>';
-  drop.parentNode.insertBefore(form, drop.nextSibling);
+  pair.appendChild(form);
 
   form.addEventListener('submit', function(e){
     e.preventDefault();
@@ -2754,20 +2795,19 @@ document.head.appendChild(linkFieldCSS);
   });
 
   /* PASTE ANYWHERE ON THE STEP. Ctrl-V with nothing focused is the
-     shortest path there is, and it is the one that works on a phone,
-     where nothing can be dragged. Only when the upload step is on
-     screen, only when the paste is not going into some other field, and
-     only when it reads as a YouTube link -- a paste of anything else is
-     left alone rather than answered with a refusal nobody asked for. */
+     shortest path there is, and on a phone it is the only one. Only while
+     the upload step is on screen, only when the paste is not going into
+     some other field, and only when it reads as a YouTube link -- anything
+     else is left alone rather than answered with a refusal. */
   document.addEventListener('paste', function(e){
-    if(!drop.offsetParent) return;                    // not on this step
+    if(!drop.offsetParent) return;
     const t = e.target;
     const typing = t && (t.isContentEditable ||
       /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''));
     if(typing && t.id !== 'linkurl') return;
     const text = ((e.clipboardData && e.clipboardData.getData('text')) || '').trim();
     if(!text) return;
-    try{ ytVideoId(text); }catch(err){ return; }       // not a link we take
+    try{ ytVideoId(text); }catch(err){ return; }
     e.preventDefault();
     $('#linkurl').value = text;
     clearLinkBox();
