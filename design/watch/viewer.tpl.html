@@ -188,10 +188,17 @@ main{max-width:1040px;margin:0 auto;padding:0 40px 78px}
   text-transform:uppercase;color:var(--soft);border-bottom:1px solid var(--hair-2)}
 
 /* ══════════ 2 · the viewer — one screenful, never a scrollbar ══════════ */
-body.watching{position:fixed;inset:0;overflow:hidden;overscroll-behavior:none;width:100%;height:100%}
-body.watching .top,body.watching main,body.watching .srcfoot,body.watching .foot{display:none}
+/* `html.gowatch` IS THE SAME STATE, DECIDED EARLIER. `route()` runs at the
+   very end of the script, so on /p/<id> the browser painted the entry page
+   first and swapped to the player seven hundred lines later -- a visible
+   flash of a page nobody asked for. The server sets this class in the HEAD,
+   which is before first paint; `body.watching` still does the work
+   afterwards. The selectors are doubled rather than the declarations, so
+   there is nothing to keep in step. */
+body.watching,html.gowatch body{position:fixed;inset:0;overflow:hidden;overscroll-behavior:none;width:100%;height:100%}
+body.watching .top,body.watching main,body.watching .srcfoot,body.watching .foot,html.gowatch .top,html.gowatch main,html.gowatch .srcfoot,html.gowatch .foot{display:none}
 .viewer{display:none}
-body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
+body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   height:100vh;height:100dvh;width:100%;
   padding:var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l)}
 .vbar{max-width:1040px;margin:0 auto;width:100%;
@@ -226,7 +233,22 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 .vmi.done{color:#2f6b3a}
 /* On a phone the bar is tight and the word is the first thing to go; the
    mark still says what the button is. */
-@media (max-width:560px){.vsb{padding:6px 8px}.vsb span{display:none}}
+/* THE BAR HAS TO FIT, and on a phone it did not: 40px of padding each side
+   plus the wordmark, the title, this button and the bar number ran past the
+   edge, and the SHARE BUTTON WAS THE THING PUSHED OFF -- present, visible to
+   a test, and unreachable by a thumb. The label goes first (the mark still
+   says what it is), the padding follows, and the title is allowed to shrink
+   before anything is pushed anywhere. */
+@media (max-width:560px){
+  .vbar{padding-left:14px;padding-right:14px;gap:9px}
+  .vsb{padding:6px 8px}
+  .vsb span{display:none}
+  .vmark{font-size:0;gap:0}          /* the arrow alone; it is a Back button */
+  .vmark svg{opacity:.7}
+  .vwork{font-size:12.5px}
+  .vbarnum{font-size:8.5px}
+  .vbarnum b{font-size:14px;margin-left:5px}
+}
 .vbarnum{flex:0 0 auto;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.17em;
   text-transform:uppercase;color:var(--faint);font-variant-numeric:tabular-nums}
 .vbarnum b{font-family:Fraunces,serif;font-size:17px;letter-spacing:0;color:var(--ink);
@@ -561,7 +583,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   <span class="vshare">
    <button class="vsb" id="sharebtn" aria-haspopup="true" aria-expanded="false">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>
-    Share</button>
+    <span>Share</span></button>
    <span class="vmenu" id="sharemenu" hidden>
     <button class="vmi" data-share="fb">Post to Facebook</button>
     <button class="vmi" data-share="wa">WhatsApp</button>
@@ -576,7 +598,7 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   <div class="vidwrap" id="vidwrap">
     <div class="vframe" id="vframe">
      <iframe id="yt" title="The performance"
-             allow="accelerometer; encrypted-media; picture-in-picture; fullscreen"
+             allow="accelerometer; autoplay; encrypted-media; picture-in-picture; fullscreen"
              allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
      <video id="vid" playsinline webkit-playsinline preload="metadata"></video>
      <button class="playbtn" id="play" aria-label="Play">
@@ -698,6 +720,9 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   startLoop();
  }
  function goHome(){
+  /* The class the server set before paint has to go too, or leaving the
+     performance would leave the entry page still hidden underneath. */
+  document.documentElement.classList.remove('gowatch');
   if(browsing) setBrowse(false);
   if(useYT) ytCmd('pauseVideo'); else vid.pause();
   stopLoop(); resetRun();
@@ -1162,7 +1187,15 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   for(var i=0;i<BARS.length;i++) if(BARS[i].el === z){
    mediaSeek(BARS[i].t);
    held = 0; lastPaint = -1;
-   if(browsing){ at = i; setBrowse(false); mediaPlay(); }
+   if(browsing){ at = i; setBrowse(false); }
+   /* A CLICK ON A BAR MEANS "PLAY FROM HERE", paused or not. It used to
+      start the video only from the open score and merely seek from the
+      normal view -- so on a paused performance the cursor jumped to the
+      bar and then nothing happened, which reads as the click not working.
+      Asked only when paused: playVideo on a playing player is harmless,
+      but the guard keeps a click from racing a state YouTube has not
+      reported yet. */
+   if(!mediaPlaying()) mediaPlay();
    return;
   }
  });
@@ -1306,8 +1339,18 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
 
  function here(){ return location.href.split('#')[0]; }
  function title(){
-  return (DATA && DATA.title ? DATA.title + ' — with the score'
-                             : 'Chopin, with the score');
+  /* `document.title`, NOT `DATA`. DATA is declared inside the page's own
+     IIFE and is not visible from this block, so reading it threw
+     "DATA is not defined" -- and only on a phone, because only the share
+     sheet path asks for a title. The desktop menu never called this, so
+     the button looked fine everywhere it was tried. The server already
+     writes the performance into <title> for the share card, which is the
+     same string and is in scope from anywhere. */
+  return (document.title || 'Chopin, with the score').trim();
+ }
+ function show(on){
+  if(on){ menu.removeAttribute('hidden'); } else { menu.setAttribute('hidden', ''); }
+  btn.setAttribute('aria-expanded', on ? 'true' : 'false');
  }
  function open_(w, h, url){
   /* A centred popup rather than a new tab: it reads as a dialog belonging
@@ -1323,13 +1366,25 @@ body.watching .viewer{display:grid;grid-template-rows:auto minmax(0,1fr);
   /* The native sheet where the browser has one. A cancel is an AbortError
      and is not a failure -- dropping to the menu on a deliberate cancel
      would be arguing with the person. */
-  if(navigator.share){
-   navigator.share({title: title(), url: here()}).catch(function(){});
+  /* THE OS SHEET ONLY WHERE IT IS ACTUALLY BETTER. Chrome on Windows
+     defines navigator.share too, so testing for it alone sent every
+     desktop click into the system share dialog -- which is not what the
+     button looks like it does, and on a machine without a sheet configured
+     it appears to do nothing at all. That was the bug: the button worked
+     and nobody could tell.
+
+     A finger gets the sheet, because it holds the Facebook app itself. A
+     mouse gets our menu. And a rejection that is not the person cancelling
+     falls back to the menu rather than silently ending. */
+  var handheld = matchMedia('(pointer: coarse)').matches || innerWidth < 760;
+  if(navigator.share && handheld){
+   navigator.share({title: title(), url: here()}).catch(function(err){
+    if(err && err.name === 'AbortError') return;      // they cancelled
+    show(true);
+   });
    return;
   }
-  var on = menu.hasAttribute('hidden');
-  if(on){ menu.removeAttribute('hidden'); } else { menu.setAttribute('hidden',''); }
-  btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  show(menu.hasAttribute('hidden'));
  };
 
  Array.prototype.forEach.call(menu.querySelectorAll('[data-share]'), function(b){

@@ -133,7 +133,19 @@ def _font(size: int, which: str = "display"):
 
 
 def draw(frame: pathlib.Path, out: pathlib.Path,
-         band_png: "pathlib.Path | None" = None) -> None:
+         band_png: "pathlib.Path | None" = None,
+         headline: str = HEADLINE, kicker: str = KICKER,
+         note: str = NOTE) -> None:
+    """The card. The words are arguments so ONE card exists, not two.
+
+    This drew the site's generic card from three module constants. A
+    per-performance card wants the same photograph-over-engraving layout
+    with different words -- the piece, the pianist -- and copying the
+    function to change three strings would mean every later change to the
+    scrim, the crop or the band scale had to be made twice, which is how
+    two cards stop looking like one product. The defaults are what the
+    site card has always said, so the existing caller is unchanged.
+    """
     from PIL import Image, ImageDraw, ImageFilter
 
     src = Image.open(frame).convert("RGB")
@@ -228,14 +240,14 @@ def draw(frame: pathlib.Path, out: pathlib.Path,
     # The kicker, letter-spaced by hand because PIL has no tracking.
     small = _font(round(WIDTH * 0.017), "body")
     x = left
-    for ch in KICKER:
+    for ch in kicker:
         pen.text((x, int(height * 0.075)), ch, font=small,
                  fill=(233, 226, 240))
         x += pen.textlength(ch, font=small) + WIDTH * 0.002
 
     big = _font(round(WIDTH * 0.052), "display")
     y = int(height * 0.155)
-    for line in HEADLINE.split("\n"):
+    for line in headline.split("\n"):
         pen.text((left, y), line, font=big, fill=PAPER)
         y += round(WIDTH * 0.059)
 
@@ -245,7 +257,7 @@ def draw(frame: pathlib.Path, out: pathlib.Path,
                            rule_y + max(2, WIDTH * 0.003)], radius=3,
                           fill=MAGENTA)
     free = _font(round(WIDTH * 0.0202), "body")
-    pen.text((left + WIDTH * 0.046, rule_y - WIDTH * 0.0077), NOTE,
+    pen.text((left + WIDTH * 0.046, rule_y - WIDTH * 0.0077), note,
              font=free, fill=PAPER)
 
     # PNG, NOT JPEG. This card is mostly crisp things -- set type, a
