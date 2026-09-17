@@ -34,6 +34,8 @@ def main() -> int:
     ap.add_argument("public_id", nargs="?", help="just this one")
     ap.add_argument("--check", action="store_true", help="change nothing")
     ap.add_argument("--force", action="store_true", help="redraw existing")
+    ap.add_argument("--meta", action="store_true",
+                    help="also store the pianist from YouTube on the row")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -60,7 +62,30 @@ def main() -> int:
             skipped += 1
             continue
         payload = viewer.payload(row)
-        if not (payload.get("media") or {}).get("external_id"):
+        vid = (payload.get("media") or {}).get("external_id")
+
+        # THE PIANIST, WRITTEN DOWN. The card asks YouTube for it every time
+        # it is drawn, but the PAGE cannot -- og:description is built per
+        # request and must not make a network call to do it. So a
+        # performance backfilled from the library, which knows the work and
+        # nobody who played it, reads "Played with the engraved score..."
+        # under a portrait of somebody. Stored here, every later reader has
+        # it: the card, the page, the description, and whatever comes next.
+        #
+        # `performer` only. The TITLE is left alone deliberately -- it is the
+        # heading on the watch page, and "Pianist - Work (second stage,
+        # 2010)" is a caption, not a heading.
+        if args.meta and vid and not (row["performer"] or "").strip():
+            meta = sharecard.youtube_meta(vid)
+            name = sharecard._pianist(meta.get("title", "")) or meta.get("author", "")
+            if name and not args.check:
+                store.set_performance(row["id"], performer=name)
+                payload["performer"] = name
+                print(f"  pianist     {public_id}  {name}")
+            elif name:
+                print(f"  would name  {public_id}  {name}")
+
+        if not vid:
             # An upload, not a link: it has no YouTube still to build from.
             skipped += 1
             continue
