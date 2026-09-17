@@ -23,8 +23,10 @@ at feed size where a re-encoded one turns grey.
 """
 from __future__ import annotations
 
+import json
 import logging
 import pathlib
+import urllib.parse
 import urllib.request
 
 from . import library, scorestore, svg as appsvg, viewer
@@ -42,6 +44,39 @@ _STILLS = ("maxresdefault", "sddefault", "hqdefault", "mqdefault")
 #: Rasterised well above the 1200px the card is wide, then reduced by the
 #: renderer. That reduction is what makes notation legible in a feed.
 _BAND_WIDTH = 2600
+
+
+def youtube_meta(vid: str) -> dict:
+    """What YouTube calls this video: its title and the channel.
+
+    oEmbed, which is YouTube's own published endpoint for exactly this, and
+    it wants no API key, no quota and no yt-dlp. That matters here: the web
+    box has none of those, and a card should not depend on the machinery
+    that downloads audio.
+
+    WHY THE YOUTUBE TITLE AND NOT OURS. A performance backfilled from the
+    library is titled after the score package -- "3eme Scherzo pour le
+    Piano" -- which names the work and nobody who played it. YouTube's
+    title is almost always "Pianist - Work", which is both facts in one
+    string and is what somebody scrolling a feed needs to see. The score
+    package cannot know who sat at the piano; the video always does.
+
+    Returns {} on any failure. The card falls back to what we already knew.
+    """
+    if not vid:
+        return {}
+    watch = urllib.parse.quote(f"https://www.youtube.com/watch?v={vid}", safe="")
+    url = f"https://www.youtube.com/oembed?url={watch}&format=json"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as answer:
+            if answer.status != 200:
+                return {}
+            got = json.loads(answer.read().decode("utf-8"))
+    except Exception:                                # noqa: BLE001
+        logger.info("%s: oEmbed did not answer", vid)
+        return {}
+    return {"title": (got.get("title") or "").strip(),
+            "author": (got.get("author_name") or "").strip()}
 
 
 def cache_dir() -> pathlib.Path:
@@ -72,11 +107,19 @@ def build(payload: dict, public_id: str) -> "pathlib.Path | None":
         return None
     band = _band(payload.get("edition") or "", out.parent / f"{public_id}-band.png")
 
+    # YouTube's own words first, ours only if it will not answer.
+    meta = youtube_meta(vid)
+    said = dict(payload)
+    if meta.get("title"):
+        said["title"] = meta["title"]
+    if meta.get("author") and not said.get("performer"):
+        said["performer"] = meta["author"]
+
     try:
         draw(still, out, band_png=band,
-             headline=_headline(payload),
+             headline=_headline(said),
              kicker="CHOPIN.WEEFEEN.COM",
-             note=_note(payload))
+             note=_note(said))
     except Exception:                                # noqa: BLE001
         logger.warning("%s: could not draw the share card", public_id,
                        exc_info=True)
@@ -174,7 +217,15 @@ def _headline(payload: dict) -> str:
         if sep in title:
             title = title.split(sep, 1)[1]
             break
-    title = title.split(" (")[0].strip() or "Chopin"
+    # What a channel appends after a pipe is its own series, not the work.
+    title = title.split(" | ")[0]
+    # And "Chopin:" in front of it is the one composer this whole site is,
+    # so it is the least informative word the card could spend a line on.
+    for prefix in ("Chopin:", "Chopin -", "Chopin,", "F. Chopin:", "Frederic Chopin:"):
+        if title.strip().lower().startswith(prefix.lower()):
+            title = title.strip()[len(prefix):]
+            break
+    title = title.split(" (")[0].strip().strip(",").strip() or "Chopin"
 
     words, lines, line = title.split(), [], ""
     for word in words:
