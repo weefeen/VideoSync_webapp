@@ -430,6 +430,7 @@ def _read_score_metadata(source: pathlib.Path) -> dict[str, str]:
 
 def bundle_of(root: pathlib.Path) -> pathlib.Path | None:
     """The project's `.spj`, if the folder carries one under its own name."""
+    root = pathlib.Path(root).resolve()
     spj = root / f"{root.name}.spj"
     return spj if spj.is_file() else None
 
@@ -484,7 +485,7 @@ def unpacked(root: str | pathlib.Path) -> pathlib.Path | None:
     refreshed when the bundle's size or mtime changes, and its folder keeps
     the piece's name, which is the join key everywhere.
     """
-    root = pathlib.Path(root)
+    root = pathlib.Path(root).resolve()
     if is_open(root):
         return None
     spj = bundle_of(root)
@@ -625,7 +626,7 @@ def content_id(root: str | pathlib.Path) -> str:
     server keeps the id it was SENT (see `installed_note`). Cached by the
     stat of every contributing file; the panel asks every second.
     """
-    root = pathlib.Path(root)
+    root = pathlib.Path(root).resolve()
     spj = bundle_of(root)
     if spj is None:
         spj = next(iter(sorted(root.glob("*.spj"))), None)
@@ -683,7 +684,7 @@ def version_of(root: str | pathlib.Path) -> dict:
     read from the bundle's project.json (authoritative, spec §2), then a
     loose one, then an installed copy's note.
     """
-    root = pathlib.Path(root)
+    root = pathlib.Path(root).resolve()
     note = root / VERSION_FILE
     spj = bundle_of(root)
     data = None
