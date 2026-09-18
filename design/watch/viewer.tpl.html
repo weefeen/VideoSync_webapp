@@ -1424,7 +1424,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
         state === 'UNAVAILABLE'
           ? 'The video cannot be used here, so there is no score to follow.'
       : why === 'PARTIAL_UNSUPPORTED'
-          ? 'The piece was recognised and its score exists, but the recording did not line up with the whole score -- it may be an excerpt, or the score\'s bar numbering may need a fix. It will be tried again.'
+          ? 'The piece was recognised and its score exists, but the recording did not line up with the whole score -- it may be an excerpt. It will be tried again.'
       : why === 'NOT_CHOPIN'
           ? 'We listened, and this is not a piece we can follow with a score.'
       : state === 'FAILED'
