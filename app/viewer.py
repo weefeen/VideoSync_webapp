@@ -17,8 +17,10 @@ bucket, measured, and the numbers kept.
 from __future__ import annotations
 
 import logging
+import pathlib
 
 from . import bars as barmod
+from . import package as pkg
 from urllib.parse import quote
 
 from . import library, scorestore, store
@@ -42,6 +44,12 @@ def geometry(edition: str) -> list[dict]:
     if not starts:
         return []
 
+    # THE EXTRACTOR'S OWN BOXES, where the package folder is on this disk;
+    # barline detection only where it is not. Keyed by sync key either way
+    # -- detection numbers bars from the band's first measure, which equals
+    # the key only when the piece has no pickup and no split cadenza, so a
+    # fallback there is logged as the approximation it is.
+    root = _root(edition)
     rows: list[tuple] = []
     for first in starts:
         data = _band_bytes(edition, first)
@@ -51,7 +59,13 @@ def geometry(edition: str) -> list[dict]:
             continue
         try:
             aspect = barmod.band_aspect(data)
-            for bar in barmod.bars_from(data, first, name=f"{edition}/{first}"):
+            bars = barmod.bars_from_project(root, first) if root else None
+            if bars is None:
+                bars = barmod.bars_from(data, first, name=f"{edition}/{first}")
+                if root is None:
+                    logger.info("%s: no project files here; bars of band %s "
+                                "numbered from its barlines", edition, first)
+            for bar in bars:
                 rows.append((bar.measure, first, bar.x0, bar.x1, aspect))
         except barmod.BandGeometryError:
             # One unreadable system must not cost the whole score: the rest
@@ -66,6 +80,26 @@ def geometry(edition: str) -> list[dict]:
                     len(rows), len(starts), edition)
     return [{"measure": m, "band": b, "x0": x0, "x1": x1, "aspect": a}
             for m, b, x0, x1, a in rows]
+
+
+def _root(edition: str) -> "pathlib.Path | None":
+    """The package folder on this disk, by exact name, or None."""
+    from . import pipeline                                  # noqa: PLC0415
+    found = pipeline.find_package(edition)
+    return found.root if found is not None and found.name == edition else None
+
+
+def labels_for(edition: str) -> dict[int, int]:
+    """Sync key -> the source bar a person reads. Empty when unknown."""
+    root = _root(edition)
+    try:
+        if root is not None and (root / "reference" / "measures.data").is_file():
+            return pkg.sync_key_to_bar(root / "reference" / "measures.data")
+        raw = scorestore.preview_bytes(edition, scorestore.ALIGNMENT)
+        return pkg.sync_key_to_bar(raw) if raw else {}
+    except Exception:                                       # noqa: BLE001
+        logger.warning("%s: could not read the bar labels", edition, exc_info=True)
+        return {}
 
 
 def _band_starts(edition: str) -> list[int]:
@@ -106,12 +140,22 @@ def payload(performance) -> dict:
 
     # Grouped by system, because that is how the page draws it: one picture
     # with the bars laid over it as percentages of its width.
+    # DISPLAY IS THE SOURCE NUMBER, SYNC IS THE SYNC KEY. Timings and boxes
+    # meet on the key; the label a person reads is the source bar, and a
+    # box no source bar owns -- a cadenza's extra boxes -- is labelled with
+    # the bar before it, which is the bar the music is in.
+    labels = labels_for(edition) if edition else {}
     by_band: dict[int, list[dict]] = {}
     aspects: dict[int, float] = {}
+    shown = None
     for measure in sorted(set(timings) & set(boxes)):
         box = boxes[measure]
+        shown = labels.get(measure, measure if not labels else shown)
+        if shown is None:
+            shown = measure
         by_band.setdefault(box["band"], []).append({
-            "m": measure,
+            "m": shown,
+            "k": measure,
             # SECONDS, because the player reports seconds. The database keeps
             # milliseconds; the conversion happens once, here.
             "t": round(timings[measure] / 1000.0, 3),

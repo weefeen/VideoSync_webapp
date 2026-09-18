@@ -188,6 +188,51 @@ def _walk(element: ET.Element, frame: _Frame,
         _walk(child, here, found)
 
 
+def bars_from_project(root: pathlib.Path, first_measure: int) -> "list[Bar] | None":
+    """The bars of one band, from the boxes the extractor already measured.
+
+    THE EXTRACTOR KNOWS WHERE EVERY MEASURE IS. `score/measures-from-score.json`
+    holds a box per measure with its sync key and source number, and
+    `score/export.json` says which page and which crop each band was cut
+    from. Mapping the boxes into the crop gives every bar's extent on the
+    band with no guessing -- where `bars_from` guesses from barlines in the
+    SVG and, on the first piece with a cadenza and a final double barline,
+    found one bar where there were two and three where there were two.
+
+    Keyed by SYNC KEY, so a bar meets its timing directly. Returns None when
+    the project files are not here, and the caller falls back to barlines.
+    """
+    import json
+    manifest = root / "score" / "export.json"
+    measures = root / "score" / "measures-from-score.json"
+    if not manifest.is_file() or not measures.is_file():
+        return None
+    try:
+        ex = json.loads(manifest.read_text(encoding="utf-8"))
+        ms = json.loads(measures.read_text(encoding="utf-8"))
+        entry = next(e for e in ex.get("entries", [])
+                     if int(e.get("first_measure", -1)) == first_measure)
+        x0, y0, x1, y1 = (float(v) for v in entry["crop"])
+        page = ms["pages"][int(entry.get("page_idx", 0))]
+        boxes = page.get("measures") or []
+    except (ValueError, KeyError, IndexError, StopIteration, TypeError):
+        return None
+    if x1 <= x0:
+        return None
+    width = x1 - x0
+    inside = [b for b in boxes
+              if "sync_key" in b
+              and (float(b["top"]) + float(b["bottom"])) / 2 >= y0
+              and (float(b["top"]) + float(b["bottom"])) / 2 <= y1]
+    inside.sort(key=lambda b: float(b["left"]))
+    bars: list[Bar] = []
+    for b in inside:
+        bars.append(Bar(measure=int(b["sync_key"]),
+                        x0=max(0.0, (float(b["left"]) - x0) / width),
+                        x1=min(1.0, (float(b["right"]) - x0) / width)))
+    return bars or None
+
+
 def bars_for(path: str | pathlib.Path, first_measure: int) -> list[Bar]:
     """The bars visible on one band, left to right, numbered from its first.
 

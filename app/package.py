@@ -36,9 +36,21 @@ class PackageError(ValueError):
 
 @dataclasses.dataclass(frozen=True)
 class Band:
-    """One score image and the measure at which it takes over."""
+    """One score image and the measure at which it takes over.
+
+    `first_measure` is the SOURCE bar the band starts at -- its file name,
+    and what a person reads. `sync_key` is the aligner's index for that
+    same bar, from export.json, and is what the timeline is keyed by. They
+    coincide unless the piece has a pickup bar or a cadenza spread over
+    extra boxes; four packages coincided and the fifth did not.
+    """
     first_measure: int
     path: pathlib.Path
+    sync_key: int = -1
+
+    @property
+    def key(self) -> int:
+        return self.sync_key if self.sync_key >= 0 else self.first_measure
 
     @property
     def is_vector(self) -> bool:
@@ -140,6 +152,15 @@ class ScorePackage:
         return self.timeline[-1][1] if self.timeline else 0.0
 
     # -- the bit the renderer actually needs ------------------------------
+    def _key_of(self, band: Band) -> int:
+        """The band's sync key, from export.json; its first measure if absent."""
+        if band.sync_key >= 0:
+            return band.sync_key
+        for entry in self.manifest.get("entries") or []:
+            if entry.get("first_measure") == band.first_measure and "sync_key" in entry:
+                return int(entry["sync_key"])
+        return band.first_measure
+
     def band_schedule(self, video_duration: float) -> list[tuple[Band, float, float]]:
         """Resolve bands onto the video timeline.
 
@@ -155,12 +176,15 @@ class ScorePackage:
 
         starts: list[tuple[Band, float]] = []
         for band in self.bands:
-            t = when.get(band.first_measure)
+            # BY SYNC KEY, which is the timeline's numbering. Looked up by
+            # first_measure this was right only while the two coincided.
+            key = self._key_of(band)
+            t = when.get(key)
             if t is None:
                 # The exporter can emit a band whose first measure never got
                 # an alignment point (e.g. a silent pickup). Fall back to the
                 # next aligned measure at or after it.
-                later = [s for m, s in self.timeline if m >= band.first_measure]
+                later = [s for m, s in self.timeline if m >= key]
                 if not later:
                     continue
                 t = min(later)
@@ -207,39 +231,92 @@ def _read_measures(path: pathlib.Path) -> list[tuple[int, float]]:
 
 
 def _parse_measures(lines, name: str) -> list[tuple[int, float]]:
+    """(sync key, seconds) pairs -- the aligner's own numbering.
+
+    A project's `measures.data` has four tab-separated columns:
+
+        <seconds>  <sync key>  <source bar>  <source bar>
+
+    TWO NUMBERINGS, AND THE APP KEYS EVERYTHING BY THE SYNC KEY. It is the
+    index the aligner follows -- one per box on the page, so a pickup bar
+    is key 1 for source bar 0, and a cadenza spread over extra boxes gives
+    keys that no source bar owns (the source columns are empty). Every box
+    in `measures-from-score.json` carries the same key, which is what lets
+    a timing meet its box. The SOURCE bar is what a person reads and is
+    shown as the label; see `viewer.payload`.
+
+    Rows whose source columns are empty are kept: they have a key, a time
+    and a box. Tabs are the delimiter when present so those empty columns
+    survive -- `split()` would collapse them. A two-column file has one
+    numbering and is read as before.
+    """
     raw: list[list[str]] = []
     for n, line in enumerate(lines, start=1):
-        line = line.strip()
-        if not line:
+        if not line.strip():
             continue
-        parts = line.split()          # tolerate tabs or spaces
-        if len(parts) < 2:
+        parts = (line.rstrip("\r\n").split("\t") if "\t" in line
+                 else line.split())
+        if len([p for p in parts if p.strip()]) < 2:
             raise PackageError(
                 f"{name} line {n}: expected two columns, got {line!r}")
-        raw.append(parts)
+        raw.append([p.strip() for p in parts])
 
     if not raw:
         raise PackageError(f"{name} is empty — this package has no alignment.")
 
-    def integral(index: int) -> bool:
-        try:
-            return all(float(r[index]).is_integer() for r in raw)
-        except ValueError:
-            return False
-
-    # 4-column V4 output is always seconds-first; for 2 columns, look.
-    measure_col = 1 if (len(raw[0]) >= 4 or (not integral(0) and integral(1))) else 0
-    time_col = 1 - measure_col if len(raw[0]) < 4 else 0
-
+    four = all(len(r) >= 4 for r in raw)
     rows: list[tuple[int, float]] = []
-    for n, parts in enumerate(raw, start=1):
-        try:
-            rows.append((int(float(parts[measure_col])), float(parts[time_col])))
-        except (ValueError, IndexError) as exc:
-            raise PackageError(f"{name} line {n}: {exc}") from exc
+    if four:
+        for n, parts in enumerate(raw, start=1):
+            try:
+                rows.append((int(float(parts[1])), float(parts[0])))
+            except ValueError as exc:
+                raise PackageError(f"{name} line {n}: {exc}") from exc
+    else:
+        def integral(index: int) -> bool:
+            try:
+                return all(float(r[index]).is_integer() for r in raw)
+            except (ValueError, IndexError):
+                return False
+        measure_col = 1 if (not integral(0) and integral(1)) else 0
+        time_col = 1 - measure_col
+        for n, parts in enumerate(raw, start=1):
+            try:
+                rows.append((int(float(parts[measure_col])), float(parts[time_col])))
+            except (ValueError, IndexError) as exc:
+                raise PackageError(f"{name} line {n}: {exc}") from exc
 
     rows.sort(key=lambda r: r[1])
     return rows
+
+
+def sync_key_to_bar(measures: "pathlib.Path | bytes | str") -> dict[int, int]:
+    """The package's own map from sync keys to the SOURCE bar they show.
+
+    Read from the reference `measures.data`, whose second column is the key
+    and third the source bar. Keys with no bar -- the extra boxes a cadenza
+    is spread over -- are absent, and a caller labelling boxes lets them
+    inherit the bar before them. Empty for a two-column file, where the two
+    numberings are one and the key IS the bar.
+    """
+    if isinstance(measures, pathlib.Path):
+        text = measures.read_text(encoding="utf-8")
+    elif isinstance(measures, bytes):
+        text = measures.decode("utf-8", errors="replace")
+    else:
+        text = measures
+    out: dict[int, int] = {}
+    for line in text.splitlines():
+        if "\t" not in line:
+            return {}
+        parts = [p.strip() for p in line.rstrip("\r\n").split("\t")]
+        if len(parts) < 4 or not parts[1] or not parts[2]:
+            continue
+        try:
+            out[int(float(parts[1]))] = int(float(parts[2]))
+        except ValueError:
+            continue
+    return out
 
 
 def can_rasterize_svg() -> bool:

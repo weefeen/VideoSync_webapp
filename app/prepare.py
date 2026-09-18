@@ -260,6 +260,9 @@ def compute(task, say: Say) -> None:
                 winner=winner)
         return
 
+    # SYNC KEYS, as the aligner gives them. Every box the page draws is
+    # keyed the same way (see bars.bars_from_project), and the source bar a
+    # person reads is put on as a label by viewer.payload.
     timeline = pkg._read_measures(alignment.measures_path)       # noqa: SLF001
     if not timeline:
         _finish(say, FAILED, "the alignment produced no measures",
