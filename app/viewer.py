@@ -207,4 +207,22 @@ def payload(performance) -> dict:
         # something it cannot.
         "followable": any(band["bars"] for band in bands),
         "skip_reason": performance["skip_reason"],
+        # One piece of a longer video: where it starts and ends, and the
+        # other pieces cut from the same video, so a recital page can lead
+        # to each of them.
+        "segment": ({"start": performance["segment_start"], "end": performance["segment_end"]}
+                    if performance["segment_start"] is not None else None),
+        "siblings": [
+            {"id": s["public_id"], "state": s["state"],
+             "start": s["segment_start"], "end": s["segment_end"],
+             "piece": _piece_name(s["edition"])}
+            for s in store.siblings_of(performance["id"])
+            if s["id"] != performance["id"]],
     }
+
+
+def _piece_name(edition: str | None) -> str:
+    if not edition:
+        return ""
+    package = library.find(edition)
+    return package.display_name if package is not None else edition.split("__")[0].replace("_", " ")

@@ -77,11 +77,15 @@ def offer(performance_id: str, *, resume_edition: str = "") -> bool:
         logger.warning("performance %s has no YouTube video to prepare",
                        performance_id)
         return False
+    meta = {"video_id": vid, "public_id": row["public_id"],
+            "resume_edition": resume_edition}
+    if row["segment_start"] is not None and row["segment_end"] is not None:
+        # One piece of the video: the volunteer hears and aligns only this
+        # stretch, and reports bar times in the video's own seconds.
+        meta["segment"] = [float(row["segment_start"]), float(row["segment_end"])]
     task = RenderTask(job_id=PREFIX + performance_id, upload="",
                       package=resume_edition, kind=PREPARE_KIND,
-                      meta={"video_id": vid, "public_id": row["public_id"],
-                            "resume_edition": resume_edition},
-                      queued_at=time.time())
+                      meta=meta, queued_at=time.time())
     try:
         transport().publish_task(task)
     except TransportError:
@@ -179,6 +183,9 @@ def _prepared(row, data: dict) -> bool:
     if outcome == watch.READY:
         return _ready(row, data)
 
+    if outcome == SEGMENTS:
+        return _segments(row, data)
+
     if outcome == watch.REVIEW:
         edition = (data.get("edition") or "").strip()
         if edition:
@@ -190,6 +197,69 @@ def _prepared(row, data: dict) -> bool:
 
     logger.warning("performance %s: unknown outcome %r", performance_id, outcome)
     return False
+
+
+SEGMENTS = "SEGMENTS"          # prepare.SEGMENTS: several pieces heard
+
+
+def _segments(row, data: dict) -> bool:
+    """A video of several pieces: one performance per piece.
+
+    The volunteer heard the whole recording and reports where each work
+    is. This row becomes the FIRST piece we know (its bounds recorded);
+    every further known piece becomes a sibling performance -- same video
+    through parent_id, its own bounds, its own page -- and each is offered
+    to resume at the alignment of its stretch, or parked as not engraved
+    exactly like a single recording would be. Spans the recogniser could
+    not name are logged, not stored: there is nothing to follow there.
+    """
+    found = [s for s in (data.get("segments") or [])
+             if s.get("outcome") in ("matched", "uncertain") and s.get("score_names")]
+    unknown = [s for s in (data.get("segments") or []) if s not in found]
+    for s in unknown:
+        logger.info("performance %s: %s-%s heard as %s, not a piece we know",
+                    row["public_id"], _mmss(s.get("start")), _mmss(s.get("end")),
+                    s.get("winner") or "nothing")
+    if not found:
+        return _settle(row["id"], watch.REJECTED, reason=watch.NOT_CHOPIN,
+                       note=f"{len(unknown)} piece(s) heard, none we know")
+
+    changed = False
+    for i, seg in enumerate(found):
+        start, end = float(seg["start"]), float(seg["end"])
+        names = list(seg.get("score_names") or [])
+        published = next((n for n in names if library.find(n) is not None), "")
+        edition = published or names[0]
+        if i == 0:
+            perf_id = row["id"]
+            store.set_performance(perf_id, edition=edition, error=None,
+                                  skip_reason=None, segment_start=start,
+                                  segment_end=end)
+        else:
+            sibling = store.new_performance(
+                watch.DISCOVERED, edition=edition, title=row["title"] or "",
+                performer=row["performer"] or "", priority=row["priority"] or 0,
+                parent_id=row["id"], segment=(start, end))
+            perf_id = sibling["id"]
+            logger.info("performance %s: piece %d/%d at %s-%s is now %s",
+                        row["public_id"], i + 1, len(found), _mmss(start),
+                        _mmss(end), sibling["public_id"])
+        if published:
+            # Back to the volunteer for the alignment of this stretch only;
+            # its stage reports walk the row forward from wherever it is.
+            changed |= offer(perf_id, resume_edition=published)
+        else:
+            store.set_performance(perf_id, edition=edition)
+            changed |= _settle(perf_id, watch.REVIEW, reason=watch.NOT_ENGRAVED, note="")
+    return changed
+
+
+def _mmss(seconds) -> str:
+    try:
+        s = int(float(seconds))
+    except (TypeError, ValueError):
+        return "?"
+    return f"{s // 60}:{s % 60:02d}"
 
 
 def _ready(row, data: dict) -> bool:

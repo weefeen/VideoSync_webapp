@@ -51,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("audio", nargs="?", default="", help="video or audio file to identify")
     p.add_argument("--serve", action="store_true",
                    help="stay loaded; answer JSON requests on stdin, one per line")
+    p.add_argument("--segments", action="store_true",
+                   help="one-shot: report every piece in the recording and where")
     p.add_argument("--root", required=True, help="music_finrgerprint checkout")
     p.add_argument("--pitch-index", required=True)
     p.add_argument("--chord-index", required=True)
@@ -85,6 +87,38 @@ class Loaded:
         except Exception:  # noqa: BLE001 - loaded lazily on first use then
             pass
         self.load_s = round(time.perf_counter() - started, 2)
+
+
+def segments(args: argparse.Namespace, loaded: "Loaded | None" = None) -> dict:
+    """Every piece in the recording, with where it is: for a recital.
+
+    The whole recording is swept (no early stop, no window cap) and cut
+    where the work heard changes or the music stops; each segment carries
+    the verdict over its own span, judged by the same rules as a single
+    recording, and the editions of the work heard. A segment the rules do
+    not accept is reported too, as an unknown span, so the caller can say
+    "a piece we do not know, 14:08-19:56" rather than nothing.
+    """
+    loaded = loaded or Loaded(args)
+    from weefeen_id.aggregate import segment_recording
+    started = time.perf_counter()
+    found = segment_recording(args.audio, loaded.indexes)
+    finished = time.perf_counter()
+    out = []
+    for seg in found:
+        v = seg.verdict
+        out.append({
+            "start": round(float(seg.start), 1), "end": round(float(seg.end), 1),
+            "mode": v.mode, "winner": v.winner,
+            "consensus": round(float(v.consensus), 4),
+            "support": int(v.support), "n_windows": int(v.n_windows),
+            "n_total": int(seg.n_windows),
+            "loo_consensus": round(float(v.loo_consensus), 4),
+            "score_names": loaded.names(v.winner) if v.winner else [],
+        })
+    return {"ok": True, "segments": out, "device": _device(),
+            "timing": {"identify_s": round(finished - started, 2),
+                       "total_s": round(finished - started, 2)}}
 
 
 def identify(args: argparse.Namespace, loaded: "Loaded | None" = None) -> dict:
@@ -237,7 +271,8 @@ def serve(args: argparse.Namespace) -> int:
             req = json.loads(line)
             out = pathlib.Path(req["out"])
             args.audio = str(req["audio"])
-            result = identify(args, loaded)
+            result = (segments(args, loaded) if req.get("mode") == "segments"
+                      else identify(args, loaded))
         except ConfigProblem as exc:
             result = {"ok": False, "kind": CONFIG, "error": str(exc)}
         except Exception as exc:  # noqa: BLE001 - the caller only sees the file
@@ -259,7 +294,7 @@ def main() -> int:
         print("audio and --out are required unless --serve", file=sys.stderr)
         return 2
     try:
-        result = identify(args)
+        result = segments(args) if args.segments else identify(args)
     except ConfigProblem as exc:
         result = {"ok": False, "kind": CONFIG, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - the caller only sees this file

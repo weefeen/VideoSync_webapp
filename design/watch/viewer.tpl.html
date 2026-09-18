@@ -165,6 +165,10 @@ main{max-width:1040px;margin:0 auto;padding:0 40px 78px}
 .piece .m{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.14em;
   text-transform:uppercase;color:var(--faint);white-space:nowrap}
 .piece.live .m{color:var(--mag)}
+.also{font-size:13.5px;color:var(--soft);margin:10px 0 0;line-height:1.7}
+.also a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--hair-2)}
+.also a:hover{border-color:var(--mag)}
+.also .t{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.06em;color:var(--faint);margin-right:6px}
 .libnote{margin-top:24px;font-size:13.5px;color:var(--soft);max-width:52ch}
 .freeline{margin:26px 0 0;padding:16px 20px;border:1px solid var(--hair-2);
   border-left:2px solid #b8813a;border-radius:2px;background:#fdfbf7;font-size:13.5px;
@@ -642,6 +646,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
    <p id="vwaitp">The video plays now. The score appears here by itself when it is ready.</p>
    <span class="wrail" aria-hidden="true"></span>
   </div>
+  <p class="also" id="also" hidden></p>
   <div class="scorearea" id="scorearea">
    <div class="scorerow" id="scorerow">
     <button class="pturn prev" id="pprev" aria-label="Previous system"><i><svg width="15" height="24" viewBox="0 0 11 18" fill="none" aria-hidden="true"><path d="M9 1 2 9l7 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></i></button>
@@ -1157,6 +1162,20 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
     nothing has to be loaded from youtube.com. If no message ever comes back
     -- a host that will not frame youtube.com -- the local file takes over. */
  var YT_ID = (DATA.media && DATA.media.external_id) || '';
+ /* THE OTHER PIECES OF THIS VIDEO. A recital is several performances of
+    one recording; each has its own page, and this line is how a visitor
+    who arrived at one finds the rest. Only pieces that can be followed
+    are linked; the others are named with where they are. */
+ (function others(){
+  var el = document.getElementById('also'), list = DATA.siblings || [];
+  if(!el || !list.length) return;
+  function mmss(s){ s = Math.floor(s || 0); return Math.floor(s/60) + ':' + ('0' + (s % 60)).slice(-2); }
+  el.innerHTML = 'Also in this video: ' + list.map(function(s){
+    var label = '<span class="t">' + mmss(s.start) + '</span>' + (s.piece || 'a piece');
+    return s.state === 'READY' ? '<a href="/p/' + s.id + '">' + label + '</a>' : '<span>' + label + '</span>';
+  }).join(' · ');
+  el.hidden = false;
+ })();
  /* Only a video can be played. A performance aligned to a reference
     recording has none, and the page is then a score to read rather than a
     player with an empty frame in it. */
@@ -1219,6 +1238,8 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   var src = 'https://www.youtube.com/embed/' + YT_ID +
             '?enablejsapi=1&playsinline=1&rel=0&modestbranding=1' +
             '&origin=' + encodeURIComponent(location.origin);
+  /* one piece of a longer video: begin where it begins */
+  if(DATA.segment && DATA.segment.start > 1){ src += '&start=' + Math.floor(DATA.segment.start); }
   ytFrame.src = src;
   /* the player answers "listening" once it is ready; keep asking briefly */
   ytFrame.addEventListener('load', function(){

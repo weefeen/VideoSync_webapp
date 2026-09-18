@@ -153,6 +153,58 @@ class Identification:
         }
 
 
+@dataclasses.dataclass(frozen=True)
+class SegmentFound:
+    """One piece within a recording of several."""
+    start: float
+    end: float
+    mode: str
+    winner: str | None
+    consensus: float
+    support: int
+    n_windows: int
+    score_names: list[str]
+
+    @property
+    def outcome(self) -> str:
+        if not self.winner or self.n_windows < MIN_WINDOWS or self.support < MIN_SUPPORT:
+            return UNRECOGNISED
+        low, high = UNCERTAIN_BAND
+        if low <= self.consensus < high:
+            return UNCERTAIN
+        return MATCHED if self.mode == "confident" else UNRECOGNISED
+
+    def public(self) -> dict:
+        return {"start": self.start, "end": self.end, "outcome": self.outcome,
+                "winner": self.winner, "consensus": self.consensus,
+                "support": self.support, "n_windows": self.n_windows,
+                "score_names": list(self.score_names)}
+
+
+def segments(media: pathlib.Path) -> list[SegmentFound]:
+    """Every piece in a recording of several, and where each one is.
+
+    The whole recording is heard (about 0.7 s per 12.5 s of audio on the
+    volunteer's GPU) -- for a recital, a competition round, an album.
+    """
+    if not settings.can_identify:
+        raise IdentifyUnavailable(
+            "Recognition isn't configured. " + settings.why_cannot_identify())
+    with _gpu:
+        payload = _run(media, mode="segments")
+    if not payload.get("ok"):
+        message = payload.get("error") or "Segmentation failed."
+        if payload.get("kind") == "config":
+            raise IdentifyUnavailable(message)
+        raise IdentifyError(message)
+    return [SegmentFound(start=float(s["start"]), end=float(s["end"]), mode=s["mode"],
+                         winner=s.get("winner"), consensus=float(s.get("consensus") or 0.0),
+                         support=int(s.get("support") or 0),
+                         n_windows=int(s.get("n_windows") or 0),
+                         score_names=list(s.get("score_names") or []))
+            for s in payload.get("segments", [])]
+
+
 def probe_media(media: pathlib.Path) -> tuple[float | None, bool]:
     """(seconds, has an audio stream). Length is None when unknowable.
 
@@ -326,14 +378,15 @@ class _Resident:
             except OSError:
                 pass
 
-    def run(self, media: pathlib.Path, out: pathlib.Path) -> bool:
+    def run(self, media: pathlib.Path, out: pathlib.Path, mode: str = "identify") -> bool:
         """True when `out` holds the verdict; False means use the one-shot run."""
         with self._lock:
             if self._proc is None or self._proc.poll() is not None:
                 if not self._start():
                     return False
             try:
-                self._proc.stdin.write(json.dumps({"audio": str(media), "out": str(out)}) + "\n")
+                self._proc.stdin.write(json.dumps({"audio": str(media), "out": str(out),
+                                                   "mode": mode}) + "\n")
                 self._proc.stdin.flush()
             except (OSError, ValueError) as exc:
                 logger.warning("resident recogniser lost: %s", exc)
@@ -350,17 +403,18 @@ class _Resident:
 _resident = _Resident()
 
 
-def _run(media: pathlib.Path) -> dict:
+def _run(media: pathlib.Path, mode: str = "identify") -> dict:
     """Call the runner and return its verdict payload."""
     with tempfile.TemporaryDirectory(prefix="svs_id_") as tmp:
         out = pathlib.Path(tmp) / "verdict.json"
-        if settings.identify_resident and _resident.run(media, out):
+        if settings.identify_resident and _resident.run(media, out, mode):
             try:
                 return json.loads(out.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
                 raise IdentifyError(
                     f"The recogniser's result could not be read back: {exc}") from exc
-        command = _command(str(media), "--out", str(out))
+        command = _command(str(media), "--out", str(out),
+                           *(["--segments"] if mode == "segments" else []))
 
         try:
             done = subprocess.run(command, capture_output=True, text=True,

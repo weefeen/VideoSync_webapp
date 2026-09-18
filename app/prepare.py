@@ -61,6 +61,12 @@ FAILED = "FAILED"
 STAGES = ("VALIDATING", "IDENTIFYING", "SYNCHRONISING")
 
 NOT_CHOPIN = "NOT_CHOPIN"
+SEGMENTS = "SEGMENTS"              # an outcome of its own: several pieces heard
+# A recording at least this long is heard whole for its pieces before any
+# single identification: recitals, competition rounds, albums. Shorter
+# ones are one piece until proven otherwise.
+SEGMENT_MIN_SECONDS = 540.0
+EXCERPT_PAD = 5.0                  # seconds kept either side of a segment
 NOT_ENGRAVED = "NOT_ENGRAVED"
 VIDEO_UNAVAILABLE = "VIDEO_UNAVAILABLE"
 PARTIAL_UNSUPPORTED = "PARTIAL_UNSUPPORTED"
@@ -190,6 +196,41 @@ def compute(task, say: Say) -> None:
     # web box offers it again only because that edition is now published.
     # Listening a second time would spend forty seconds of GPU on an answer
     # already written on the row.
+    work = audio_root() / "work" / task.job_id.replace(":", "_")
+    work.mkdir(parents=True, exist_ok=True)
+
+    # ── one piece of the video, or the whole of it ─────────────────────
+    # A task that names a segment hears and aligns only that stretch (with
+    # a little either side), and every time it reports is in the video's
+    # own seconds. A long recording with no segment named is first heard
+    # whole for its pieces: several -> reported as SEGMENTS for the web box
+    # to split into performances; one -> identified as usual.
+    segment = meta.get("segment") or None
+    offset = 0.0
+    media_used = media
+    if segment:
+        start, end = float(segment[0]), float(segment[1])
+        offset = max(0.0, start - EXCERPT_PAD)
+        media_used = _excerpt(media, work, offset, end + EXCERPT_PAD)
+        found = {**found, "segment": [start, end]}
+    elif not resume and (info["duration"] or 0) >= SEGMENT_MIN_SECONDS:
+        say("prepare_stage", stage="IDENTIFYING", data=found)
+        try:
+            pieces = ident.segments(media)
+        except ident.IdentifyUnavailable as exc:
+            raise HandBack(str(exc)) from exc
+        except ident.IdentifyError as exc:
+            _finish(say, FAILED, str(exc), found=found)
+            return
+        known = [p for p in pieces if p.outcome in (ident.MATCHED, ident.UNCERTAIN)]
+        whole = (len(pieces) == 1 and len(known) == 1
+                 and (pieces[0].end - pieces[0].start) >= 0.6 * float(info["duration"] or 0))
+        if not whole:
+            _finish(say, SEGMENTS,
+                    f"{len(pieces)} piece(s) heard, {len(known)} we know",
+                    found=found, segments=[p.public() for p in pieces])
+            return
+
     edition = ""
     if resume:
         if library.find(resume) is not None:
@@ -204,7 +245,7 @@ def compute(task, say: Say) -> None:
     if not edition:
         say("prepare_stage", stage="IDENTIFYING", data=found)
         try:
-            heard = ident.identify(media, duration=info["duration"] or None)
+            heard = ident.identify(media_used, duration=None if segment else (info["duration"] or None))
         except ident.IdentifyUnavailable as exc:
             raise HandBack(str(exc)) from exc
         except ident.IdentifyError as exc:
@@ -253,10 +294,8 @@ def compute(task, say: Say) -> None:
                 f"fetched from the bucket", found=found, edition=edition,
                 winner=winner)
         return
-    work = audio_root() / "work" / task.job_id.replace(":", "_")
-    work.mkdir(parents=True, exist_ok=True)
     try:
-        alignment = syncmod.align(package.root, media, work)
+        alignment = syncmod.align(package.root, media_used, work)
     except syncmod.SyncUnavailable as exc:
         raise HandBack(str(exc)) from exc
     except syncmod.PartialRecording as exc:
@@ -276,10 +315,35 @@ def compute(task, say: Say) -> None:
         _finish(say, FAILED, "the alignment produced no measures",
                 found=found, edition=edition, winner=winner)
         return
+    # In the VIDEO's seconds: an excerpt's times are shifted by where it
+    # was cut, so the page seeks the real video and lands on the bar.
     _finish(say, READY, f"{len(timeline)} bars of {edition}", found=found,
             edition=edition, winner=winner,
-            timeline=[[int(m), float(t)] for m, t in timeline],
+            timeline=[[int(m), float(t) + offset] for m, t in timeline],
             confidence=alignment.span_ratio)
+
+
+def _excerpt(media: pathlib.Path, work: pathlib.Path, start: float, end: float) -> pathlib.Path:
+    """The stretch [start, end) of a recording as its own audio file.
+
+    Cut with ffmpeg, re-encoded to a plain wav so the aligner and the
+    recogniser read it like any recording. A cut that fails hands back the
+    whole media rather than nothing: the alignment then spans the wrong
+    stretch and its own checks refuse it, which is the honest failure.
+    """
+    import subprocess                                   # noqa: PLC0415
+    out = work / f"excerpt_{int(start)}_{int(end)}.wav"
+    cmd = ["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-to", f"{end:.2f}",
+           "-i", str(media), "-ac", "1", "-ar", "44100", str(out)]
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("could not cut %s: %s", media.name, exc)
+        return media
+    if done.returncode != 0 or not out.is_file():
+        logger.warning("could not cut %s: %s", media.name, done.stderr[-300:])
+        return media
+    return out
 
 
 def _on_this_disk(edition: str):

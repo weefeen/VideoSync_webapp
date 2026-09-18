@@ -324,9 +324,17 @@ CREATE TABLE IF NOT EXISTS performances (
     priority    INTEGER NOT NULL DEFAULT 0,
     -- Why we are not going to follow this one, from a fixed vocabulary.
     -- Recorded so discovery stops offering it back every time it looks.
-    skip_reason TEXT
+    skip_reason TEXT,
+    -- ONE PIECE OF A VIDEO THAT HOLDS SEVERAL. A recital is one recording
+    -- and one media row; each piece in it is its own performance, with
+    -- the seconds it spans and the performance that owns the media (the
+    -- first piece). media_for() follows parent_id, so nothing else has to.
+    parent_id     TEXT,
+    segment_start REAL,
+    segment_end   REAL
 );
 CREATE INDEX IF NOT EXISTS performances_state ON performances(state, created);
+CREATE INDEX IF NOT EXISTS performances_parent ON performances(parent_id);
 CREATE INDEX IF NOT EXISTS performances_edition ON performances(edition, created);
 
 CREATE TABLE IF NOT EXISTS media_sources (
@@ -475,6 +483,9 @@ _ADDED = (
     # between the two commits has the table without them.
     ("performances", "priority", "INTEGER NOT NULL DEFAULT 0"),
     ("performances", "skip_reason", "TEXT"),
+    ("performances", "parent_id", "TEXT"),
+    ("performances", "segment_start", "REAL"),
+    ("performances", "segment_end", "REAL"),
     ("score_bars", "aspect", "REAL NOT NULL DEFAULT 0"),
     ("jobs", "stage", "TEXT"),
     ("jobs", "detail", "TEXT NOT NULL DEFAULT ''"),
@@ -1557,19 +1568,26 @@ def _public_id(length: int = 10) -> str:
 
 def new_performance(state: str, *, edition: str | None = None,
                     title: str = "", performer: str = "",
-                    priority: int = 0) -> sqlite3.Row:
-    """Start a performance and hand back the row, public id included."""
+                    priority: int = 0, parent_id: str | None = None,
+                    segment: "tuple[float, float] | None" = None) -> sqlite3.Row:
+    """Start a performance and hand back the row, public id included.
+
+    `parent_id` and `segment` make it one piece of another performance's
+    video: seconds `segment` = (start, end) of that recording.
+    """
     now = time.time()
+    start, end = (segment if segment else (None, None))
     for _ in range(8):                    # a collision is luck, not a bug
         public = _public_id()
         try:
             with write() as conn:
                 conn.execute(
                     "INSERT INTO performances (id, public_id, created, updated,"
-                    " state, edition, title, performer, priority)"
-                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    " state, edition, title, performer, priority,"
+                    " parent_id, segment_start, segment_end)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (secrets.token_hex(12), public, now, now, state,
-                     edition, title, performer, priority))
+                     edition, title, performer, priority, parent_id, start, end))
             break
         except sqlite3.IntegrityError:
             continue
@@ -1638,8 +1656,26 @@ def attach_media(performance_id: str, provider: str, **fields: Any) -> str:
 
 
 def media_for(performance_id: str) -> list[sqlite3.Row]:
-    return query("SELECT * FROM media_sources WHERE performance_id = ?"
+    """The media rows of a performance -- its parent's, for a segment."""
+    rows = query("SELECT * FROM media_sources WHERE performance_id = ?"
                  " ORDER BY created", (performance_id,))
+    if rows:
+        return rows
+    row = performance_by_id(performance_id)
+    if row is not None and row["parent_id"]:
+        return query("SELECT * FROM media_sources WHERE performance_id = ?"
+                     " ORDER BY created", (row["parent_id"],))
+    return rows
+
+
+def siblings_of(performance_id: str) -> list[sqlite3.Row]:
+    """Every performance cut from the same video, this one included, in order."""
+    row = performance_by_id(performance_id)
+    if row is None:
+        return []
+    owner = row["parent_id"] or row["id"]
+    return query("SELECT * FROM performances WHERE id = ? OR parent_id = ?"
+                 " ORDER BY COALESCE(segment_start, 0), created", (owner, owner))
 
 
 def media_by_external(provider: str, external_id: str) -> sqlite3.Row | None:
