@@ -79,57 +79,75 @@ def _local_project(edition: str) -> "pathlib.Path | None":
     """
     if not edition or "/" in edition or "\\" in edition or edition in (".", ".."):
         return None
-    try:
-        from app.settings import settings                 # noqa: PLC0415
-    except Exception:                                      # noqa: BLE001
-        return None
-    try:
-        from app import package as pkg                    # noqa: PLC0415
-    except Exception:                                      # noqa: BLE001
-        return None
-    for root in settings.score_roots:
-        folder = pathlib.Path(root.path) / edition
-        if folder.is_dir() and pkg.is_package(folder):
-            return folder
-    return None
+    return _project_folders().get(edition)
 
 
-def _local_projects() -> list:
-    """Every project folder engraved on this computer, open or closed.
+def _project_folders() -> dict:
+    """Folder by piece name, across the score roots, one per name.
 
-    The engraving tool's project directory is one of the score roots; a
-    folder counts when the package loader would accept it -- loose
-    `score/lines`, or a `.spj` under its own name. Sorted by name so the
-    list reads like the library.
+    THE EXTRACTOR'S PROJECT WINS. A root may hold an installed copy of a
+    score -- bands, alignment, no bundle -- beside the root the engraving
+    tool writes its projects to, and the roots come in whatever order the
+    configuration lists them. A copy is not the thing to publish or to
+    identify: its content id is not the project's (it has no project.json
+    and no bundle). So a folder with a `.spj` under its own name is
+    preferred, and between two of those the one whose bundle was written
+    last -- the latest work; among folders without one, the first root
+    wins.
     """
     try:
         from app import package as pkg                    # noqa: PLC0415
         from app.settings import settings                 # noqa: PLC0415
     except Exception:                                      # noqa: BLE001
-        return []
-    seen: dict = {}
+        return {}
+    chosen: dict = {}
     for root in settings.score_roots:
         base = pathlib.Path(root.path)
         if not base.is_dir():
             continue
         for folder in sorted(base.iterdir()):
-            if folder.name.startswith(".") or folder.name in seen:
+            if folder.name.startswith(".") or not folder.is_dir():
                 continue
             try:
-                if folder.is_dir() and pkg.is_package(folder):
-                    cid = pkg.content_id(folder)
-                    version = pkg.version_of(folder)
-                    seen[folder.name] = {
-                        "edition": folder.name, "open": pkg.is_open(folder),
-                        "content_id": cid, "version": version,
-                        # PROJECT_VERSION_ID_SPEC.md §6: edited since the
-                        # version it claims. Only meaningful once minted.
-                        "dirty": bool(version.get("content_id"))
-                                 and version.get("content_id") != cid}
-            except Exception as exc:                       # noqa: BLE001
-                logger.debug("%s: not indexed: %s", folder.name, exc)
+                if not pkg.is_package(folder):
+                    continue
+                spj = pkg.bundle_of(folder)
+                rank = (1, spj.stat().st_mtime) if spj is not None else (0, 0.0)
+            except OSError:
                 continue
-    return sorted(seen.values(), key=lambda s: s["edition"].lower())
+            have = chosen.get(folder.name)
+            if have is None or rank > have[1]:
+                chosen[folder.name] = (folder, rank)
+    return {name: folder for name, (folder, _) in chosen.items()}
+
+
+def _local_projects() -> list:
+    """Every project engraved on this computer, open or closed, identified.
+
+    One row per piece name, the folder chosen by `_project_folders`; a
+    folder counts when the package loader would accept it. Sorted by name
+    so the list reads like the library.
+    """
+    try:
+        from app import package as pkg                    # noqa: PLC0415
+    except Exception:                                      # noqa: BLE001
+        return []
+    rows = []
+    for name, folder in _project_folders().items():
+        try:
+            cid = pkg.content_id(folder)
+            version = pkg.version_of(folder)
+        except Exception as exc:                           # noqa: BLE001
+            logger.debug("%s: not indexed: %s", name, exc)
+            continue
+        rows.append({
+            "edition": name, "open": pkg.is_open(folder),
+            "content_id": cid, "version": version,
+            # PROJECT_VERSION_ID_SPEC.md §6: edited since the version it
+            # claims. Only meaningful once the extractor mints versions.
+            "dirty": bool(version.get("content_id"))
+                     and version.get("content_id") != cid})
+    return sorted(rows, key=lambda r: r["edition"].lower())
 
 
 def _compare(local: dict, there) -> str:
@@ -268,7 +286,11 @@ class Panel:
         index = self._server_json("/api/library/index")
         if isinstance(index, dict):
             with self._lock:
-                self._index = {str(k): str(v) for k, v in index.items()}
+                # Values are {"content_id", "version"}; an older server
+                # answered a bare string, which is kept as a bare id.
+                self._index = {str(k): (v if isinstance(v, dict)
+                                        else {"content_id": str(v), "version": {}})
+                               for k, v in index.items()}
                 self._index_read = True
 
     def _server_json(self, path: str):
