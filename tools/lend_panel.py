@@ -94,6 +94,36 @@ def _local_project(edition: str) -> "pathlib.Path | None":
     return None
 
 
+def _local_projects() -> list:
+    """Every project folder engraved on this computer, open or closed.
+
+    The engraving tool's project directory is one of the score roots; a
+    folder counts when the package loader would accept it -- loose
+    `score/lines`, or a `.spj` under its own name. Sorted by name so the
+    list reads like the library.
+    """
+    try:
+        from app import package as pkg                    # noqa: PLC0415
+        from app.settings import settings                 # noqa: PLC0415
+    except Exception:                                      # noqa: BLE001
+        return []
+    seen: dict = {}
+    for root in settings.score_roots:
+        base = pathlib.Path(root.path)
+        if not base.is_dir():
+            continue
+        for folder in sorted(base.iterdir()):
+            if folder.name.startswith(".") or folder.name in seen:
+                continue
+            try:
+                if folder.is_dir() and pkg.is_package(folder):
+                    seen[folder.name] = {"edition": folder.name,
+                                         "open": pkg.is_open(folder)}
+            except OSError:
+                continue
+    return list(seen.values())
+
+
 class Panel:
     """What the page may ask of the volunteer, and nothing else."""
 
@@ -106,6 +136,10 @@ class Panel:
         # back yet, which is not a problem and must not be drawn as one.
         self._server = {"mode": "", "problem": "", "asked": False}
         self._wanted: list = []
+        # What the server's library holds, by folder name: which of the
+        # scores on this computer are published, and so whether the button
+        # says publish or update.
+        self._library: list = []
         self._lock = threading.Lock()
         # A LOOK THAT FAILS IS WEATHER. This reaches another machine over
         # the internet every few minutes, so it will fail sometimes -- and
@@ -132,8 +166,12 @@ class Panel:
             editions = row.get("editions") or []
             row["local"] = bool(editions and not row.get("ready")
                                 and _local_project(editions[0]) is not None)
+        with self._lock:
+            library = set(self._library)
+        scores = [{**s, "published": s["edition"] in library}
+                  for s in _local_projects()]
         return {**self.state(), "server": self.server(), "wanted": wanted,
-                "publish": publish}
+                "publish": publish, "scores": scores}
 
     def server(self) -> dict:
         with self._lock:
@@ -169,24 +207,32 @@ class Panel:
         the work happens -- and the page can make a sound, which an inbox
         cannot.
         """
+        rows = self._server_json("/api/wanted")
+        if isinstance(rows, list):
+            with self._lock:
+                self._wanted = rows
+        library = self._server_json("/api/library")
+        if isinstance(library, list):
+            with self._lock:
+                self._library = [str(e.get("id") or "") for e in library
+                                 if isinstance(e, dict)]
+
+    def _server_json(self, path: str):
+        """One JSON answer from the server's own API, or None. Never raises."""
         try:
             done = subprocess.run(
                 ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
-                 SERVER, "curl -fsS -m 20 http://127.0.0.1:5000/api/wanted"],
+                 SERVER, f"curl -fsS -m 20 http://127.0.0.1:5000{path}"],
                 capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired) as exc:
-            logger.debug("could not read what is wanted: %s", exc)
-            return
+            logger.debug("could not read %s: %s", path, exc)
+            return None
         if done.returncode != 0:
-            return
+            return None
         try:
-            rows = json.loads(done.stdout)
+            return json.loads(done.stdout)
         except (ValueError, TypeError):
-            return
-        if not isinstance(rows, list):
-            return
-        with self._lock:
-            self._wanted = rows
+            return None
 
     def render_now(self, job: str, score: str) -> str:
         """Finish a request whose score now exists. '' or a reason.
@@ -270,17 +316,17 @@ class Panel:
         fit to publish: the checker refuses what it has always refused, and
         says why, and that is what the page shows.
 
-        THE EDITION COMES FROM OUR OWN WANTED LIST, never from what was sent:
-        it names a folder that is about to be streamed to the production
-        server. And only one runs at a time.
+        THE EDITION NAMES A FOLDER ON THIS COMPUTER, found by exact name
+        under the configured score roots and nowhere else -- what was sent
+        is never a path. Publishing a new score and UPDATING one already on
+        the server are the same command: the installer replaces the copy,
+        republishes it, and the server forgets what it had measured of the
+        old one. Only one runs at a time.
         """
         with self._lock:
-            rows = list(self._wanted)
             running = bool(self._publish.get("running"))
         if running:
             return "a score is already being published"
-        if not any(edition in (r.get("editions") or []) for r in rows):
-            return "that score is not on the waiting list any more"
         folder = _local_project(edition)
         if folder is None:
             return (f"there is no folder named {edition!r} on this computer; "
@@ -627,6 +673,13 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
   every link waiting on it aligns by itself.</p>
 <div id="asks"></div>
 
+<h2>Scores on this computer</h2>
+<p class="hint">Every project engraved here, open or closed. <b>Publish</b>
+  sends a new one to the site; <b>Update</b> replaces one that is already
+  there with what is in the folder now. Both check the score first and say
+  what they find.</p>
+<div id="scores"></div>
+
 <h2>What this computer can take</h2>
 <div class="facts" id="facts"></div>
 
@@ -753,6 +806,7 @@ function paint(s){
 
   PUBLISH = s.publish || {};
   drawAsks(s.wanted || []);
+  drawScores(s.scores || []);
 
   document.getElementById('facts').innerHTML = [
     [s.free_gb == null ? '—' : s.free_gb.toFixed(1) + ' GB', 'memory free now'],
@@ -922,6 +976,44 @@ function drawAsks(rows){
   box.querySelectorAll('button[data-drop]').forEach(b => {
     b.onclick = () => send('/dismiss', {job: b.dataset.drop});
   });
+  box.querySelectorAll('button[data-publish]').forEach(b => {
+    b.onclick = () => send('/publish', {edition: b.dataset.publish});
+  });
+}
+
+/* EVERY SCORE ON THIS COMPUTER, each with the one button it needs. The
+   same installer runs either way; what differs is the word, because
+   "publish" on a score the site already has would read as a mistake, and
+   the person pressing it is about to replace what visitors see. */
+function drawScores(rows){
+  const box = document.getElementById('scores');
+  if(!box) return;
+  if(!rows.length){
+    box.innerHTML = '<p class="none">No project folder found in the score roots '
+      + 'this computer is configured with.</p>';
+    return;
+  }
+  box.innerHTML = rows.map(r => {
+    const p = PUBLISH || {};
+    let act;
+    if(p.edition === r.edition && p.running){
+      act = '<span class="mt"><b>' + (r.published ? 'Updating…' : 'Publishing…')
+        + '</b> ' + ((p.tail || []).slice(-1)[0] || '') + '</span>';
+    }else{
+      const said = (p.edition === r.edition && p.ok === true)
+        ? '<span class="mt"><b>Done.</b> The site has this version now.</span> '
+        : (p.edition === r.edition && p.ok === false)
+        ? '<span class="mt"><b>Not sent.</b> ' + (p.tail || []).slice(-3).join(' · ') + '</span> '
+        : '';
+      act = said + '<button class="plain" data-publish="' + r.edition + '">'
+        + (r.published ? 'Update it on the site' : 'Publish this score') + '</button>';
+    }
+    return '<div class="ask' + (r.published ? ' ready' : '') + '">'
+      + '<span class="pc">' + r.edition + '</span>'
+      + '<span class="mt">' + (r.open ? 'open in the engraving tool' : 'closed (.spj)')
+      + ' · ' + (r.published ? 'on the site' : 'not on the site yet') + '</span>'
+      + '<div class="row">' + act + '</div></div>';
+  }).join('');
   box.querySelectorAll('button[data-publish]').forEach(b => {
     b.onclick = () => send('/publish', {edition: b.dataset.publish});
   });

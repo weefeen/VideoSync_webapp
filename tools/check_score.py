@@ -565,10 +565,15 @@ def install(root: pathlib.Path) -> int:
 PUBLISH = """
 import pathlib, sys
 sys.path.insert(0, '.')
-from app import scorestore
+from app import scorestore, store
 name = sys.argv[1]
 n = scorestore.publish(pathlib.Path('/srv/vsw/scores') / name)
 print('    in the bucket: %.0f MB at %s' % (n / 1e6, scorestore.key(name)))
+# AN UPDATE, NOT ONLY A FIRST PUBLISH. The watch page caches where every bar
+# sits on every band; a re-engraved score moves them. Forget the cache, and
+# the next page view measures the new bands.
+store.put_score_bars(name, [])
+print('    bar geometry forgotten; the watch page re-measures it on next view')
 """
 
 PROBE = """
