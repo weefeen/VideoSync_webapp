@@ -211,13 +211,21 @@ def compute(task, say: Say) -> None:
             _finish(say, FAILED, str(exc), found=found)
             return
         winner = heard.winner or ""
-        if heard.outcome != ident.MATCHED:
+        if heard.outcome == ident.UNRECOGNISED:
             # Not "we failed": we listened, and it is not something we know.
             # A reason from the fixed vocabulary, so discovery stops offering
             # the same video back for ever.
             _finish(say, REJECTED, "not a piece we know",
                     skip_reason=NOT_CHOPIN, found=found)
             return
+        # UNCERTAIN falls through: a plausible winner near the gate is
+        # verified by the alignment below rather than taken or refused on
+        # the recogniser's word alone. A wrong piece does not align -- the
+        # span and crowding checks refuse it -- and the right one plays.
+        # Without a published score it parks like any recognised piece:
+        # the engraving, when it comes, settles it the same way.
+        found = {**found, "uncertain": heard.outcome == ident.UNCERTAIN,
+                 "consensus": round(heard.consensus, 3)}
 
         editions = _editions(heard)
         published = [n for n in editions if library.find(n) is not None]

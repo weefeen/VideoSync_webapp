@@ -61,6 +61,14 @@ MIN_SUPPORT = 3
 
 MATCHED = "matched"              # say what it is, and move on
 UNRECOGNISED = "unrecognised"    # let them pick from the library instead
+UNCERTAIN = "uncertain"          # a plausible winner near the gate: verify it
+# THE GREY BAND. Validated on the test set, the sweeping recogniser found
+# every known piece and refused every unknown one, but its worst unknown
+# reached 0.48 and its weakest known 0.58: within this band of the 0.50
+# gate the verdict alone is a coin. A winner in the band is neither taken
+# nor refused -- it is verified against its score by the aligner, which a
+# wrong piece fails (see prepare).
+UNCERTAIN_BAND = (0.45, 0.55)
 
 
 class IdentifyError(RuntimeError):
@@ -112,14 +120,19 @@ class Identification:
         windows, so with fewer we hold the answer to unanimity rather than
         pretend a threshold swept elsewhere still applies here.
         """
-        if self.mode != "confident" or not self.winner:
-            return UNRECOGNISED
-        if self.n_windows < MIN_WINDOWS:
+        if not self.winner or self.n_windows < MIN_WINDOWS:
             return UNRECOGNISED
         if self.n_total:
             # The sweeping recogniser: corroboration is its own gate; here
             # only the floor is repeated, in case a build reports less.
+            low, high = UNCERTAIN_BAND
+            if self.support >= MIN_SUPPORT and low <= self.consensus < high:
+                return UNCERTAIN
+            if self.mode != "confident":
+                return UNRECOGNISED
             return MATCHED if self.support >= MIN_SUPPORT else UNRECOGNISED
+        if self.mode != "confident":
+            return UNRECOGNISED
         if self.n_windows < FULL_WINDOWS and self.consensus < 1.0:
             return UNRECOGNISED
         return MATCHED
