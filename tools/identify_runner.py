@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 import traceback
@@ -125,7 +126,31 @@ def _labels(pair_list: str):
     if not table:
         raise ConfigProblem(f"The score list at {pair_list} is empty.")
     table = {stem: sorted(set(names)) for stem, names in table.items()}
-    return lambda piece_id: table.get(piece_id, []) if piece_id else []
+    # THE WORK, NOT ONLY THE RECORDING. A piece id is one reference
+    # recording of a work, and the pair list can back two editions of the
+    # same work with two different recordings -- Op. 9 No. 2: Schlesinger
+    # and Wessel on one video, Kistner on another. Recognised through the
+    # first recording, the Kistner -- the one engraved and published -- was
+    # never offered, and the link parked "not engraved" for a score we had.
+    # So every edition of the same work is offered, this recording's first.
+    by_work: dict[str, list[str]] = {}
+    for stem, names in table.items():
+        by_work.setdefault(_work(stem), []).extend(names)
+
+    def names_of(piece_id: str) -> list[str]:
+        if not piece_id:
+            return []
+        out = list(table.get(piece_id, []))
+        for name in sorted(by_work.get(_work(piece_id), [])):
+            if name not in out:
+                out.append(name)
+        return out
+    return names_of
+
+
+def _work(stem: str) -> str:
+    """The work a recording's piece id names: the stem without its video id."""
+    return re.sub(r"_[A-Za-z0-9_-]{11}$", "", stem)
 
 
 def _stem(video: str) -> str:
