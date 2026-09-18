@@ -689,7 +689,8 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
  /* ---------- build the score out of the real package ---------- */
  var bandsEl = document.getElementById('bands');
  var BANDS = [], BARS = [];
- (function build(){
+ function build(){
+  bandsEl.innerHTML = ''; BANDS.length = 0; BARS.length = 0;
   for(var i=0;i<DATA.bands.length;i++){
    var d = DATA.bands[i];
    var el = document.createElement('span');
@@ -721,13 +722,14 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
    BANDS.push({el:el, aspect:d.aspect, first:lbl(d.bars[0]), last:lbl(d.bars[d.bars.length-1])});
   }
   BARS.sort(function(a,b){ return a.t - b.t; });
- })();
+ }
+ build();
  /* Whether there is a score to follow at all. False for a link that was
     given a moment ago and is still being prepared -- see `waitForScore`. */
  var SCORED = BARS.length > 0;
 
  /* the masthead says which performance this is */
- (function name(){
+ function name(){
   var el = document.getElementById('vwork');
   if(!el) return;
   var bits = [];
@@ -739,7 +741,8 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
     ? 'url("/api/library/' + encodeURIComponent(DATA.edition) + '/page?n=1")'
     : 'none';
   document.documentElement.style.setProperty('--plate', plate);
- })();
+ }
+ name();
 
  /* the hero on page 1 uses the same engraving and the same bar box */
  (function hero(){
@@ -1112,11 +1115,43 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   pnext.disabled = start + shown >= BANDS.length;
  }
 
+ /* ---------- one piece ends, the next begins ----------
+    A recital is several performances of one video. The embed keeps
+    playing past the end of this piece; the score would stop. So when the
+    time passes this piece's end and the next piece of the same video is
+    ready to follow, its bands and bars replace these IN PLACE -- the video
+    never reloads, the address becomes the next piece's page. */
+ var switching = false;
+ function switchTo(next){
+  DATA = next;
+  build(); name(); others();
+  SCORED = BARS.length > 0;
+  at = 0; start = 0; lastPaint = -1;
+  try{ history.replaceState(null, '', '/p/' + next.id); }catch(e){}
+  if(next.title){ document.title = next.title + ' \u2014 with the score'; }
+  layout();
+ }
+ window.__svsSwitch = switchTo;      /* for the page's own tests */
+ function carry(time){
+  if(switching || !DATA.segment || DATA.segment.end == null) return;
+  if(time < DATA.segment.end + 2) return;
+  var next = (DATA.siblings || []).filter(function(s){
+    return s.state === 'READY' && s.start != null
+        && s.start >= DATA.segment.end - 30 && s.start <= time + 45;
+  }).sort(function(a, b){ return a.start - b.start; })[0];
+  if(!next) return;
+  switching = true;
+  fetch('/api/performance/' + next.id).then(function(r){ return r.json(); })
+    .then(function(p){ switchTo(p); switching = false; })
+    .catch(function(){ switching = false; });
+ }
+
  function paint(){
   if(!BARS.length) return;
   var time = mediaTime();
   if(time === lastPaint) return;
   lastPaint = time;
+  carry(time);
   var i = barAt(time);
   if(i !== at){ BARS[at].el.classList.remove('on'); at = i; }
   mark(time);
@@ -1166,7 +1201,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
     one recording; each has its own page, and this line is how a visitor
     who arrived at one finds the rest. Only pieces that can be followed
     are linked; the others are named with where they are. */
- (function others(){
+ function others(){
   var el = document.getElementById('also'), list = DATA.siblings || [];
   if(!el || !list.length) return;
   function mmss(s){ s = Math.floor(s || 0); return Math.floor(s/60) + ':' + ('0' + (s % 60)).slice(-2); }
@@ -1175,7 +1210,8 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
     return s.state === 'READY' ? '<a href="/p/' + s.id + '">' + label + '</a>' : '<span>' + label + '</span>';
   }).join(' · ');
   el.hidden = false;
- })();
+ }
+ others();
  /* Only a video can be played. A performance aligned to a reference
     recording has none, and the page is then a score to read rather than a
     player with an empty frame in it. */

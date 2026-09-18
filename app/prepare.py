@@ -66,7 +66,9 @@ SEGMENTS = "SEGMENTS"              # an outcome of its own: several pieces heard
 # single identification: recitals, competition rounds, albums. Shorter
 # ones are one piece until proven otherwise.
 SEGMENT_MIN_SECONDS = 540.0
-EXCERPT_PAD = 5.0                  # seconds kept either side of a segment
+EXCERPT_PAD = 15.0                 # seconds kept either side of a segment: a boundary is only
+                                   # sure to one window (12.5 s), and the aligner shrugs off
+                                   # extra audio at the ends but not missing bars
 NOT_ENGRAVED = "NOT_ENGRAVED"
 VIDEO_UNAVAILABLE = "VIDEO_UNAVAILABLE"
 PARTIAL_UNSUPPORTED = "PARTIAL_UNSUPPORTED"
