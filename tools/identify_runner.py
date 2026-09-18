@@ -12,6 +12,15 @@ PYTHONDONTWRITEBYTECODE; nothing is written into that repository.
 
     python identify_runner.py AUDIO --root R --pitch-index P --chord-index C
                               --out result.json [--pair-list L] [--top 5]
+    python identify_runner.py --serve --root R --pitch-index P --chord-index C
+                              [--pair-list L] [--top 5]
+
+RESIDENT (--serve): indexes and the transcription model are loaded once
+(~15 s on the volunteer's GPU -- most of what a one-shot run cost), then
+one JSON request per line on stdin, {"audio": ..., "out": ...}, is
+answered by writing the verdict to `out` and printing `@@done <out>` on
+stdout. EOF on stdin ends it. The marker prefix is what the client waits
+for; every other stdout line is torch or the model talking.
 
 The verdict goes to --out as JSON, written atomically. stdout is left
 alone deliberately — torch and the transcription model both print there,
@@ -39,37 +48,57 @@ class ConfigProblem(RuntimeError):
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("audio", help="video or audio file to identify")
+    p.add_argument("audio", nargs="?", default="", help="video or audio file to identify")
+    p.add_argument("--serve", action="store_true",
+                   help="stay loaded; answer JSON requests on stdin, one per line")
     p.add_argument("--root", required=True, help="music_finrgerprint checkout")
     p.add_argument("--pitch-index", required=True)
     p.add_argument("--chord-index", required=True)
-    p.add_argument("--out", required=True, help="where to write the JSON verdict")
+    p.add_argument("--out", default="", help="where to write the JSON verdict")
     p.add_argument("--pair-list", default="", help="pair_list.json; enables score names")
     p.add_argument("--top", type=int, default=5, help="candidates to report")
     return p.parse_args()
 
 
-def identify(args: argparse.Namespace) -> dict:
-    sys.path.insert(0, str(pathlib.Path(args.root) / "src"))
-    try:
-        from weefeen_id.aggregate import identify_aggregated
-        from weefeen_id.pipeline_v6 import load_v6_indexes
-    except ImportError as exc:
-        raise ConfigProblem(
-            f"The recogniser's interpreter cannot import weefeen_id: {exc}") from exc
+class Loaded:
+    """Everything a verdict needs that is worth loading once."""
 
-    # Resolved before the expensive part, so a misconfigured pair_list costs
-    # a second rather than a minute of GPU time.
-    names = _labels(args.pair_list)
+    def __init__(self, args: argparse.Namespace) -> None:
+        sys.path.insert(0, str(pathlib.Path(args.root) / "src"))
+        try:
+            from weefeen_id.aggregate import identify_aggregated
+            from weefeen_id.pipeline_v6 import load_v6_indexes
+        except ImportError as exc:
+            raise ConfigProblem(
+                f"The recogniser's interpreter cannot import weefeen_id: {exc}") from exc
+        # Resolved before the expensive part, so a misconfigured pair_list
+        # costs a second rather than a minute of GPU time.
+        self.names = _labels(args.pair_list)
+        started = time.perf_counter()
+        self.indexes = load_v6_indexes(args.pitch_index, args.chord_index)
+        self.identify_aggregated = identify_aggregated
+        # The transcription model too: it is what a one-shot run spent most
+        # of its time on, and the first request must not pay it either.
+        try:
+            from weefeen_id.features.amt_pitch import _get_model
+            _get_model()
+        except Exception:  # noqa: BLE001 - loaded lazily on first use then
+            pass
+        self.load_s = round(time.perf_counter() - started, 2)
 
+
+def identify(args: argparse.Namespace, loaded: "Loaded | None" = None) -> dict:
+    loaded = loaded or Loaded(args)
+    names, indexes = loaded.names, loaded.indexes
+    identify_aggregated = loaded.identify_aggregated
     started = time.perf_counter()
-    indexes = load_v6_indexes(args.pitch_index, args.chord_index)
-    loaded = time.perf_counter()
+    loaded_at = time.perf_counter()
 
     # identify_aggregated reads the media itself; librosa handles the
     # container, so a video needs no separate extraction step here.
     verdict = identify_aggregated(args.audio, indexes)
     finished = time.perf_counter()
+    loaded = loaded_at   # noqa: F841 - kept for the timing block below
 
     candidates = [
         {"piece_id": piece_id,
@@ -92,8 +121,8 @@ def identify(args: argparse.Namespace) -> dict:
         "candidates": candidates,
         "device": _device(),
         "timing": {
-            "load_indexes_s": round(loaded - started, 2),
-            "identify_s": round(finished - loaded, 2),
+            "load_indexes_s": round(loaded_at - started, 2),
+            "identify_s": round(finished - loaded_at, 2),
             "total_s": round(finished - started, 2),
         },
     }
@@ -192,8 +221,43 @@ def write(out: pathlib.Path, payload: dict) -> None:
     os.replace(temp, out)
 
 
+def serve(args: argparse.Namespace) -> int:
+    """Answer requests until stdin closes. Never raises out of the loop."""
+    try:
+        loaded = Loaded(args)
+    except ConfigProblem as exc:
+        print(f"@@fatal {exc}", flush=True)
+        return 2
+    print(f"@@ready load_s={loaded.load_s}", flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+            out = pathlib.Path(req["out"])
+            args.audio = str(req["audio"])
+            result = identify(args, loaded)
+        except ConfigProblem as exc:
+            result = {"ok": False, "kind": CONFIG, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 - the caller only sees the file
+            result = {"ok": False, "kind": FAILURE,
+                      "error": f"{type(exc).__name__}: {exc}".rstrip(": "),
+                      "traceback": traceback.format_exc()}
+            out = pathlib.Path(json.loads(line).get("out", "")) if line.startswith("{") else None
+        if out:
+            write(out, result)
+            print(f"@@done {out}", flush=True)
+    return 0
+
+
 def main() -> int:
     args = parse_args()
+    if args.serve:
+        return serve(args)
+    if not args.audio or not args.out:
+        print("audio and --out are required unless --serve", file=sys.stderr)
+        return 2
     try:
         result = identify(args)
     except ConfigProblem as exc:

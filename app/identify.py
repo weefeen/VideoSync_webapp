@@ -27,7 +27,9 @@ import json
 import logging
 import os
 import pathlib
+import queue
 import subprocess
+import time
 import tempfile
 import threading
 
@@ -222,32 +224,134 @@ def identify(media: pathlib.Path, duration: float | None = None) -> Identificati
     )
 
 
+def _command(*extra: str) -> list[str]:
+    command = [settings.id_python, "-u", str(RUNNER), *extra,
+               "--root", str(settings.id_root),
+               "--pitch-index", str(settings.pitch_index),
+               "--chord-index", str(settings.chord_index)]
+    if settings.pair_list:
+        command += ["--pair-list", str(settings.pair_list)]
+    return command
+
+
+def _env() -> dict:
+    # The child prints the transcription checkpoint path, which contains
+    # the home directory; on a console codepage that cannot encode it, the
+    # run dies before doing any work. Force UTF-8 both ways.
+    #
+    # DONTWRITEBYTECODE because the child imports from a repository we are
+    # only ever allowed to read: without it, running this leaves
+    # __pycache__ directories behind inside music_finrgerprint.
+    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+            "PYTHONDONTWRITEBYTECODE": "1"}
+
+
+class _Resident:
+    """The runner kept alive between links, with its model loaded.
+
+    A one-shot run paid ~15 s to load the transcription model and a few
+    more for torch and the indexes, on EVERY link -- most of what a link
+    cost. This starts the runner once (`--serve`), hands it one request per
+    line and waits for its `@@done` marker. Anything wrong -- it dies, it
+    hangs past the timeout, it cannot start -- is answered by killing it
+    and falling back to the one-shot run, so a link is never lost to the
+    optimisation; the next link tries to start it again.
+    """
+
+    def __init__(self) -> None:
+        self._proc = None
+        self._lines: "queue.Queue[str | None]" = queue.Queue()
+        self._lock = threading.Lock()
+
+    def _start(self) -> bool:
+        try:
+            self._proc = subprocess.Popen(
+                _command("--serve"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                errors="replace", env=_env(), bufsize=1)
+        except OSError as exc:
+            logger.warning("resident recogniser could not start: %s", exc)
+            self._proc = None
+            return False
+        self._lines = queue.Queue()
+        threading.Thread(target=self._pump, args=(self._proc,), daemon=True,
+                         name="identify-resident").start()
+        # Wait for it to be ready: model and indexes loaded.
+        marker = self._wait("@@ready", "@@fatal", timeout=settings.identify_timeout)
+        if marker is None or marker.startswith("@@fatal"):
+            logger.warning("resident recogniser did not come up: %s", marker)
+            self.stop()
+            return False
+        logger.info("resident recogniser up (%s)", marker.split(" ", 1)[-1])
+        return True
+
+    def _pump(self, proc) -> None:
+        for line in proc.stdout:
+            self._lines.put(line.rstrip("\n"))
+        self._lines.put(None)
+
+    def _wait(self, *prefixes: str, timeout: float) -> "str | None":
+        deadline = time.monotonic() + timeout
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return None
+            try:
+                line = self._lines.get(timeout=left)
+            except queue.Empty:
+                return None
+            if line is None:
+                return None
+            if line.startswith(prefixes):
+                return line
+
+    def stop(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def run(self, media: pathlib.Path, out: pathlib.Path) -> bool:
+        """True when `out` holds the verdict; False means use the one-shot run."""
+        with self._lock:
+            if self._proc is None or self._proc.poll() is not None:
+                if not self._start():
+                    return False
+            try:
+                self._proc.stdin.write(json.dumps({"audio": str(media), "out": str(out)}) + "\n")
+                self._proc.stdin.flush()
+            except (OSError, ValueError) as exc:
+                logger.warning("resident recogniser lost: %s", exc)
+                self.stop()
+                return False
+            marker = self._wait("@@done", timeout=settings.identify_timeout)
+            if marker is None or not out.is_file():
+                logger.warning("resident recogniser gave no answer in time; restarting it")
+                self.stop()
+                return False
+            return True
+
+
+_resident = _Resident()
+
+
 def _run(media: pathlib.Path) -> dict:
     """Call the runner and return its verdict payload."""
     with tempfile.TemporaryDirectory(prefix="svs_id_") as tmp:
         out = pathlib.Path(tmp) / "verdict.json"
-        command = [
-            settings.id_python, "-u", str(RUNNER), str(media),
-            "--root", str(settings.id_root),
-            "--pitch-index", str(settings.pitch_index),
-            "--chord-index", str(settings.chord_index),
-            "--out", str(out),
-        ]
-        if settings.pair_list:
-            command += ["--pair-list", str(settings.pair_list)]
+        if settings.identify_resident and _resident.run(media, out):
+            try:
+                return json.loads(out.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise IdentifyError(
+                    f"The recogniser's result could not be read back: {exc}") from exc
+        command = _command(str(media), "--out", str(out))
 
-        # The child prints the transcription checkpoint path, which contains
-        # the home directory; on a console codepage that cannot encode it,
-        # the run dies before doing any work. Force UTF-8 both ways.
-        #
-        # DONTWRITEBYTECODE because the child imports from a repository we
-        # are only ever allowed to read: without it, running this leaves
-        # __pycache__ directories behind inside music_finrgerprint.
-        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-               "PYTHONDONTWRITEBYTECODE": "1"}
         try:
             done = subprocess.run(command, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", env=env,
+                                  encoding="utf-8", errors="replace", env=_env(),
                                   timeout=settings.identify_timeout)
         except subprocess.TimeoutExpired as exc:
             raise IdentifyError(

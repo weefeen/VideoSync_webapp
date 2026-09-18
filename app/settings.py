@@ -229,6 +229,9 @@ class Settings:
     id_python: str = ""
     id_index_dir: pathlib.Path | None = None
     pair_list: pathlib.Path | None = None
+    # Keep the recogniser loaded between links (IDENTIFY_RESIDENT=0 to run
+    # it one-shot, as before). See identify._Resident.
+    identify_resident: bool = True
     # Below this the recogniser plans a single window, and a single window
     # always agrees with itself: consensus comes out at 1.0 and the open-set
     # gate stops meaning anything. Refuse such uploads rather than guess.
@@ -687,6 +690,8 @@ def load() -> Settings:
         identify_min_seconds=_number("IDENTIFY_MIN_SECONDS", 20.0),
         rabbitmq_url=os.getenv("RABBITMQ_URL", "").strip().strip('"'),
         identify_timeout=_number("IDENTIFY_TIMEOUT", 600.0),
+        identify_resident=os.getenv("IDENTIFY_RESIDENT", "1").strip().lower()
+        not in ("0", "false", "no", "off"),
         object_endpoint=os.getenv("OBJECT_ENDPOINT", "").strip(),
         object_region=os.getenv("OBJECT_REGION", "").strip(),
         object_bucket=os.getenv("OBJECT_BUCKET", "").strip(),
