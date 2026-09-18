@@ -140,8 +140,11 @@ def check(root: pathlib.Path) -> Report:
                 r.ok(f"score/lines: {len(good)} bands ({shape}), "
                      f"measures {first}-{last}")
 
-                if first != 1:
-                    r.note(f"the first band starts at measure {first}, not 1 "
+                # The file names are SOURCE numbers (M): a pickup bar is 0,
+                # and that is a whole piece. Whether the score begins at
+                # its first bar is judged on the sync keys, below.
+                if first not in (0, 1):
+                    r.note(f"the first band starts at source bar {first} "
                            f"-- fine for an excerpt, wrong for a whole piece")
 
                 seen = [m for m, _ in good]
@@ -336,8 +339,12 @@ def check(root: pathlib.Path) -> Report:
              f"{first_aligned}-{last_aligned}")
 
         bands = list(pkg.bands or [])
+        # BY SYNC KEY, the alignment's own numbering: a band file is named
+        # by its source bar, which is a label, not a key (PROJECT_FOLDER_
+        # SPEC.md §0). Judged by name, a pickup bar looked unaligned.
+        key_of = pkg._key_of                                # noqa: SLF001
         orphans = [b.first_measure for b in bands
-                   if not any(m >= b.first_measure for m in aligned)]
+                   if not any(m >= key_of(b) for m in aligned)]
         if orphans:
             r.bad(f"{len(orphans)} band(s) start after the last aligned "
                   f"measure ({last_aligned}) and would be silently dropped: "
@@ -348,7 +355,10 @@ def check(root: pathlib.Path) -> Report:
                  f"timeline")
 
         exact = sum(1 for b in bands
-                    if any(m == b.first_measure for m in aligned))
+                    if any(m == key_of(b) for m in aligned))
+        if bands and key_of(bands[0]) != 1:
+            r.note(f"the first band's sync key is {key_of(bands[0])}, not 1 "
+                   f"-- fine for an excerpt, wrong for a whole piece")
         if exact < len(bands):
             r.note(f"{len(bands) - exact} band(s) have no alignment point at "
                    f"their exact first measure and will use the next one "
