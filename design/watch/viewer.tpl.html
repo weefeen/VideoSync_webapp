@@ -1415,9 +1415,21 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
    if(REFUSED.indexOf(state) >= 0){
     box.classList.add('settled');
     h.innerHTML = 'We cannot <em>follow</em> this one';
-    p.textContent = state === 'UNAVAILABLE'
-      ? 'The video cannot be used here, so there is no score to follow.'
-      : 'We listened, and this is not a piece we can follow with a score.';
+    /* THE REASON, NOT ONE SENTENCE FOR EVERY REFUSAL. A performance refused
+       by the ALIGNER -- "the recording seems incomplete" -- was told here
+       that we could not recognise the piece, which sent the reader looking
+       for the wrong fault. The state endpoint carries skip_reason; use it. */
+    var why = d.skip_reason || '';
+    p.textContent =
+        state === 'UNAVAILABLE'
+          ? 'The video cannot be used here, so there is no score to follow.'
+      : why === 'PARTIAL_UNSUPPORTED'
+          ? 'The piece was recognised and its score exists, but the recording did not line up with the whole score -- it may be an excerpt, or the score\'s bar numbering may need a fix. It will be tried again.'
+      : why === 'NOT_CHOPIN'
+          ? 'We listened, and this is not a piece we can follow with a score.'
+      : state === 'FAILED'
+          ? 'Something went wrong while preparing it. It will be tried again.'
+          : 'We listened, and this is not a piece we can follow with a score.';
     return 0;
    }
    box.classList.remove('settled');

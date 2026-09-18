@@ -322,6 +322,7 @@ def check(root: pathlib.Path) -> Report:
         first_aligned, last_aligned = aligned[0], aligned[-1]
         r.ok(f"alignment: {len(aligned)} points, measures "
              f"{first_aligned}-{last_aligned}")
+        _check_keys_against_bars(root, aligned, r)
 
         bands = list(pkg.bands or [])
         orphans = [b.first_measure for b in bands
@@ -361,6 +362,57 @@ def check(root: pathlib.Path) -> Report:
 
     return r
 
+
+
+def _check_keys_against_bars(root: pathlib.Path, aligned: list, r: "Report") -> None:
+    """Does the alignment name as many measures as the music has?
+
+    THE DEFECT THAT REFUSED A COMPLETE PERFORMANCE. A Nocturne package
+    carried 37 alignment keys for a kern with 34 bars -- one key appeared
+    twice and mapped to no bar at all. It passed every check here, because
+    nothing compared the two counts. Aligned against a real performance the
+    three surplus keys stacked at the end of the audio, the crowding gate
+    read that as a partial recording, and the link was written off.
+
+    Two comparisons, both cheap: the number of distinct barlines in
+    `score/source.krn` against the number of aligned measures, and any row
+    of `measures.data` whose source-measure columns are empty -- a key that
+    points at nothing.
+    """
+    import re
+    krn = root / "score" / "source.krn"
+    bars = 0
+    if krn.is_file():
+        try:
+            text = krn.read_text(encoding="utf-8", errors="replace")
+            bars = len({m.group(1) for m in re.finditer(r"^=(\d+)", text, re.M)})
+        except OSError:
+            bars = 0
+    if bars and len(aligned) > bars:
+        r.bad(f"the alignment names {len(aligned)} measures but the kern has "
+              f"{bars} bars: {len(aligned) - bars} key(s) point at no music. "
+              f"Aligned to a real performance they stack at the end and the "
+              f"recording is refused as incomplete. Re-export the measures "
+              f"so there is one key per bar.")
+    elif bars and len(aligned) < bars - 1:
+        r.note(f"the alignment names {len(aligned)} measures for {bars} bars "
+               f"in the kern -- {bars - len(aligned)} bar(s) have no timing")
+
+    for where in ("reference", "performance"):
+        path = root / where / "measures.data"
+        if not path.is_file():
+            continue
+        empty = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) >= 4 and cols[1].strip() and not cols[2].strip():
+                empty.append(cols[1].strip())
+        if empty:
+            r.bad(f"{where}/measures.data has {len(empty)} key(s) with no "
+                  f"source measure ({', '.join(sorted(set(empty))[:5])}): "
+                  f"they belong to no bar and will stack at the end of any "
+                  f"performance")
+        break
 
 
 def _check_vector_bands(root: pathlib.Path, r: "Report") -> None:

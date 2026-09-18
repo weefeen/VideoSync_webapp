@@ -239,12 +239,31 @@ def align(package_root: pathlib.Path, media: pathlib.Path,
     span_ratio = float(payload.get("span_ratio", 1.0))
     low, high = SPAN_RANGE
 
-    if crowding > MAX_CROWDING:
+    # BOTH SIGNALS, NOT EITHER. A recording that stops early shows both at
+    # once -- measured above: crowding 0.79 AND span 0.13. Crowding alone
+    # also comes from a SCORE PACKAGE that names more measures than the music
+    # has: the surplus keys have nowhere to land and stack at the end of the
+    # audio. A Nocturne package with 37 keys for 34 bars stacked three, and
+    # 2/37 = 5.4% crossed a limit tuned on 649-bar pieces, so a complete,
+    # cleanly aligned performance (span 1.13, confidence 0.91) was refused
+    # as "part of the piece" and the verdict was written on the row as
+    # final. The ratio is a bad measure on a short piece; the pair is not.
+    #
+    # So crowding alone is a WARNING with the count in the log -- the
+    # checker now flags the package defect where it belongs -- and the
+    # recording is called partial only when the span agrees.
+    if crowding > MAX_CROWDING and span_ratio < 0.8:
         raise PartialRecording(
             f"That recording covers only part of the piece — {crowded} of "
             f"{payload['measures']} measures had to share a moment with the "
             f"one before. The score is aligned against the whole "
             f"performance, so please upload the piece complete.")
+    if crowding > MAX_CROWDING:
+        logger.warning("%s: %d of %d measures stacked (crowding %.3f) but the "
+                       "span is %.2f -- the score package likely names more "
+                       "measures than the music has; aligned anyway",
+                       media.name, crowded, payload["measures"], crowding,
+                       span_ratio)
     if not low <= span_ratio <= high:
         played = payload.get("span_seconds", 0)
         expected = payload.get("reference_span_seconds", 0)
