@@ -187,32 +187,33 @@ def studio_root():
 # --------------------------------------------------------------------------
 @bp.get("/api/library/index")
 def api_library_index():
-    """The server's index of its scores: folder name -> fingerprint.
+    """The server's index of its scores: folder name -> what it was sent as.
 
     What a volunteer's panel compares its own projects against, so that
     only a score that is NEW here or DIFFERENT from the copy here is
-    offered for publishing. The fingerprint is `package.fingerprint`, over
-    the consumed files, computed the same way on both machines.
+    offered for publishing. The id is PROJECT_FOLDER_SPEC.md §7.1's,
+    computed on the volunteer's project and sent with the install
+    (`package.content_id`); a copy on the server cannot compute its own.
     """
-    # Each entry: {"content": <fingerprint of the consumed files>,
-    #              "version": <the extractor's version block, or {}>}.
-    # The bucket first -- a score published before this existed is there
-    # with "" -- then the installed copies on this disk, measured now.
+    # Each entry: {"content_id": <PROJECT_FOLDER_SPEC §7.1 id the copy was
+    # sent as, "" if sent before this existed>, "version": <the extractor's
+    # minted block, or {}>}. The bucket's catalogue first, then the copies
+    # installed on this disk, whose note wins.
     index: dict = {}
     if storage.available():
         for e in scorestore.catalogue_entries():
             index[str(e.get("name") or "")] = {
-                "content": str(e.get("fingerprint") or ""),
+                "content_id": str(e.get("content_id") or ""),
                 "version": e.get("version") if isinstance(e.get("version"), dict) else {},
             }
     for p in pipeline.usable_packages():
         if not p.root or not p.root.is_dir():
             continue
-        try:
-            index[p.name] = {"content": pkg.fingerprint(p.root),
-                             "version": pkg.version_of(p.root)}
-        except OSError as exc:
-            logger.warning("%s: could not fingerprint: %s", p.name, exc)
+        note = pkg.installed_note(p.root)
+        if note:
+            index[p.name] = note
+        else:
+            index.setdefault(p.name, {"content_id": "", "version": {}})
     index.pop("", None)
     return jsonify(index)
 

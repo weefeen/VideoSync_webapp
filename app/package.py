@@ -24,7 +24,9 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import pathlib
+import posixpath
 import zipfile
 from typing import Iterator
 
@@ -556,37 +558,136 @@ def _consumed_files(root: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
     return out
 
 
-VERSION_FILE = "version.json"          # an installed copy's note of it
+VERSION_FILE = "version.json"      # an installed copy's note: what was sent
+_IDS: dict[str, tuple[tuple, str]] = {}
 _VERSIONS: dict[str, tuple[tuple, dict]] = {}
+
+# PROJECT_FOLDER_SPEC.md §7.1 -- the content id an external service computes
+# for a project. Their recipe, kept in step with their test
+# (tests/test_project_folder_contract_snippet.py); do not improve it here.
+_SKIP_EXACT = {"chroma.npy", "score/chroma.npy", "score/measures.data"}
+_BASENAME_FIELDS = ("video_file", "audio_file", "source_pdf_path",
+                    "video_file_path")
+
+
+def _included(arc: str) -> bool:
+    return not (arc.endswith("/") or arc in _SKIP_EXACT
+                or arc.startswith("score/prepared/")
+                or arc.endswith(".meta.json")
+                or posixpath.basename(arc) == "audio.wav")
+
+
+def _canonical(arc: str, data: bytes) -> bytes:
+    if not arc.endswith(".json"):
+        return data
+    try:
+        obj = json.loads(data.decode("utf-8"))
+    except Exception:                                       # noqa: BLE001
+        return data
+    if isinstance(obj, dict):
+        obj.pop("version", None)                  # future self-reference
+        for f in _BASENAME_FIELDS:                # machine-local paths
+            v = obj.get(f)
+            if isinstance(v, str) and v:
+                obj[f] = posixpath.basename(v.replace("\\", "/"))
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False).encode("utf-8")
+
+
+def _loose_entries(root: pathlib.Path, spj: "pathlib.Path | None"
+                   ) -> list[tuple[str, pathlib.Path]]:
+    out: list[tuple[str, pathlib.Path]] = []
+    for dirpath, _, files in os.walk(root):
+        for f in files:
+            fp = pathlib.Path(dirpath) / f
+            if fp == spj or fp.suffix.lower() == ".mp4":
+                continue
+            rel = fp.relative_to(root).as_posix()
+            if _included(rel):
+                out.append((rel, fp))
+    return sorted(out)
+
+
+def content_id(root: str | pathlib.Path) -> str:
+    """THE PROJECT'S IDENTITY, as PROJECT_FOLDER_SPEC.md §7.1 defines it.
+
+    "sha256:<hex>" over the contents of the meaningful entries -- every
+    entry of the bundle, overlaid by the loose files at the same path
+    (loose wins: the live state), minus audio, provenance, pickles and the
+    stale locations -- each JSON entry canonicalised so machine-local
+    paths and formatting do not count. Same project, same id, on any
+    machine, open or closed. What the volunteer's panel compares against
+    the id the site was sent, and what the extractor's own `version`
+    block will carry once it mints one.
+
+    Not computable on an installed copy: the installer ships neither the
+    bundle nor project.json, and renames performance/ to reference/. The
+    server keeps the id it was SENT (see `installed_note`). Cached by the
+    stat of every contributing file; the panel asks every second.
+    """
+    root = pathlib.Path(root)
+    spj = bundle_of(root)
+    if spj is None:
+        spj = next(iter(sorted(root.glob("*.spj"))), None)
+    loose = _loose_entries(root, spj)
+    sig: list = [("spj", spj.stat().st_size, spj.stat().st_mtime_ns)] if spj else []
+    sig += [(rel, fp.stat().st_size, fp.stat().st_mtime_ns) for rel, fp in loose]
+    signature = tuple(sig)
+    hit = _IDS.get(str(root))
+    if hit is not None and hit[0] == signature:
+        return hit[1]
+    entries: dict[str, bytes] = {}
+    if spj is not None:
+        with zipfile.ZipFile(spj) as zf:
+            entries = {n: zf.read(n) for n in zf.namelist() if _included(n)}
+    for rel, fp in loose:                                   # loose overrides
+        entries[rel] = fp.read_bytes()
+    h = hashlib.sha256()
+    for arc in sorted(entries):
+        blob = _canonical(arc, entries[arc])
+        h.update(arc.encode()); h.update(b"\0")
+        h.update(str(len(blob)).encode()); h.update(b"\0")
+        h.update(blob); h.update(b"\0")
+    digest = "sha256:" + h.hexdigest()
+    _IDS[str(root)] = (signature, digest)
+    return digest
+
+
+def installed_note(root: str | pathlib.Path) -> dict:
+    """What an installed copy was sent as: {"content_id", "version"}, or {}.
+
+    Left beside `score/` by the installer (`tools/check_score.py`), because
+    the copy on the server cannot compute its own id (see `content_id`).
+    """
+    note = pathlib.Path(root) / VERSION_FILE
+    try:
+        if not note.is_file():
+            return {}
+        data = json.loads(note.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {"content_id": str(data.get("content_id") or ""),
+            "version": data.get("version") if isinstance(data.get("version"), dict) else {}}
 
 
 def version_of(root: str | pathlib.Path) -> dict:
-    """The extractor's version block for this project, or {}.
+    """The extractor's minted version block for this project, or {}.
 
-    THE KEY, WHEN THE EXTRACTOR WRITES ONE. music_line_extractor's
-    PROJECT_VERSION_ID_SPEC.md proposes, in `project.json`:
-
-        "version": {"content_id": "sha256:…", "parent_id": "sha256:…",
-                    "revision": 7, "saved_at_utc": "…", "device_id": "…"}
-
-    (an earlier draft named the id `project_content_id`, flat; both are
-    read). `content_id` says whether two copies are the same project;
-    `parent_id` says whether one descends from the other, which is what
-    tells a fast-forward from a divergence. Read from the bundle, because
-    the id describes the bundle (spec D5) -- an OPEN project's loose files
-    are ahead of it, so for an open project this returns {} and the
-    content fingerprint decides. Until the extractor implements the spec
-    every project returns {} and nothing here changes.
-
-    An installed copy on the server has no bundle: the installer leaves
-    the block it saw in `version.json` beside `score/`, and that is read
-    here so the server can answer with the same key.
+    PROJECT_VERSION_ID_SPEC.md §4.5: `project.json::version`
+    {content_id, parent_id, revision, minted_at_utc, device_id}, minted at
+    export -- a label, not a live checksum: a project edited since is
+    "dirty" (§6), which `content_id` != version.content_id shows. Not
+    implemented in the extractor yet, so every project returns {} today;
+    read from the bundle's project.json (authoritative, spec §2), then a
+    loose one, then an installed copy's note.
     """
     root = pathlib.Path(root)
+    note = root / VERSION_FILE
+    spj = bundle_of(root)
     data = None
     try:
-        note = root / VERSION_FILE
-        spj = None if is_open(root) else bundle_of(root)
         if spj is not None:
             st = spj.stat()
             sig = ("spj", st.st_size, st.st_mtime_ns)
@@ -596,13 +697,12 @@ def version_of(root: str | pathlib.Path) -> dict:
             with zipfile.ZipFile(spj) as z:
                 if "project.json" in z.namelist():
                     data = json.loads(z.read("project.json").decode("utf-8"))
+        elif (root / "project.json").is_file():
+            st = (root / "project.json").stat()
+            sig = ("loose", st.st_size, st.st_mtime_ns)
+            data = json.loads((root / "project.json").read_text(encoding="utf-8"))
         elif note.is_file():
-            st = note.stat()
-            sig = ("note", st.st_size, st.st_mtime_ns)
-            hit = _VERSIONS.get(str(root))
-            if hit is not None and hit[0] == sig:
-                return dict(hit[1])
-            data = json.loads(note.read_text(encoding="utf-8"))
+            return installed_note(root).get("version") or {}
         else:
             return {}
     except (OSError, ValueError, zipfile.BadZipFile):
@@ -612,42 +712,10 @@ def version_of(root: str | pathlib.Path) -> dict:
         flat = (data or {}).get("project_content_id") or (data or {}).get("content_id")
         block = {"content_id": str(flat)} if flat else {}
     out = {k: block[k] for k in ("content_id", "parent_id", "revision",
-                                 "saved_at_utc", "device_id") if k in block}
+                                 "minted_at_utc", "saved_at_utc", "device_id")
+           if k in block}
     _VERSIONS[str(root)] = (sig, out)
     return dict(out)
-
-
-def fingerprint(root: str | pathlib.Path) -> str:
-    """What the package IS, as this app consumes it: sixteen hex digits.
-
-    THE INDEX. A score on the volunteer's computer and its copy on the
-    server are the same score when the files the app reads have the same
-    bytes -- not when they have the same name, which is how "publish this
-    score" was offered for scores the site already had, and never for one
-    re-engraved under its old name. Computed identically on both machines
-    from the content of the consumed files (see `_consumed_files`), so
-    copying, repacking or an mtime touch changes nothing, and a re-cut band
-    or a re-run alignment changes it.
-
-    Cached by (path, size, mtime) of every file, since the bands add up to
-    megabytes and the panel asks every second.
-    """
-    root = pathlib.Path(root)
-    root = unpacked(root) or root
-    files = _consumed_files(root)
-    signature = tuple((rel, p.stat().st_size, p.stat().st_mtime_ns)
-                      for rel, p in files)
-    hit = _FINGERPRINTS.get(str(root))
-    if hit is not None and hit[0] == signature:
-        return hit[1]
-    h = hashlib.sha256()
-    for rel, p in files:
-        h.update(rel.encode("utf-8"))
-        h.update(b"\0")
-        h.update(hashlib.sha256(p.read_bytes()).digest())
-    digest = h.hexdigest()[:16]
-    _FINGERPRINTS[str(root)] = (signature, digest)
-    return digest
 
 
 def _first(root: pathlib.Path, candidates: tuple[str, ...],

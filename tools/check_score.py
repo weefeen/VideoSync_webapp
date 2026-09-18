@@ -440,6 +440,11 @@ def install(root: pathlib.Path) -> int:
     looked like it had worked. Anything shape-changing therefore runs where
     the shell is known.
     """
+    # THE ID OF WHAT IS BEING SENT, computed on the project folder itself
+    # (bundle plus loose files, PROJECT_FOLDER_SPEC.md §7.1) before any
+    # unpacking: the server cannot compute it from what it receives.
+    sent_as = {"content_id": pkgmod.content_id(root),
+               "version": pkgmod.version_of(root)}
     # A closed project is one .spj; what goes up is its unpacked copy.
     root = pkgmod.unpacked(root) or root
     name = root.name
@@ -531,9 +536,7 @@ def install(root: pathlib.Path) -> int:
     # THE KEY THE PROJECT CAME WITH, left beside the installed copy so the
     # server's index can answer with it (package.version_of reads it
     # there). Empty until the extractor writes one; harmless meanwhile.
-    version = pkgmod.version_of(root)
-    if _remote_python(VERSION_NOTE, name, json.dumps(
-            {"version": version, "fingerprint": pkgmod.fingerprint(root)})) != 0:
+    if _remote_python(VERSION_NOTE, name, json.dumps(sent_as)) != 0:
         print("    (could not leave the version note; the index will "
               "measure the files instead)")
 
@@ -576,8 +579,8 @@ import json, pathlib, sys
 name, body = sys.argv[1], sys.argv[2]
 out = pathlib.Path('/srv/vsw/scores') / name / 'version.json'
 out.write_text(body, encoding='utf-8')
-v = json.loads(body).get('version') or {}
-print('    version noted:', v.get('content_id', '(none yet -- the files are compared instead)'))
+sent = json.loads(body)
+print('    sent as', sent.get('content_id', '')[:23], '-- the site now knows this exact version')
 """
 
 PUBLISH = """

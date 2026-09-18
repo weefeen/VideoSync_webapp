@@ -172,26 +172,18 @@ def describe(package) -> dict:
         "pages": len(sorted(package.root.glob("pages/page_*.svg"))),
         "metadata": dict(package.metadata or {}),
         # What was published, as the app consumes it -- the volunteer's
-        # panel compares its own copy against this (package.fingerprint).
-        "fingerprint": _fingerprint_or_blank(package),
-        "version": _version_or_blank(package),
+        # What this copy was sent as (package.installed_note): the id and
+        # the extractor's version block. The volunteer's panel compares
+        # its own project against these.
+        **_sent_as(package),
     }
 
 
-def _version_or_blank(package) -> dict:
+def _sent_as(package) -> dict:
     from . import package as pkgmod
-    try:
-        return pkgmod.version_of(package.root)
-    except OSError:
-        return {}
-
-
-def _fingerprint_or_blank(package) -> str:
-    from . import package as pkgmod
-    try:
-        return pkgmod.fingerprint(package.root)
-    except OSError:
-        return ""
+    note = pkgmod.installed_note(package.root) if package.root else {}
+    return {"content_id": note.get("content_id", ""),
+            "version": note.get("version") or {}}
 
 
 def publish(folder: pathlib.Path) -> int:

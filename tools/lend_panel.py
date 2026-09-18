@@ -117,10 +117,15 @@ def _local_projects() -> list:
                 continue
             try:
                 if folder.is_dir() and pkg.is_package(folder):
-                    seen[folder.name] = {"edition": folder.name,
-                                         "open": pkg.is_open(folder),
-                                         "fingerprint": pkg.fingerprint(folder),
-                                         "version": pkg.version_of(folder)}
+                    cid = pkg.content_id(folder)
+                    version = pkg.version_of(folder)
+                    seen[folder.name] = {
+                        "edition": folder.name, "open": pkg.is_open(folder),
+                        "content_id": cid, "version": version,
+                        # PROJECT_VERSION_ID_SPEC.md §6: edited since the
+                        # version it claims. Only meaningful once minted.
+                        "dirty": bool(version.get("content_id"))
+                                 and version.get("content_id") != cid}
             except Exception as exc:                       # noqa: BLE001
                 logger.debug("%s: not indexed: %s", folder.name, exc)
                 continue
@@ -135,15 +140,23 @@ def _compare(local: dict, there) -> str:
     "changed", a fast-forward; their parent is our content -> "behind",
     the site was saved from since; neither -> "diverged", two edits from
     one ancestor, which a person must look at before either wins. Until
-    the extractor writes keys, the content fingerprint of the consumed
-    files decides, and it can only say same or "changed".
+    the extractor mints keys, the content id alone decides (PROJECT_
+    FOLDER_SPEC.md §7.1), and it can only say same or "changed".
     """
     if there is None:
         return "new"
     if isinstance(there, str):                      # an older server
-        there = {"content": there, "version": {}}
+        there = {"content_id": there, "version": {}}
+    theirs_id = str(there.get("content_id") or there.get("content") or "")
+    if theirs_id == "":
+        return "unverified"
+    if theirs_id == local.get("content_id"):
+        return "same"
+    # Different content. With minted versions on both sides and no
+    # unpublished work here, ancestry says what kind of different.
     mine, theirs = local.get("version") or {}, there.get("version") or {}
-    if mine.get("content_id") and theirs.get("content_id"):
+    if (mine.get("content_id") and theirs.get("content_id")
+            and not local.get("dirty")):
         if mine["content_id"] == theirs["content_id"]:
             return "same"
         if mine.get("parent_id") == theirs["content_id"]:
@@ -151,10 +164,7 @@ def _compare(local: dict, there) -> str:
         if theirs.get("parent_id") == mine["content_id"]:
             return "behind"
         return "diverged"
-    content = str(there.get("content") or "")
-    if content == "":
-        return "unverified"
-    return "same" if content == local.get("fingerprint") else "changed"
+    return "changed"
 
 
 class Panel:
@@ -169,8 +179,8 @@ class Panel:
         # back yet, which is not a problem and must not be drawn as one.
         self._server = {"mode": "", "problem": "", "asked": False}
         self._wanted: list = []
-        # THE SERVER'S INDEX: folder name -> fingerprint of the copy it
-        # holds. Compared with the same fingerprint of each project here,
+        # THE SERVER'S INDEX: folder name -> the content id the copy it
+        # holds was sent as. Compared with the id of each project here,
         # so the page lists only what is new or changed -- and says which.
         self._index: dict = {}
         self._index_read = False
@@ -203,7 +213,7 @@ class Panel:
         with self._lock:
             index = dict(self._index)
             index_read = self._index_read
-        # ONLY THE DIFFERENCES. Same name and same fingerprint is the same
+        # ONLY THE DIFFERENCES. Same name and same content id is the same
         # score, and a score the site already has, as it is here, is not
         # something to publish. Until the server's index has been read once
         # nothing is offered: without it every score would look new.
@@ -1070,6 +1080,7 @@ function drawScores(rows, indexed){
     return '<div class="ask' + (r.status === 'new' ? '' : ' ready') + '">'
       + '<span class="pc">' + r.edition + '</span>'
       + '<span class="mt">' + (WORDS[r.status] || r.status)
+      + (r.dirty ? ' \u00b7 edited since version ' + ((r.version || {}).revision || '?') + ' was minted' : '')
       + ' · ' + (r.open ? 'open in the engraving tool' : 'closed (.spj)') + '</span>'
       + '<div class="row">' + act + '</div></div>';
   }).join('');
