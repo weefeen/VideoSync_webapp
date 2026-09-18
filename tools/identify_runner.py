@@ -85,6 +85,10 @@ def identify(args: argparse.Namespace) -> dict:
         "consensus": round(float(verdict.consensus), 4),
         "coverage": round(float(verdict.mean_coverage), 4),
         "n_windows": int(verdict.n_windows),
+        # the sweeping recogniser reports these; an older build reports none
+        "n_total": int(getattr(verdict, "n_total", 0) or 0),
+        "support": int(getattr(verdict, "support", 0) or 0),
+        "loo_consensus": round(float(getattr(verdict, "loo_consensus", 0.0) or 0.0), 4),
         "candidates": candidates,
         "device": _device(),
         "timing": {

@@ -48,8 +48,14 @@ _gpu = threading.BoundedSemaphore(1)
 # earlier attempt here to demand 0.75 would have demoted a genuine 5-of-8
 # match to a guess. What we add is a check the library cannot make: whether
 # enough windows were voted on for its calibration to apply at all.
-FULL_WINDOWS = 8          # what the sweep was run at; see MAX_WINDOWS upstream
+FULL_WINDOWS = 8          # what the OLD recogniser's sweep was run at
 MIN_WINDOWS = 2           # below this, consensus is arithmetic, not evidence
+# The recogniser that sweeps the recording (aggregate.py, feat/sweep-windows)
+# reports `support`: the windows that voted for the winner, and only calls
+# a verdict confident with at least three of them and a consensus that
+# survives removing the strongest. When that is reported, it is the gate;
+# the unanimity rule below is for the older recogniser that reports none.
+MIN_SUPPORT = 3
 
 MATCHED = "matched"              # say what it is, and move on
 UNRECOGNISED = "unrecognised"    # let them pick from the library instead
@@ -91,6 +97,9 @@ class Identification:
     n_windows: int
     candidates: list[Candidate]
     timing: dict
+    n_total: int = 0              # windows listened to, voting or not (0: old recogniser)
+    support: int = 0              # windows that voted for the winner (0: old recogniser)
+    loo_consensus: float = 0.0    # consensus with the winner's strongest window removed
 
     @property
     def outcome(self) -> str:
@@ -105,6 +114,10 @@ class Identification:
             return UNRECOGNISED
         if self.n_windows < MIN_WINDOWS:
             return UNRECOGNISED
+        if self.n_total:
+            # The sweeping recogniser: corroboration is its own gate; here
+            # only the floor is repeated, in case a build reports less.
+            return MATCHED if self.support >= MIN_SUPPORT else UNRECOGNISED
         if self.n_windows < FULL_WINDOWS and self.consensus < 1.0:
             return UNRECOGNISED
         return MATCHED
@@ -117,6 +130,9 @@ class Identification:
             "consensus": self.consensus,
             "coverage": self.coverage,
             "n_windows": self.n_windows,
+            "n_total": self.n_total,
+            "support": self.support,
+            "loo_consensus": self.loo_consensus,
             "candidates": [c.public() for c in self.candidates],
             "timing": dict(self.timing),
         }
@@ -196,6 +212,9 @@ def identify(media: pathlib.Path, duration: float | None = None) -> Identificati
         consensus=float(payload.get("consensus") or 0.0),
         coverage=float(payload.get("coverage") or 0.0),
         n_windows=int(payload.get("n_windows") or 0),
+        n_total=int(payload.get("n_total") or 0),
+        support=int(payload.get("support") or 0),
+        loo_consensus=float(payload.get("loo_consensus") or 0.0),
         candidates=[Candidate(piece_id=c["piece_id"], score=c["score"],
                               score_names=list(c.get("score_names") or []))
                     for c in payload.get("candidates", [])],
