@@ -213,13 +213,16 @@ def _segments(row, data: dict) -> bool:
     exactly like a single recording would be. Spans the recogniser could
     not name are logged, not stored: there is nothing to follow there.
     """
+    # MATCHED only. An "uncertain" segment -- a plausible winner without
+    # the corroboration a segment needs -- must not become a score request
+    # for a piece the video may not contain; it is logged with its span.
     found = [s for s in (data.get("segments") or [])
-             if s.get("outcome") in ("matched", "uncertain") and s.get("score_names")]
+             if s.get("outcome") == "matched" and s.get("score_names")]
     unknown = [s for s in (data.get("segments") or []) if s not in found]
     for s in unknown:
-        logger.info("performance %s: %s-%s heard as %s, not a piece we know",
+        logger.info("performance %s: %s-%s heard as %s (%s), not taken as a piece",
                     row["public_id"], _mmss(s.get("start")), _mmss(s.get("end")),
-                    s.get("winner") or "nothing")
+                    s.get("winner") or "nothing", s.get("outcome"))
     if not found:
         return _settle(row["id"], watch.REJECTED, reason=watch.NOT_CHOPIN,
                        note=f"{len(unknown)} piece(s) heard, none we know")

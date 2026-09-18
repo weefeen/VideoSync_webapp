@@ -69,6 +69,10 @@ UNCERTAIN = "uncertain"          # a plausible winner near the gate: verify it
 # nor refused -- it is verified against its score by the aligner, which a
 # wrong piece fails (see prepare).
 UNCERTAIN_BAND = (0.45, 0.55)
+# What a SEGMENT of a longer video needs before it becomes a performance
+# of its own; see SegmentFound.outcome.
+SEGMENT_SUPPORT = 8
+SEGMENT_CONSENSUS = 0.80
 
 
 class IdentifyError(RuntimeError):
@@ -167,12 +171,24 @@ class SegmentFound:
 
     @property
     def outcome(self) -> str:
-        if not self.winner or self.n_windows < MIN_WINDOWS or self.support < MIN_SUPPORT:
+        """Stricter than a single recording, on purpose.
+
+        A wrong single recording is refused by the aligner. A wrong SEGMENT
+        of a recital whose score is not engraved would instead be parked as
+        a score request for a piece the video does not contain -- the
+        posthumous WN 17 polonaise came out as "Op. 2" in 7 windows of 8.
+        On the two test programmes every true piece had consensus >= 0.83
+        with >= 10 windows behind it and every look-alike <= 7 windows; a
+        segment needs SEGMENT_SUPPORT windows and SEGMENT_CONSENSUS before
+        it is a piece, and is an uncertain span otherwise.
+        """
+        if not self.winner or self.n_windows < MIN_WINDOWS:
             return UNRECOGNISED
-        low, high = UNCERTAIN_BAND
-        if low <= self.consensus < high:
+        if self.support >= SEGMENT_SUPPORT and self.consensus >= SEGMENT_CONSENSUS:
+            return MATCHED
+        if self.support >= MIN_SUPPORT and self.mode == "confident":
             return UNCERTAIN
-        return MATCHED if self.mode == "confident" else UNRECOGNISED
+        return UNRECOGNISED
 
     def public(self) -> dict:
         return {"start": self.start, "end": self.end, "outcome": self.outcome,
