@@ -160,23 +160,6 @@ def compute(task, say: Say) -> None:
              "duration": info["duration"]}
     say("prepare_stage", stage="VALIDATING", data=found)
 
-    # THIS MACHINE'S CAP, NOT THE SITE'S. `max_upload_minutes` answers for
-    # the site -- it reports the web box's measured 3.9 GB so a visitor's
-    # figure does not change with whoever runs the code -- and used alone it
-    # had a 64 GB desktop refuse a ten-minute performance. Too long for THIS
-    # host is handed back for a bigger one; only too long for the site is a
-    # verdict on the recording.
-    longest = _longest_here()
-    minutes = (info["duration"] or 0) / 60
-    if longest and minutes > longest:
-        if minutes > max_upload_minutes():
-            _finish(say, UNAVAILABLE,
-                    f"{minutes:.0f} minutes long; longer than anything here "
-                    f"can align", skip_reason=SYNC_UNSUPPORTED, found=found)
-            return
-        raise TooBigHere(f"{minutes:.1f} minutes needs more memory than this "
-                         f"machine has free ({longest:.1f} minutes' worth)")
-
     # ── the sound ──────────────────────────────────────────────────────
     try:
         media = fetchaudio.audio(vid, audio_root())
@@ -208,12 +191,15 @@ def compute(task, say: Say) -> None:
     segment = meta.get("segment") or None
     offset = 0.0
     media_used = media
+    heard_already = None
     if segment:
         start, end = float(segment[0]), float(segment[1])
         offset = max(0.0, start - EXCERPT_PAD)
         media_used = _excerpt(media, work, offset, end + EXCERPT_PAD)
         found = {**found, "segment": [start, end]}
     elif not resume and (info["duration"] or 0) >= SEGMENT_MIN_SECONDS:
+        # Heard whole for its pieces before any length cap: the cap is for
+        # what gets aligned, and that is each piece on its own.
         say("prepare_stage", stage="IDENTIFYING", data=found)
         try:
             pieces = ident.segments(media)
@@ -230,6 +216,38 @@ def compute(task, say: Say) -> None:
                     f"{len(pieces)} piece(s) heard, {len(known)} we know",
                     found=found, segments=[p.public() for p in pieces])
             return
+        # One long piece -- a Ballade, a Scherzo. The whole recording has
+        # been heard; that verdict stands in for the identification below
+        # rather than listening a second time.
+        one = pieces[0]
+        heard_already = ident.Identification(
+            mode=one.mode, winner=one.winner, consensus=one.consensus, coverage=0.0,
+            n_windows=one.n_windows, timing={}, n_total=one.n_windows,
+            support=one.support,
+            candidates=[ident.Candidate(piece_id=one.winner or "", score=one.consensus,
+                                        score_names=list(one.score_names))])
+
+    # THIS MACHINE'S CAP, NOT THE SITE'S. `max_upload_minutes` answers for
+    # the site -- it reports the web box's measured 3.9 GB so a visitor's
+    # figure does not change with whoever runs the code -- and used alone it
+    # had a 64 GB desktop refuse a ten-minute performance. Too long for THIS
+    # host is handed back for a bigger one; only too long for the site is a
+    # verdict on the recording.
+    #
+    # Measured on the STRETCH that will be aligned: a piece of a recital
+    # is its own length, and a recital is cut before anything is aligned.
+    longest = _longest_here()
+    stretch = (segment[1] - segment[0]) if segment else (info["duration"] or 0)
+    minutes = stretch / 60
+    if longest and minutes > longest:
+        if minutes > max_upload_minutes():
+            _finish(say, UNAVAILABLE,
+                    f"{minutes:.0f} minutes long; longer than anything here "
+                    f"can align", skip_reason=SYNC_UNSUPPORTED, found=found)
+            return
+        raise TooBigHere(f"{minutes:.1f} minutes needs more memory than this "
+                         f"machine has free ({longest:.1f} minutes' worth)")
+
 
     edition = ""
     if resume:
@@ -244,13 +262,16 @@ def compute(task, say: Say) -> None:
     winner = ""
     if not edition:
         say("prepare_stage", stage="IDENTIFYING", data=found)
-        try:
-            heard = ident.identify(media_used, duration=None if segment else (info["duration"] or None))
-        except ident.IdentifyUnavailable as exc:
-            raise HandBack(str(exc)) from exc
-        except ident.IdentifyError as exc:
-            _finish(say, FAILED, str(exc), found=found)
-            return
+        if heard_already is not None:
+            heard = heard_already
+        else:
+            try:
+                heard = ident.identify(media_used, duration=None if segment else (info["duration"] or None))
+            except ident.IdentifyUnavailable as exc:
+                raise HandBack(str(exc)) from exc
+            except ident.IdentifyError as exc:
+                _finish(say, FAILED, str(exc), found=found)
+                return
         winner = heard.winner or ""
         if heard.outcome == ident.UNRECOGNISED:
             # Not "we failed": we listened, and it is not something we know.
