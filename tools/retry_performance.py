@@ -3,6 +3,9 @@
     python tools/retry_performance.py <public id>            re-prepare it
     python tools/retry_performance.py <public id> --check    say only
 
+A row with an edition resumes at the alignment; one refused before any
+piece was named is recognised again.
+
 REJECTED is final in the state model, on purpose: discovery must stop
 offering the same dead video back for ever. But a refusal can be OUR fault
 -- a score package that names more measures than the music has made the
@@ -45,9 +48,17 @@ def main() -> int:
         print(f"  {row['state']} is not a refusal; nothing to retry")
         return 1
     if not row["edition"]:
-        print("  no edition on the row: it would have to be recognised again, "
-              "which this does not do. Fix the row first.")
-        return 1
+        # Refused before any piece was named (NOT_CHOPIN): the only way back
+        # is to listen again. The audio is still cached on the volunteer.
+        if args.check:
+            print("  would set DISCOVERED and offer it for a fresh identification")
+            return 0
+        store.set_performance(row["id"], state=watch.DISCOVERED,
+                              skip_reason=None, error=None)
+        ok = watchledger.offer(row["id"])
+        print("  set DISCOVERED and offered for a fresh identification" if ok
+              else "  set DISCOVERED; the sweep will offer it")
+        return 0
     if args.check:
         print("  would set REVIEW and offer it to resume as", row["edition"])
         return 0
