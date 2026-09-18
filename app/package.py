@@ -22,8 +22,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import pathlib
+import zipfile
 from typing import Iterator
+
+logger = logging.getLogger(__name__)
 
 # Band images are named by the first measure they cover; a band stays on
 # screen until the next one's first measure is reached.
@@ -421,6 +425,73 @@ def _read_score_metadata(source: pathlib.Path) -> dict[str, str]:
     return found
 
 
+def bundle_of(root: pathlib.Path) -> pathlib.Path | None:
+    """The project's `.spj`, if the folder carries one under its own name."""
+    spj = root / f"{root.name}.spj"
+    return spj if spj.is_file() else None
+
+
+def is_open(root: pathlib.Path) -> bool:
+    """Loose `score/lines` on disk -- the project is open, or installed."""
+    return _first(root, _LINES_AT, want_dir=True) is not None
+
+
+def unpacked(root: str | pathlib.Path) -> pathlib.Path | None:
+    """Where a CLOSED project's files can be read, or None if it is open.
+
+    OPEN OR CLOSED -- CHECK FIRST. The extractor keeps `score/`,
+    `performance/` and `reference/` loose only while a project is open; on
+    close it packs them into `<piece_id>.spj` and deletes the loose copies,
+    so the same folder is sometimes a tree and sometimes a single zip
+    (PROJECT_FOLDER_SPEC.md §1). The loose files win whenever they exist:
+    they are the live state, and a stale bundle often sits beside them.
+
+    A closed project is unpacked ONCE into this app's own work directory,
+    never back into the project folder -- that folder belongs to the
+    extractor, which would pack whatever it finds there. The copy is
+    refreshed when the bundle's size or mtime changes, and its folder keeps
+    the piece's name, which is the join key everywhere.
+    """
+    root = pathlib.Path(root)
+    if is_open(root):
+        return None
+    spj = bundle_of(root)
+    if spj is None:
+        return None
+    try:
+        from .settings import settings                      # noqa: PLC0415
+        home = settings.work_dir / "unpacked"
+    except Exception:                                       # noqa: BLE001
+        import tempfile                                     # noqa: PLC0415
+        home = pathlib.Path(tempfile.gettempdir()) / "vsw-unpacked"
+    target = home / root.name
+    stat = spj.stat()
+    stamp = f"{stat.st_size}:{int(stat.st_mtime)}"
+    marker = target / ".from-spj"
+    if (marker.is_file() and marker.read_text(encoding="utf-8").strip() == stamp
+            and _first(target, _LINES_AT, want_dir=True) is not None):
+        return target
+    import shutil                                           # noqa: PLC0415
+    fresh = target.with_name(target.name + ".unpacking")
+    shutil.rmtree(fresh, ignore_errors=True)
+    fresh.mkdir(parents=True)
+    with zipfile.ZipFile(spj) as z:
+        for info in z.infolist():
+            rel = pathlib.PurePosixPath(info.filename)
+            if info.is_dir() or rel.is_absolute() or ".." in rel.parts:
+                continue
+            out = fresh.joinpath(*rel.parts)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(info) as src, out.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+    (fresh / ".from-spj").write_text(stamp, encoding="utf-8")
+    shutil.rmtree(target, ignore_errors=True)
+    fresh.rename(target)
+    logger.info("%s is closed; read from its .spj (%d MB) into %s",
+                root.name, stat.st_size >> 20, target)
+    return target
+
+
 def _first(root: pathlib.Path, candidates: tuple[str, ...],
            *, want_dir: bool = False) -> pathlib.Path | None:
     for rel in candidates:
@@ -437,6 +508,14 @@ def load(root: str | pathlib.Path) -> ScorePackage:
     root = pathlib.Path(root)
     if not root.is_dir():
         raise PackageError(f"{root} is not a folder.")
+
+    # Open or closed? Loose files first; a closed project is read from its
+    # bundle. The package then knows the unpacked copy as its root, and its
+    # name -- the piece id -- is the same either way.
+    try:
+        root = unpacked(root) or root
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise PackageError(f"{root.name}.spj could not be read: {exc}") from exc
 
     lines = _first(root, _LINES_AT, want_dir=True)
     if lines is None:
@@ -465,8 +544,8 @@ def load(root: str | pathlib.Path) -> ScorePackage:
 
 
 def is_package(path: pathlib.Path) -> bool:
-    """Cheap check, matching what load() will accept."""
-    return _first(path, _LINES_AT, want_dir=True) is not None
+    """Cheap check, matching what load() will accept: open, or closed."""
+    return is_open(path) or bundle_of(path) is not None
 
 
 def discover(corpus_root: str | pathlib.Path) -> Iterator[ScorePackage]:

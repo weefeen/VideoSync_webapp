@@ -185,6 +185,9 @@ def publish(folder: pathlib.Path) -> int:
     """
     if not folder.is_dir():
         raise FileNotFoundError(f"no such package folder: {folder}")
+    # A closed project is a single .spj; what is tarred is its unpacked copy.
+    from . import package as pkgmod
+    folder = pkgmod.unpacked(folder) or folder
     if not storage.available():
         raise storage.StorageError(
             "no object storage configured, so there is nowhere to publish "
@@ -209,7 +212,6 @@ def publish(folder: pathlib.Path) -> int:
     # decorative plate; it has no reason to carry the engraving, and until
     # this existed it carried all of it -- 134 MB for two scores, and 26 GB
     # for the 375 that are coming.
-    from . import package as pkgmod
     from . import fonts as fontdir
     from . import smufl
     loaded = pkgmod.load(folder)

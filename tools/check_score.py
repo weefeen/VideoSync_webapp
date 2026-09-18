@@ -34,6 +34,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from app import package as pkgmod  # noqa: E402
 from app.package import IMAGE_SUFFIXES  # noqa: E402
 from app.settings import settings  # noqa: E402
 
@@ -94,6 +95,16 @@ def check(root: pathlib.Path) -> Report:
         r.bad(f"{root} is not a folder")
         return r
     r.ok(f"folder: {root.name}")
+
+    # Open or closed? A closed project is one .spj; read its unpacked copy.
+    try:
+        inside = pkgmod.unpacked(root)
+    except Exception as exc:                               # noqa: BLE001
+        r.bad(f"{root.name}.spj could not be read: {exc}")
+        return r
+    if inside is not None:
+        r.ok(f"closed project: read from {root.name}.spj")
+        root = inside
 
     # -- the bands, without which nothing renders --------------------------
     #
@@ -429,6 +440,8 @@ def install(root: pathlib.Path) -> int:
     looked like it had worked. Anything shape-changing therefore runs where
     the shell is known.
     """
+    # A closed project is one .spj; what goes up is its unpacked copy.
+    root = pkgmod.unpacked(root) or root
     name = root.name
     # THE FOLDER THAT HOLDS THE ALIGNMENT, not the one that merely exists.
     # This read `reference if (root / "reference").is_dir()`, and a project

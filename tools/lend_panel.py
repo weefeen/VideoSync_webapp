@@ -73,8 +73,9 @@ def _local_project(edition: str) -> "pathlib.Path | None":
 
     Searched in the score roots this computer is configured with -- the
     project directory the engraving tool writes to is one of them. Exact
-    name and a `score/` folder inside, because the name is the contract that
-    releases the waiting links and a near-miss releases nothing.
+    name, because the name is the contract that releases the waiting links
+    and a near-miss releases nothing. Open (a `score/` folder) or closed
+    (only its `.spj`) -- both count; the package loader reads either.
     """
     if not edition or "/" in edition or "\\" in edition or edition in (".", ".."):
         return None
@@ -82,9 +83,13 @@ def _local_project(edition: str) -> "pathlib.Path | None":
         from app.settings import settings                 # noqa: PLC0415
     except Exception:                                      # noqa: BLE001
         return None
+    try:
+        from app import package as pkg                    # noqa: PLC0415
+    except Exception:                                      # noqa: BLE001
+        return None
     for root in settings.score_roots:
         folder = pathlib.Path(root.path) / edition
-        if (folder / "score").is_dir():
+        if folder.is_dir() and pkg.is_package(folder):
             return folder
     return None
 
