@@ -5,7 +5,7 @@ upstream in music_line_extractor, whose ``export_package`` workflow writes
 a folder we treat as a read-only input contract:
 
     lines/<first_measure>.{svg,png,jpg}   one image per score band
-    measures.data                         "<measure>\\t<seconds>" per line
+    reference/measures.data               "<seconds> <sync key> <p> <M>", tab-separated
     export.json                           manifest: geometry, style, entries
     chroma.npy                            present, unused here (no syncing)
 
@@ -293,8 +293,9 @@ def _parse_measures(lines, name: str) -> list[tuple[int, float]]:
 def sync_key_to_bar(measures: "pathlib.Path | bytes | str") -> dict[int, int]:
     """The package's own map from sync keys to the SOURCE bar they show.
 
-    Read from the reference `measures.data`, whose second column is the key
-    and third the source bar. Keys with no bar -- the extra boxes a cadenza
+    Read from the reference `measures.data`: `<seconds> <s> <p> <M>` -- the
+    second column is the key and the FOURTH the source bar (the third is
+    music21's own number, never a label; see PROJECT_FOLDER_SPEC.md §4). Keys with no bar -- the extra boxes a cadenza
     is spread over -- are absent, and a caller labelling boxes lets them
     inherit the bar before them. Empty for a two-column file, where the two
     numberings are one and the key IS the bar.
@@ -310,10 +311,10 @@ def sync_key_to_bar(measures: "pathlib.Path | bytes | str") -> dict[int, int]:
         if "\t" not in line:
             return {}
         parts = [p.strip() for p in line.rstrip("\r\n").split("\t")]
-        if len(parts) < 4 or not parts[1] or not parts[2]:
+        if len(parts) < 4 or not parts[1] or not parts[3]:
             continue
         try:
-            out[int(float(parts[1]))] = int(float(parts[2]))
+            out[int(float(parts[1]))] = int(float(parts[3]))
         except ValueError:
             continue
     return out
@@ -384,7 +385,8 @@ _LINES_AT = ("score/lines", "lines", "export/lines")
 _MEASURES_AT = ("reference/measures.data", "performance/measures.data",
                 "measures.data", "export/measures.data")
 _MANIFEST_AT = ("score/export.json", "export.json", "export/export.json")
-_CHROMA_AT = ("score/chroma.npy", "chroma.npy", "export/chroma.npy")
+_CHROMA_AT = ("performance/chroma.npy", "reference/chroma.npy",
+              "score/chroma.npy", "chroma.npy", "export/chroma.npy")
 _SOURCE_AT = ("score/source.krn", "source.krn", "score/source.musicxml")
 
 # Humdrum reference records worth surfacing. COM is the composer, OTL the

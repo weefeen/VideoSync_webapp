@@ -16,6 +16,7 @@ bucket, measured, and the numbers kept.
 """
 from __future__ import annotations
 
+import json
 import logging
 import pathlib
 
@@ -89,14 +90,29 @@ def _root(edition: str) -> "pathlib.Path | None":
     return found.root if found is not None and found.name == edition else None
 
 
-def labels_for(edition: str) -> dict[int, int]:
-    """Sync key -> the source bar a person reads. Empty when unknown."""
+def labels_for(edition: str) -> dict[int, str]:
+    """Sync key -> the source number a person reads. Empty when unknown.
+
+    From `score/measures-from-score.json`, the primary consumer input: every
+    box carries its `source_number`, and `""` there means the bar carries no
+    number in print -- a senza-tempo cadenza -- which is rendered as such,
+    not filled in. Column 4 of the reference `measures.data` is the fallback
+    when the package folder is not on this disk.
+    """
     root = _root(edition)
     try:
+        boxes = root / "score" / "measures-from-score.json" if root else None
+        if boxes is not None and boxes.is_file():
+            data = json.loads(boxes.read_text(encoding="utf-8"))
+            return {int(b["sync_key"]): str(b.get("source_number", "") or "")
+                    for page in data.get("pages", [])
+                    for b in page.get("measures", []) if "sync_key" in b}
         if root is not None and (root / "reference" / "measures.data").is_file():
-            return pkg.sync_key_to_bar(root / "reference" / "measures.data")
-        raw = scorestore.preview_bytes(edition, scorestore.ALIGNMENT)
-        return pkg.sync_key_to_bar(raw) if raw else {}
+            found = pkg.sync_key_to_bar(root / "reference" / "measures.data")
+        else:
+            raw = scorestore.preview_bytes(edition, scorestore.ALIGNMENT)
+            found = pkg.sync_key_to_bar(raw) if raw else {}
+        return {k: str(v) for k, v in found.items()}
     except Exception:                                       # noqa: BLE001
         logger.warning("%s: could not read the bar labels", edition, exc_info=True)
         return {}
@@ -141,20 +157,16 @@ def payload(performance) -> dict:
     # Grouped by system, because that is how the page draws it: one picture
     # with the bars laid over it as percentages of its width.
     # DISPLAY IS THE SOURCE NUMBER, SYNC IS THE SYNC KEY. Timings and boxes
-    # meet on the key; the label a person reads is the source bar, and a
-    # box no source bar owns -- a cadenza's extra boxes -- is labelled with
-    # the bar before it, which is the bar the music is in.
+    # meet on the key; `m` is the label a person reads, a string, and "" for
+    # a bar that carries no number in print. When the package's labels are
+    # unknown the key stands in, as in the four packages where they coincide.
     labels = labels_for(edition) if edition else {}
     by_band: dict[int, list[dict]] = {}
     aspects: dict[int, float] = {}
-    shown = None
     for measure in sorted(set(timings) & set(boxes)):
         box = boxes[measure]
-        shown = labels.get(measure, measure if not labels else shown)
-        if shown is None:
-            shown = measure
         by_band.setdefault(box["band"], []).append({
-            "m": shown,
+            "m": labels.get(measure, str(measure)) if labels else str(measure),
             "k": measure,
             # SECONDS, because the player reports seconds. The database keeps
             # milliseconds; the conversion happens once, here.

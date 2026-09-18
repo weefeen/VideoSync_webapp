@@ -669,6 +669,12 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
 </section>
 
 <script>
+ /* THE LABEL IS TEXT, NOT A NUMBER. It is the bar number printed on the
+    score (`source_number`): "0" for a pickup, "" for a bar that carries no
+    number in print, such as the senza-tempo cadenza of Op. 9 No. 2. Bars are
+    identified by their position in BARS, never by this. */
+ function lbl(b){ return (b.m === '' || b.m == null) ? '—' : String(b.m); }
+
 (function(){
  "use strict";
  var DATA = __PERFORMANCE__;
@@ -691,7 +697,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
    // A system is fetched when it is about to be read. See `need`.
    img.setAttribute('data-src', d.img);
    img.decoding = 'async';
-   img.alt = 'Scherzo No. 3, bars ' + d.bars[0].m + ' to ' + d.bars[d.bars.length-1].m;
+   img.alt = 'Bars ' + lbl(d.bars[0]) + ' to ' + lbl(d.bars[d.bars.length-1]);
    el.appendChild(img);
    for(var j=0;j<d.bars.length;j++){
     var b = d.bars[j];
@@ -700,14 +706,14 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
     z.className = 'mz';
     z.tabIndex = 0;
     z.setAttribute('role','button');
-    z.setAttribute('aria-label','Bar '+b.m);
+    z.setAttribute('aria-label', b.m === '' ? 'Unnumbered bar' : 'Bar '+b.m);
     z.style.left  = b.a+'%';
     z.style.width = Math.max(0.4, b.b - b.a)+'%';
     el.appendChild(z);
-    BARS.push({n:b.m, t:b.t, el:z, band:i, x0:b.a, x1:b.b});
+    BARS.push({n:lbl(b), t:b.t, el:z, band:i, x0:b.a, x1:b.b});
    }
    bandsEl.appendChild(el);
-   BANDS.push({el:el, aspect:d.aspect, first:d.bars[0].m, last:d.bars[d.bars.length-1].m});
+   BANDS.push({el:el, aspect:d.aspect, first:lbl(d.bars[0]), last:lbl(d.bars[d.bars.length-1])});
   }
   BARS.sort(function(a,b){ return a.t - b.t; });
  })();
@@ -742,7 +748,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   var hl = document.getElementById('herohl');
   hl.style.left = b.a+'%';
   hl.style.width = Math.max(0.6, b.b - b.a)+'%';
-  document.getElementById('herocap').textContent = 'Bar '+b.m+' · of 649';
+  document.getElementById('herocap').textContent = 'Bar '+lbl(b);
  })();
 
  /* ---------- page 1 ---------- */

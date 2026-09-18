@@ -56,8 +56,7 @@ def main(argv: list[str]) -> int:
             continue
         bands = sorted((folder / "score" / "lines").glob("*.svg"))
         alignment = next((p for p in (folder / "reference" / "measures.data",
-                                      folder / "performance" / "measures.data",
-                                      folder / "score" / "measures.data")
+                                      folder / "performance" / "measures.data")
                           if p.is_file()), None)
         if dry:
             print(f"  would  {name}: {len(bands)} systems"

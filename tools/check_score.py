@@ -184,17 +184,18 @@ def check(root: pathlib.Path) -> Report:
         r.bad("score/export.json is missing -- no band geometry")
 
     # -- the reference chroma, the quiet one --------------------------------
-    if (root / "score" / "chroma.npy").is_file():
-        r.ok("score/chroma.npy: where the loader looks")
+    # Only the legacy REFERENCE method warps onto it; the score method needs
+    # none. Its home is performance/ (or the reference/ snapshot) -- the
+    # extractor deletes score/chroma.npy from its archives (spec §1, §9).
+    if (root / "reference" / "chroma.npy").is_file():
+        r.ok("reference/chroma.npy: the reference method can warp onto it")
     elif (root / "performance" / "chroma.npy").is_file():
-        r.fix("chroma.npy is in performance/ -- the loader only looks under "
-              "score/. It will be copied across; without it every alignment "
-              "against this score fails.")
-    elif (root / "reference" / "chroma.npy").is_file():
-        r.fix("chroma.npy is in reference/ -- will be copied to score/")
+        r.ok("performance/chroma.npy: the reference method can warp onto it")
     else:
-        r.bad("no chroma.npy anywhere -- alignment has no reference to warp "
-              "against")
+        r.note("no chroma.npy -- only the score method can align this piece")
+    if (root / "score" / "chroma.npy").is_file():
+        r.note("score/chroma.npy is a stale location the extractor no longer "
+               "writes; harmless, not read")
 
     # -- the alignment ------------------------------------------------------
     if (root / "reference" / "measures.data").is_file():
@@ -494,10 +495,6 @@ def install(root: pathlib.Path) -> int:
           mv "$D/performance" "$D/reference"
       fi
       rmdir "$D/performance" 2>/dev/null || true
-      # The loader only looks under score/ for the reference chroma.
-      if [ ! -f "$D/score/chroma.npy" ] && [ -f "$D/reference/chroma.npy" ]; then
-          cp "$D/reference/chroma.npy" "$D/score/chroma.npy"
-      fi
       chown -R vsw:vsw "$D"
       echo "    installed: $(du -sh "$D" | cut -f1)"
     """

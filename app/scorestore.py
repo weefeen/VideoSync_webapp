@@ -328,9 +328,11 @@ def _put_preview(folder: pathlib.Path) -> int:
             note.write_text(json.dumps(ident), encoding="utf-8")
             storage.put(note, preview_key(folder.name, REFERENCE))
         sent += 1
+    # reference/ first: an immutable snapshot of the curated performance.
+    # Never score/measures.data -- a stale location the extractor deletes
+    # from its archives (PROJECT_FOLDER_SPEC.md §9).
     for measures in (folder / "reference" / "measures.data",
-                     folder / "performance" / "measures.data",
-                     folder / "score" / "measures.data"):
+                     folder / "performance" / "measures.data"):
         if measures.is_file():
             storage.put(measures, preview_key(folder.name, ALIGNMENT))
             sent += 1
