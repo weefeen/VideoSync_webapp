@@ -185,6 +185,38 @@ def studio_root():
 # --------------------------------------------------------------------------
 # the library, in the shape the interface wants
 # --------------------------------------------------------------------------
+@bp.get("/api/library/index")
+def api_library_index():
+    """The server's index of its scores: folder name -> fingerprint.
+
+    What a volunteer's panel compares its own projects against, so that
+    only a score that is NEW here or DIFFERENT from the copy here is
+    offered for publishing. The fingerprint is `package.fingerprint`, over
+    the consumed files, computed the same way on both machines.
+    """
+    # Each entry: {"content": <fingerprint of the consumed files>,
+    #              "version": <the extractor's version block, or {}>}.
+    # The bucket first -- a score published before this existed is there
+    # with "" -- then the installed copies on this disk, measured now.
+    index: dict = {}
+    if storage.available():
+        for e in scorestore.catalogue_entries():
+            index[str(e.get("name") or "")] = {
+                "content": str(e.get("fingerprint") or ""),
+                "version": e.get("version") if isinstance(e.get("version"), dict) else {},
+            }
+    for p in pipeline.usable_packages():
+        if not p.root or not p.root.is_dir():
+            continue
+        try:
+            index[p.name] = {"content": pkg.fingerprint(p.root),
+                             "version": pkg.version_of(p.root)}
+        except OSError as exc:
+            logger.warning("%s: could not fingerprint: %s", p.name, exc)
+    index.pop("", None)
+    return jsonify(index)
+
+
 @bp.get("/api/library")
 def api_library():
     """Every score we could actually render, for the manual picker.

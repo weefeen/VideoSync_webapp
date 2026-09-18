@@ -21,6 +21,7 @@ what the exporter writes, this is the only file that needs to change.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
 import pathlib
@@ -431,6 +432,35 @@ def bundle_of(root: pathlib.Path) -> pathlib.Path | None:
     return spj if spj.is_file() else None
 
 
+_BUNDLE_BANDS: dict[str, tuple[tuple, bool]] = {}
+
+
+def bundle_has_bands(spj: pathlib.Path) -> bool:
+    """Does the bundle hold a `lines/` folder? Read from its directory only.
+
+    A project that was never exported still closes into a `.spj`; listing
+    it as a package would only make the loader say "not exported yet" on
+    every look. Cached by size and mtime -- the central directory is cheap,
+    but the panel asks every second.
+    """
+    try:
+        st = spj.stat()
+    except OSError:
+        return False
+    sig = (st.st_size, st.st_mtime_ns)
+    hit = _BUNDLE_BANDS.get(str(spj))
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    try:
+        with zipfile.ZipFile(spj) as z:
+            has = any(n.startswith(("score/lines/", "lines/", "export/lines/"))
+                      and not n.endswith("/") for n in z.namelist())
+    except (OSError, zipfile.BadZipFile):
+        has = False
+    _BUNDLE_BANDS[str(spj)] = (sig, has)
+    return has
+
+
 def is_open(root: pathlib.Path) -> bool:
     """Loose `score/lines` on disk -- the project is open, or installed."""
     return _first(root, _LINES_AT, want_dir=True) is not None
@@ -468,8 +498,7 @@ def unpacked(root: str | pathlib.Path) -> pathlib.Path | None:
     stat = spj.stat()
     stamp = f"{stat.st_size}:{int(stat.st_mtime)}"
     marker = target / ".from-spj"
-    if (marker.is_file() and marker.read_text(encoding="utf-8").strip() == stamp
-            and _first(target, _LINES_AT, want_dir=True) is not None):
+    if marker.is_file() and marker.read_text(encoding="utf-8").strip() == stamp:
         return target
     import shutil                                           # noqa: PLC0415
     fresh = target.with_name(target.name + ".unpacking")
@@ -485,11 +514,140 @@ def unpacked(root: str | pathlib.Path) -> pathlib.Path | None:
             with z.open(info) as src, out.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
     (fresh / ".from-spj").write_text(stamp, encoding="utf-8")
-    shutil.rmtree(target, ignore_errors=True)
+    # Swap, not delete-then-rename: on Windows a folder whose files were
+    # just read can refuse to go, and a rename onto it is "access denied".
+    # The old copy is moved aside first and removed afterwards, best effort.
+    old = target.with_name(target.name + ".old")
+    shutil.rmtree(old, ignore_errors=True)
+    if target.exists():
+        target.rename(old)
     fresh.rename(target)
+    shutil.rmtree(old, ignore_errors=True)
     logger.info("%s is closed; read from its .spj (%d MB) into %s",
                 root.name, stat.st_size >> 20, target)
     return target
+
+
+_FINGERPRINTS: dict[str, tuple[tuple, str]] = {}
+
+
+def _consumed_files(root: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
+    """The files this app reads from a package, under names both sides share.
+
+    The alignment is `performance/measures.data` in a project and
+    `reference/measures.data` once installed; it is listed as
+    `alignment/measures.data` so the two copies compare equal. Everything
+    else -- audio, chroma, pickles, plates, the bundle itself -- is not
+    consumed and does not count as a change.
+    """
+    out: list[tuple[str, pathlib.Path]] = []
+    score = root / "score"
+    for rel in ("export.json", "measures-from-score.json", "source.krn"):
+        if (score / rel).is_file():
+            out.append((f"score/{rel}", score / rel))
+    lines = _first(root, _LINES_AT, want_dir=True)
+    if lines is not None:
+        for p in sorted(lines.iterdir()):
+            if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES:
+                out.append((f"lines/{p.name}", p))
+    measures = _first(root, _MEASURES_AT)
+    if measures is not None:
+        out.append(("alignment/measures.data", measures))
+    return out
+
+
+VERSION_FILE = "version.json"          # an installed copy's note of it
+_VERSIONS: dict[str, tuple[tuple, dict]] = {}
+
+
+def version_of(root: str | pathlib.Path) -> dict:
+    """The extractor's version block for this project, or {}.
+
+    THE KEY, WHEN THE EXTRACTOR WRITES ONE. music_line_extractor's
+    PROJECT_VERSION_ID_SPEC.md proposes, in `project.json`:
+
+        "version": {"content_id": "sha256:…", "parent_id": "sha256:…",
+                    "revision": 7, "saved_at_utc": "…", "device_id": "…"}
+
+    (an earlier draft named the id `project_content_id`, flat; both are
+    read). `content_id` says whether two copies are the same project;
+    `parent_id` says whether one descends from the other, which is what
+    tells a fast-forward from a divergence. Read from the bundle, because
+    the id describes the bundle (spec D5) -- an OPEN project's loose files
+    are ahead of it, so for an open project this returns {} and the
+    content fingerprint decides. Until the extractor implements the spec
+    every project returns {} and nothing here changes.
+
+    An installed copy on the server has no bundle: the installer leaves
+    the block it saw in `version.json` beside `score/`, and that is read
+    here so the server can answer with the same key.
+    """
+    root = pathlib.Path(root)
+    data = None
+    try:
+        note = root / VERSION_FILE
+        spj = None if is_open(root) else bundle_of(root)
+        if spj is not None:
+            st = spj.stat()
+            sig = ("spj", st.st_size, st.st_mtime_ns)
+            hit = _VERSIONS.get(str(root))
+            if hit is not None and hit[0] == sig:
+                return dict(hit[1])
+            with zipfile.ZipFile(spj) as z:
+                if "project.json" in z.namelist():
+                    data = json.loads(z.read("project.json").decode("utf-8"))
+        elif note.is_file():
+            st = note.stat()
+            sig = ("note", st.st_size, st.st_mtime_ns)
+            hit = _VERSIONS.get(str(root))
+            if hit is not None and hit[0] == sig:
+                return dict(hit[1])
+            data = json.loads(note.read_text(encoding="utf-8"))
+        else:
+            return {}
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return {}
+    block = (data or {}).get("version")
+    if not isinstance(block, dict):
+        flat = (data or {}).get("project_content_id") or (data or {}).get("content_id")
+        block = {"content_id": str(flat)} if flat else {}
+    out = {k: block[k] for k in ("content_id", "parent_id", "revision",
+                                 "saved_at_utc", "device_id") if k in block}
+    _VERSIONS[str(root)] = (sig, out)
+    return dict(out)
+
+
+def fingerprint(root: str | pathlib.Path) -> str:
+    """What the package IS, as this app consumes it: sixteen hex digits.
+
+    THE INDEX. A score on the volunteer's computer and its copy on the
+    server are the same score when the files the app reads have the same
+    bytes -- not when they have the same name, which is how "publish this
+    score" was offered for scores the site already had, and never for one
+    re-engraved under its old name. Computed identically on both machines
+    from the content of the consumed files (see `_consumed_files`), so
+    copying, repacking or an mtime touch changes nothing, and a re-cut band
+    or a re-run alignment changes it.
+
+    Cached by (path, size, mtime) of every file, since the bands add up to
+    megabytes and the panel asks every second.
+    """
+    root = pathlib.Path(root)
+    root = unpacked(root) or root
+    files = _consumed_files(root)
+    signature = tuple((rel, p.stat().st_size, p.stat().st_mtime_ns)
+                      for rel, p in files)
+    hit = _FINGERPRINTS.get(str(root))
+    if hit is not None and hit[0] == signature:
+        return hit[1]
+    h = hashlib.sha256()
+    for rel, p in files:
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        h.update(hashlib.sha256(p.read_bytes()).digest())
+    digest = h.hexdigest()[:16]
+    _FINGERPRINTS[str(root)] = (signature, digest)
+    return digest
 
 
 def _first(root: pathlib.Path, candidates: tuple[str, ...],
@@ -545,7 +703,10 @@ def load(root: str | pathlib.Path) -> ScorePackage:
 
 def is_package(path: pathlib.Path) -> bool:
     """Cheap check, matching what load() will accept: open, or closed."""
-    return is_open(path) or bundle_of(path) is not None
+    if is_open(path):
+        return True
+    spj = bundle_of(path)
+    return spj is not None and bundle_has_bands(spj)
 
 
 def discover(corpus_root: str | pathlib.Path) -> Iterator[ScorePackage]:

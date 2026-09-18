@@ -171,7 +171,27 @@ def describe(package) -> dict:
         "band_measures": [b.first_measure for b in package.bands],
         "pages": len(sorted(package.root.glob("pages/page_*.svg"))),
         "metadata": dict(package.metadata or {}),
+        # What was published, as the app consumes it -- the volunteer's
+        # panel compares its own copy against this (package.fingerprint).
+        "fingerprint": _fingerprint_or_blank(package),
+        "version": _version_or_blank(package),
     }
+
+
+def _version_or_blank(package) -> dict:
+    from . import package as pkgmod
+    try:
+        return pkgmod.version_of(package.root)
+    except OSError:
+        return {}
+
+
+def _fingerprint_or_blank(package) -> str:
+    from . import package as pkgmod
+    try:
+        return pkgmod.fingerprint(package.root)
+    except OSError:
+        return ""
 
 
 def publish(folder: pathlib.Path) -> int:
@@ -483,6 +503,11 @@ class _Cache:
 
 
 _cache = _Cache()
+
+
+def catalogue_entries() -> list[dict]:
+    """The catalogue as published, raw, through the same cache."""
+    return _cache.entries()
 
 
 def entries() -> list[Entry]:

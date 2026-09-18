@@ -118,10 +118,43 @@ def _local_projects() -> list:
             try:
                 if folder.is_dir() and pkg.is_package(folder):
                     seen[folder.name] = {"edition": folder.name,
-                                         "open": pkg.is_open(folder)}
-            except OSError:
+                                         "open": pkg.is_open(folder),
+                                         "fingerprint": pkg.fingerprint(folder),
+                                         "version": pkg.version_of(folder)}
+            except Exception as exc:                       # noqa: BLE001
+                logger.debug("%s: not indexed: %s", folder.name, exc)
                 continue
-    return list(seen.values())
+    return sorted(seen.values(), key=lambda s: s["edition"].lower())
+
+
+def _compare(local: dict, there) -> str:
+    """How this computer's copy stands to the site's: one word.
+
+    BY THE EXTRACTOR'S KEY WHEN BOTH SIDES HAVE ONE (PROJECT_VERSION_ID_
+    SPEC.md): same content_id -> same; our parent is their content ->
+    "changed", a fast-forward; their parent is our content -> "behind",
+    the site was saved from since; neither -> "diverged", two edits from
+    one ancestor, which a person must look at before either wins. Until
+    the extractor writes keys, the content fingerprint of the consumed
+    files decides, and it can only say same or "changed".
+    """
+    if there is None:
+        return "new"
+    if isinstance(there, str):                      # an older server
+        there = {"content": there, "version": {}}
+    mine, theirs = local.get("version") or {}, there.get("version") or {}
+    if mine.get("content_id") and theirs.get("content_id"):
+        if mine["content_id"] == theirs["content_id"]:
+            return "same"
+        if mine.get("parent_id") == theirs["content_id"]:
+            return "changed"
+        if theirs.get("parent_id") == mine["content_id"]:
+            return "behind"
+        return "diverged"
+    content = str(there.get("content") or "")
+    if content == "":
+        return "unverified"
+    return "same" if content == local.get("fingerprint") else "changed"
 
 
 class Panel:
@@ -136,10 +169,11 @@ class Panel:
         # back yet, which is not a problem and must not be drawn as one.
         self._server = {"mode": "", "problem": "", "asked": False}
         self._wanted: list = []
-        # What the server's library holds, by folder name: which of the
-        # scores on this computer are published, and so whether the button
-        # says publish or update.
-        self._library: list = []
+        # THE SERVER'S INDEX: folder name -> fingerprint of the copy it
+        # holds. Compared with the same fingerprint of each project here,
+        # so the page lists only what is new or changed -- and says which.
+        self._index: dict = {}
+        self._index_read = False
         self._lock = threading.Lock()
         # A LOOK THAT FAILS IS WEATHER. This reaches another machine over
         # the internet every few minutes, so it will fail sometimes -- and
@@ -167,11 +201,21 @@ class Panel:
             row["local"] = bool(editions and not row.get("ready")
                                 and _local_project(editions[0]) is not None)
         with self._lock:
-            library = set(self._library)
-        scores = [{**s, "published": s["edition"] in library}
-                  for s in _local_projects()]
+            index = dict(self._index)
+            index_read = self._index_read
+        # ONLY THE DIFFERENCES. Same name and same fingerprint is the same
+        # score, and a score the site already has, as it is here, is not
+        # something to publish. Until the server's index has been read once
+        # nothing is offered: without it every score would look new.
+        scores = []
+        if index_read:
+            for s in _local_projects():
+                status = _compare(s, index.get(s["edition"]))
+                if status != "same":
+                    scores.append({**s, "status": status})
         return {**self.state(), "server": self.server(), "wanted": wanted,
-                "publish": publish, "scores": scores}
+                "publish": publish, "scores": scores,
+                "index_read": index_read}
 
     def server(self) -> dict:
         with self._lock:
@@ -211,11 +255,11 @@ class Panel:
         if isinstance(rows, list):
             with self._lock:
                 self._wanted = rows
-        library = self._server_json("/api/library")
-        if isinstance(library, list):
+        index = self._server_json("/api/library/index")
+        if isinstance(index, dict):
             with self._lock:
-                self._library = [str(e.get("id") or "") for e in library
-                                 if isinstance(e, dict)]
+                self._index = {str(k): str(v) for k, v in index.items()}
+                self._index_read = True
 
     def _server_json(self, path: str):
         """One JSON answer from the server's own API, or None. Never raises."""
@@ -673,11 +717,12 @@ footer code{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
   every link waiting on it aligns by itself.</p>
 <div id="asks"></div>
 
-<h2>Scores on this computer</h2>
-<p class="hint">Every project engraved here, open or closed. <b>Publish</b>
-  sends a new one to the site; <b>Update</b> replaces one that is already
-  there with what is in the folder now. Both check the score first and say
-  what they find.</p>
+<h2>Scores to send</h2>
+<p class="hint">Projects on this computer that the site does not have, or
+  has in an older form: the score files here and there are compared, not
+  their names. <b>Publish</b> sends a new one; <b>Update</b> replaces the
+  site&rsquo;s copy with what is in the folder now. Both check the score
+  first and say what they find.</p>
 <div id="scores"></div>
 
 <h2>What this computer can take</h2>
@@ -806,7 +851,7 @@ function paint(s){
 
   PUBLISH = s.publish || {};
   drawAsks(s.wanted || []);
-  drawScores(s.scores || []);
+  drawScores(s.scores || [], !!s.index_read);
 
   document.getElementById('facts').innerHTML = [
     [s.free_gb == null ? '—' : s.free_gb.toFixed(1) + ' GB', 'memory free now'],
@@ -985,19 +1030,23 @@ function drawAsks(rows){
    same installer runs either way; what differs is the word, because
    "publish" on a score the site already has would read as a mistake, and
    the person pressing it is about to replace what visitors see. */
-function drawScores(rows){
+function drawScores(rows, indexed){
   const box = document.getElementById('scores');
   if(!box) return;
+  if(!indexed){
+    box.innerHTML = '<p class="none">Reading the site\u2019s index of scores\u2026</p>';
+    return;
+  }
   if(!rows.length){
-    box.innerHTML = '<p class="none">No project folder found in the score roots '
-      + 'this computer is configured with.</p>';
+    box.innerHTML = '<p class="none">Nothing to send. Every score engraved on this '
+      + 'computer is on the site, as it is here.</p>';
     return;
   }
   box.innerHTML = rows.map(r => {
     const p = PUBLISH || {};
     let act;
     if(p.edition === r.edition && p.running){
-      act = '<span class="mt"><b>' + (r.published ? 'Updating…' : 'Publishing…')
+      act = '<span class="mt"><b>' + (r.status === 'new' ? 'Publishing…' : 'Updating…')
         + '</b> ' + ((p.tail || []).slice(-1)[0] || '') + '</span>';
     }else{
       const said = (p.edition === r.edition && p.ok === true)
@@ -1005,13 +1054,23 @@ function drawScores(rows){
         : (p.edition === r.edition && p.ok === false)
         ? '<span class="mt"><b>Not sent.</b> ' + (p.tail || []).slice(-3).join(' · ') + '</span> '
         : '';
-      act = said + '<button class="plain" data-publish="' + r.edition + '">'
-        + (r.published ? 'Update it on the site' : 'Publish this score') + '</button>';
+      act = said + (r.status === 'behind' ? '' :
+          '<button class="plain" data-publish="' + r.edition + '">'
+        + (r.status === 'new' ? 'Publish this score'
+         : r.status === 'diverged' ? 'Replace the site\u2019s copy with this one'
+         : 'Update it on the site') + '</button>');
     }
-    return '<div class="ask' + (r.published ? ' ready' : '') + '">'
+    const WORDS = {
+      changed: 'changed since the site received it',
+      unverified: 'on the site from before the index existed \u2014 send it once to settle it',
+      behind: 'the site has a NEWER save of this project than this computer \u2014 nothing to send; bring that one here first',
+      diverged: 'edited here AND on the site since they were last the same \u2014 look at both before replacing either',
+      'new': 'new \u2014 not on the site',
+    };
+    return '<div class="ask' + (r.status === 'new' ? '' : ' ready') + '">'
       + '<span class="pc">' + r.edition + '</span>'
-      + '<span class="mt">' + (r.open ? 'open in the engraving tool' : 'closed (.spj)')
-      + ' · ' + (r.published ? 'on the site' : 'not on the site yet') + '</span>'
+      + '<span class="mt">' + (WORDS[r.status] || r.status)
+      + ' · ' + (r.open ? 'open in the engraving tool' : 'closed (.spj)') + '</span>'
       + '<div class="row">' + act + '</div></div>';
   }).join('');
   box.querySelectorAll('button[data-publish]').forEach(b => {

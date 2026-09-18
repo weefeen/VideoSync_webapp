@@ -528,6 +528,15 @@ def install(root: pathlib.Path) -> int:
     # Pushed FROM THE SERVER: that is where the bucket credentials live and
     # where the package now sits in its corrected shape. Uploading from a
     # laptop would mean putting the bucket key on the laptop.
+    # THE KEY THE PROJECT CAME WITH, left beside the installed copy so the
+    # server's index can answer with it (package.version_of reads it
+    # there). Empty until the extractor writes one; harmless meanwhile.
+    version = pkgmod.version_of(root)
+    if _remote_python(VERSION_NOTE, name, json.dumps(
+            {"version": version, "fingerprint": pkgmod.fingerprint(root)})) != 0:
+        print("    (could not leave the version note; the index will "
+              "measure the files instead)")
+
     print("    publishing to the bucket, so compute nodes can fetch it")
     if _remote_python(PUBLISH, name) != 0:
         print("  the package is on the web box but NOT in the bucket, so no "
@@ -562,6 +571,15 @@ def install(root: pathlib.Path) -> int:
 # argv[1] -- never interpolated into the source, because these names carry
 # spaces, parentheses and accents and one of them will eventually carry a
 # quote.
+VERSION_NOTE = """
+import json, pathlib, sys
+name, body = sys.argv[1], sys.argv[2]
+out = pathlib.Path('/srv/vsw/scores') / name / 'version.json'
+out.write_text(body, encoding='utf-8')
+v = json.loads(body).get('version') or {}
+print('    version noted:', v.get('content_id', '(none yet -- the files are compared instead)'))
+"""
+
 PUBLISH = """
 import pathlib, sys
 sys.path.insert(0, '.')
