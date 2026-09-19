@@ -166,9 +166,15 @@ main{max-width:1040px;margin:0 auto;padding:0 40px 78px}
   text-transform:uppercase;color:var(--faint);white-space:nowrap}
 .piece.live .m{color:var(--mag)}
 .also{font-size:13.5px;color:var(--soft);margin:10px 0 0;line-height:1.7}
-.also a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--hair-2)}
-.also a:hover{border-color:var(--mag)}
-.also .t{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.06em;color:var(--faint);margin-right:6px}
+.also .lab{display:block;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.19em;
+  text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+.programme{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 22px}
+.programme li{margin:0}
+.programme a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--hair-2);cursor:pointer}
+.programme a:hover{border-color:var(--mag)}
+.programme .cur a{color:var(--mag);border-color:var(--mag);font-weight:600}
+.programme .t{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.06em;color:var(--faint);margin-right:6px}
+.programme .un{font-style:italic;color:var(--soft)}
 .libnote{margin-top:24px;font-size:13.5px;color:var(--soft);max-width:52ch}
 .freeline{margin:26px 0 0;padding:16px 20px;border:1px solid var(--hair-2);
   border-left:2px solid #b8813a;border-radius:2px;background:#fdfbf7;font-size:13.5px;
@@ -1132,6 +1138,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
   layout();
  }
  window.__svsSwitch = switchTo;      /* for the page's own tests */
+ window.__svsGoTo = function(i){ goTo((DATA.programme || [])[i]); };
  function carry(time){
   if(switching || !DATA.segment || DATA.segment.end == null) return;
   if(time < DATA.segment.end + 2) return;
@@ -1201,15 +1208,37 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
     one recording; each has its own page, and this line is how a visitor
     who arrived at one finds the rest. Only pieces that can be followed
     are linked; the others are named with where they are. */
+ /* THE PROGRAMME OF THE VIDEO. A recital is several pieces -- and
+    movements, which the recogniser knows as pieces of their own -- each
+    a performance with its own page. Listed in order with where each
+    begins; a click seeks the video there and swaps the score in place
+    (see switchTo), so the whole programme plays from one page. A span
+    that could not be named is listed as what it is. */
  function others(){
-  var el = document.getElementById('also'), list = DATA.siblings || [];
-  if(!el || !list.length) return;
+  var el = document.getElementById('also'), list = DATA.programme || [];
+  if(!el) return;
+  if(list.length < 2){ el.hidden = true; return; }
   function mmss(s){ s = Math.floor(s || 0); return Math.floor(s/60) + ':' + ('0' + (s % 60)).slice(-2); }
-  el.innerHTML = 'Also in this video: ' + list.map(function(s){
-    var label = '<span class="t">' + mmss(s.start) + '</span>' + (s.piece || 'a piece');
-    return s.state === 'READY' ? '<a href="/p/' + s.id + '">' + label + '</a>' : '<span>' + label + '</span>';
-  }).join(' · ');
+  el.innerHTML = '<span class="lab">Programme</span><ol class="programme">' + list.map(function(s, i){
+    var name = s.piece ? s.piece : '<span class="un">unidentified piece</span>';
+    return '<li class="' + (s.current ? 'cur' : '') + '"><a data-i="' + i + '" href="/p/' + s.id + '">'
+      + '<span class="t">' + mmss(s.start) + '</span>' + name + '</a></li>';
+  }).join('') + '</ol>';
   el.hidden = false;
+  el.querySelectorAll('a[data-i]').forEach(function(a){
+    a.addEventListener('click', function(ev){
+      ev.preventDefault();
+      goTo(list[parseInt(a.getAttribute('data-i'), 10)]);
+    });
+  });
+ }
+ function goTo(item){
+  if(!item) return;
+  var seek = function(){ mediaSeek(item.start || 0); mediaPlay(); };
+  if(item.current || item.id === DATA.id){ seek(); return; }
+  fetch('/api/performance/' + item.id).then(function(r){ return r.json(); })
+    .then(function(p){ switchTo(p); seek(); })
+    .catch(function(){ location.href = '/p/' + item.id; });
  }
  others();
  /* Only a video can be played. A performance aligned to a reference
@@ -1263,7 +1292,7 @@ body.watching .viewer,html.gowatch .viewer{display:grid;grid-template-rows:auto 
  function mediaDur(){ return (useYT ? ytDur : vid.duration) || DATA.end; }
  function mediaSeek(t){ if(useYT) ytCmd('seekTo', [t, true]); else vid.currentTime = t; }
  function mediaPlaying(){ return useYT ? ytState === 1 : !vid.paused; }
- function mediaPlay(){ if(useYT) ytCmd('playVideo'); else vid.play(); }
+ function mediaPlay(){ if(useYT){ ytCmd('playVideo'); } else { var p = vid.play(); if(p && p.catch) p.catch(function(){}); } }
  function mediaToggle(){
   if(useYT){ ytState === 1 ? ytCmd('pauseVideo') : ytCmd('playVideo'); }
   else { vid.paused ? vid.play() : vid.pause(); }

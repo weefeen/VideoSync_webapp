@@ -219,13 +219,24 @@ def _segments(row, data: dict) -> bool:
     found = [s for s in (data.get("segments") or [])
              if s.get("outcome") == "matched" and s.get("score_names")]
     unknown = [s for s in (data.get("segments") or []) if s not in found]
+    if not found:
+        return _settle(row["id"], watch.REJECTED, reason=watch.NOT_CHOPIN,
+                       note=f"{len(unknown)} piece(s) heard, none we know")
+    # A span we could not name is still a place in the programme -- "an
+    # unidentified piece at 14:08" -- so it becomes a sibling too, settled
+    # as refused: no score request, no alignment, a line on the page.
     for s in unknown:
         logger.info("performance %s: %s-%s heard as %s (%s), not taken as a piece",
                     row["public_id"], _mmss(s.get("start")), _mmss(s.get("end")),
                     s.get("winner") or "nothing", s.get("outcome"))
-    if not found:
-        return _settle(row["id"], watch.REJECTED, reason=watch.NOT_CHOPIN,
-                       note=f"{len(unknown)} piece(s) heard, none we know")
+        try:
+            gap = store.new_performance(
+                watch.REJECTED, title=row["title"] or "", performer=row["performer"] or "",
+                parent_id=row["id"], segment=(float(s["start"]), float(s["end"])))
+            store.set_performance(gap["id"], skip_reason=watch.NOT_CHOPIN,
+                                  error="not a piece we know")
+        except (KeyError, TypeError, ValueError):
+            continue
 
     changed = False
     for i, seg in enumerate(found):

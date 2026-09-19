@@ -471,6 +471,60 @@ def _watch_mode(panel, stop: threading.Event) -> None:
             stop.wait(60.0)
 
 
+WEBBOX = os.environ.get("VSW_WEBBOX", "root@172.104.237.127")
+BROKER_PORT = 5672
+
+
+def _broker_reachable() -> bool:
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", BROKER_PORT), timeout=2.0):
+            return True
+    except OSError:
+        return False
+
+
+def _keep_tunnel(stop) -> None:
+    """Keep the ssh tunnel to the broker alive; reopen it when it dies.
+
+    THE BROKER IS ONLY REACHABLE THROUGH THIS TUNNEL, and the tunnel is an
+    ssh session that dies with the network, a sleep, or its window. Twice
+    a link waited twenty minutes on a volunteer that looked fine and was
+    only retrying a refused port -- and when the refusals went on, the
+    consumer gave up and the process ended. `lend.bat` opens the first
+    tunnel; this reopens it whenever the port stops answering, killing a
+    dead ssh that still holds it first. ServerAliveInterval makes ssh
+    notice a dead session in a minute instead of never.
+    """
+    import subprocess
+    mine = None
+    stop.wait(15.0)
+    while not stop.is_set():
+        if not _broker_reachable():
+            logger.warning("the broker tunnel is down; reopening it")
+            if mine is not None and mine.poll() is None:
+                mine.kill()
+            if os.name == "nt":
+                subprocess.run(["powershell", "-NoProfile", "-Command",
+                                "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'ssh.exe'"
+                                " -and $_.CommandLine -match '-L 5672:' } | ForEach-Object"
+                                " { Stop-Process -Id $_.ProcessId -Force }"],
+                               capture_output=True, timeout=30)
+            try:
+                mine = subprocess.Popen(
+                    ["ssh", "-N", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30",
+                     "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
+                     "-L", f"{BROKER_PORT}:127.0.0.1:{BROKER_PORT}", WEBBOX],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except OSError:
+                logger.warning("could not start ssh for the tunnel", exc_info=True)
+            stop.wait(10.0)
+            logger.info("broker tunnel %s", "up" if _broker_reachable() else "still down")
+        stop.wait(20.0)
+
+
 def _handle(task, ack) -> None:
     """The worker's own handler, with the warmer held off around it."""
     with _work_lock:
@@ -547,6 +601,19 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
+    # AND A FILE. The black window is closed, scrolled past or gone with
+    # the crash; twice a link waited on a volunteer that was not running
+    # and nothing said why. WORK_DIR/volunteer.log keeps the last few MB.
+    try:
+        from logging.handlers import RotatingFileHandler
+        from app.settings import settings as _settings
+        _log = RotatingFileHandler(_settings.work_dir / "volunteer.log",
+                                   maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+        _log.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(_log)
+        logging.getLogger(__name__).info("volunteer starting; pid %s", os.getpid())
+    except Exception:                                  # noqa: BLE001
+        logging.getLogger(__name__).warning("no log file", exc_info=True)
     # Pika narrates six lines per connection at INFO, and this opens a
     # short-lived one for every heartbeat -- so the handful of lines that
     # say what this machine is actually DOING scrolled past between walls
@@ -602,6 +669,8 @@ def main() -> int:
     # lives in a file on the web box.
     panel = lend_panel.Panel(_state, _paused.set, _take_work, _stop_after)
     threading.Thread(target=_watch_mode, args=(panel, stop), name="mode",
+                     daemon=True).start()
+    threading.Thread(target=_keep_tunnel, args=(stop,), name="tunnel",
                      daemon=True).start()
     url = lend_panel.serve(panel)
     if url:

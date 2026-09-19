@@ -150,6 +150,17 @@ def find_package(name: str) -> pkg.ScorePackage | None:
     Searches only what usable_packages() admits, so a filtered-out composer
     cannot be reached by naming it directly.
     """
+    # THE EXACT NAME FIRST, WITHOUT A SCAN. Loading every package to find
+    # one by its folder name cost 2-5 s per call once the project root held
+    # two hundred exported projects -- and a watch page made that call three
+    # times. A folder under a root with exactly this name is that package.
+    for root in settings.score_roots:
+        folder = pathlib.Path(root.path) / name
+        if name and folder.is_dir() and pkg.is_package(folder):
+            try:
+                return pkg.load(folder)
+            except pkg.PackageError:
+                break
     matches: list[pkg.ScorePackage] = []
     for p in usable_packages():
         if p.name == name:

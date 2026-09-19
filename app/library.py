@@ -24,6 +24,7 @@ disk makes it available without restarting anything.
 
 from __future__ import annotations
 
+import os
 import dataclasses
 import threading
 import time
@@ -53,6 +54,19 @@ from .settings import settings
 # package feels immediate, long enough that a burst of requests does not
 # re-walk the disk each time.
 CACHE_SECONDS = 10.0
+RESCAN_SECONDS = 600.0   # with the roots unchanged; a root changing rescans at once
+
+
+def _roots_signature() -> tuple:
+    """The mtimes of the score root folders: a package added or removed
+    changes them; nothing else needs a rescan sooner than RESCAN_SECONDS."""
+    out = []
+    for root in settings.score_roots:
+        try:
+            out.append((str(root.path), os.stat(root.path).st_mtime_ns))
+        except OSError:
+            out.append((str(root.path), 0))
+    return tuple(out)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -122,18 +136,32 @@ class _Catalogue:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._snapshot = self._EMPTY
+        self._roots: tuple = ()
 
     def snapshot(self) -> _Snapshot:
-        """The current catalogue, rescanned if it has gone stale."""
+        """The current catalogue, rescanned if it has gone stale.
+
+        STALE MEANS A ROOT FOLDER CHANGED, not that ten seconds passed. A
+        scan loads every package -- four seconds once the project root
+        held two hundred -- and the set of packages changes only when a
+        folder is added or removed, which changes the root directory's
+        mtime. Between those, a long timer catches edits inside a folder.
+        """
         with self._lock:
             current = self._snapshot
+            roots_seen = self._roots
         # monotonic, so a clock adjustment cannot freeze or expire the cache
-        if time.monotonic() - current.at < CACHE_SECONDS and current.at:
+        age = time.monotonic() - current.at
+        if current.at and age < CACHE_SECONDS:
+            return current
+        roots_now = _roots_signature()
+        if current.at and roots_now == roots_seen and age < RESCAN_SECONDS:
             return current
 
         fresh = self._scan()
         with self._lock:
             self._snapshot = fresh
+            self._roots = roots_now
         return fresh
 
     @staticmethod

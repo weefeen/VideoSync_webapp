@@ -245,8 +245,26 @@ def bars_for(path: str | pathlib.Path, first_measure: int) -> list[Bar]:
     return bars_from(path.read_bytes(), first_measure, name=path.name)
 
 
+_VIEWBOX = re.compile(rb"<svg[^>]*?viewBox\s*=\s*[\"']([^\"']+)[\"']", re.S)
+
+
 def band_aspect(data: bytes) -> float:
-    """The system's width over its height, from its own viewBox."""
+    """The system's width over its height, from its own viewBox.
+
+    Read off the opening <svg> tag: parsing the whole band -- a system is
+    thousands of elements of engraving -- took two seconds each, and a
+    piece has seventy systems. The full parse is the fallback.
+    """
+    found = _VIEWBOX.search(data[:8192])
+    if found:
+        box = found.group(1).decode("ascii", "replace").split()
+        if len(box) == 4:
+            try:
+                _, _, vw, vh = (float(v) for v in box)
+            except ValueError:
+                vw = vh = 0.0
+            if vw > 0 and vh > 0:
+                return vw / vh
     root = ET.fromstring(data)
     box = (root.get("viewBox") or "").split()
     if len(box) != 4:

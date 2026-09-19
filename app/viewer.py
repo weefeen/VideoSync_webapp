@@ -134,6 +134,16 @@ def _band_bytes(edition: str, first: int) -> bytes | None:
     which measures exist -- that host has no score bytes at all. Asking the
     second for a `.path` is how this broke the first time.
     """
+    # THIS DISK FIRST. With a bucket configured `library.find` answers from
+    # the catalogue, whose bands have no path, and every band was fetched
+    # over the network -- twelve fetches, twenty-five seconds -- for a
+    # score sitting in a folder right here.
+    root = _root(edition)
+    if root is not None:
+        for ext in (".svg", ".png", ".jpg"):
+            path = root / "score" / "lines" / f"{first}{ext}"
+            if path.is_file():
+                return path.read_bytes()
     package = library.find(edition)
     for band in getattr(package, "bands", None) or []:
         path = getattr(band, "path", None)
@@ -218,6 +228,16 @@ def payload(performance) -> dict:
              "piece": _piece_name(s["edition"])}
             for s in store.siblings_of(performance["id"])
             if s["id"] != performance["id"]],
+        # THE PROGRAMME: every piece found in the video, in order, this one
+        # included -- what the page lists with a link to where each begins.
+        # A span that could not be named is in it too, unnamed.
+        "programme": [
+            {"id": s["public_id"], "state": s["state"],
+             "start": s["segment_start"], "end": s["segment_end"],
+             "piece": _piece_name(s["edition"]),
+             "current": s["id"] == performance["id"]}
+            for s in store.siblings_of(performance["id"])
+            if s["segment_start"] is not None],
     }
 
 
