@@ -202,6 +202,12 @@ class Panel:
         # so the page lists only what is new or changed -- and says which.
         self._index: dict = {}
         self._index_read = False
+        # THIS COMPUTER'S INDEX, scanned in the background. Fingerprinting
+        # every project (there are two hundred, and the first pass hashes
+        # every band) took 48 s; done on each page request it made the
+        # page unreachable. The refresh loop scans; the page reads a copy.
+        self._local: list = []
+        self._local_at = 0.0
         self._lock = threading.Lock()
         # A LOOK THAT FAILS IS WEATHER. This reaches another machine over
         # the internet every few minutes, so it will fail sometimes -- and
@@ -231,19 +237,29 @@ class Panel:
         with self._lock:
             index = dict(self._index)
             index_read = self._index_read
+            local = list(self._local)
+            scanned = self._local_at > 0
         # ONLY THE DIFFERENCES. Same name and same content id is the same
         # score, and a score the site already has, as it is here, is not
         # something to publish. Until the server's index has been read once
         # nothing is offered: without it every score would look new.
         scores = []
-        if index_read:
-            for s in _local_projects():
+        if index_read and scanned:
+            for s in local:
                 status = _compare(s, index.get(s["edition"]))
                 if status != "same":
                     scores.append({**s, "status": status})
         return {**self.state(), "server": self.server(), "wanted": wanted,
                 "publish": publish, "scores": scores,
-                "index_read": index_read}
+                "index_read": index_read and scanned, "projects": len(local)}
+
+    def scan_local(self) -> None:
+        """Index the projects on this computer. Slow the first time; never
+        on a page request (see `_local`)."""
+        rows = _local_projects()
+        with self._lock:
+            self._local = rows
+            self._local_at = __import__("time").time()
 
     def server(self) -> dict:
         with self._lock:
@@ -292,7 +308,10 @@ class Panel:
                                         else {"content_id": str(v), "version": {}})
                                for k, v in index.items()}
                 self._index_read = True
-
+        try:
+            self.scan_local()
+        except Exception:                                  # noqa: BLE001
+            logger.warning("could not index the projects here", exc_info=True)
     def _server_json(self, path: str):
         """One JSON answer from the server's own API, or None. Never raises."""
         try:
@@ -414,34 +433,88 @@ class Panel:
                              "started": __import__("time").time()}
 
         def run() -> None:
-            checker = pathlib.Path(__file__).resolve().parent / "check_score.py"
-            lines: list = []
-            code = 1
-            try:
-                proc = subprocess.Popen(
-                    [sys.executable, str(checker), str(folder), "--install"],
-                    cwd=str(checker.parent.parent), stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                    errors="replace")
-                for line in proc.stdout:
-                    line = line.rstrip()
-                    # The app's own logging is not the installer talking.
-                    if not line.strip() or " INFO " in line or " WARNING " in line:
-                        continue
-                    lines.append(line.strip())
-                    with self._lock:
-                        self._publish["tail"] = lines[-6:]
-                code = proc.wait(timeout=1800)
-            except Exception as exc:                       # noqa: BLE001
-                lines.append(f"could not run the installer: {exc}")
+            code, lines = self._install(edition, folder)
             with self._lock:
                 self._publish.update(running=False, ok=(code == 0),
                                      tail=lines[-8:])
-            logger.info("published %s: %s", edition,
-                        "ok" if code == 0 else f"failed ({code})")
             self.read_wanted()
 
         threading.Thread(target=run, name="publish", daemon=True).start()
+        return ""
+
+    def _install(self, edition: str, folder) -> "tuple[int, list]":
+        """Run the installer for one folder; stream its last lines to the
+        page as it goes. Returns (exit code, lines)."""
+        checker = pathlib.Path(__file__).resolve().parent / "check_score.py"
+        lines: list = []
+        code = 1
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, str(checker), str(folder), "--install"],
+                cwd=str(checker.parent.parent), stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace")
+            for line in proc.stdout:
+                line = line.rstrip()
+                # The app's own logging is not the installer talking.
+                if not line.strip() or " INFO " in line or " WARNING " in line:
+                    continue
+                lines.append(line.strip())
+                with self._lock:
+                    self._publish["tail"] = lines[-6:]
+            code = proc.wait(timeout=1800)
+        except Exception as exc:                           # noqa: BLE001
+            lines.append(f"could not run the installer: {exc}")
+        logger.info("published %s: %s", edition,
+                    "ok" if code == 0 else f"failed ({code})")
+        return code, lines
+
+    def publish_all(self) -> str:
+        """Every new or changed project on this computer, one after another.
+
+        Two hundred exported projects are two hundred installs of a minute
+        or two each; nobody presses two hundred buttons. The list is the
+        one the page shows, taken now; each install is the same command as
+        the single button, and a failure moves on to the next -- the page
+        keeps the names that failed.
+        """
+        with self._lock:
+            if self._publish.get("running"):
+                return "a score is already being published"
+        todo = [s["edition"] for s in self.full().get("scores", [])
+                if s.get("status") in ("new", "changed", "unverified")]
+        if not todo:
+            return "nothing to send"
+        with self._lock:
+            self._publish = {"edition": todo[0], "running": True, "ok": None,
+                             "tail": ["checking the score"], "total": len(todo),
+                             "done": 0, "failed": [],
+                             "started": __import__("time").time()}
+
+        def run() -> None:
+            failed: list = []
+            for i, edition in enumerate(todo):
+                folder = _local_project(edition)
+                with self._lock:
+                    self._publish.update(edition=edition, done=i,
+                                         tail=["checking the score"])
+                if folder is None:
+                    failed.append(edition)
+                    continue
+                code, _lines = self._install(edition, folder)
+                if code != 0:
+                    failed.append(edition)
+                with self._lock:
+                    self._publish["failed"] = list(failed)
+            with self._lock:
+                self._publish.update(running=False, ok=(not failed),
+                                     done=len(todo), failed=failed,
+                                     tail=[f"{len(todo) - len(failed)} of {len(todo)} sent"
+                                           + (f"; failed: {', '.join(f[:30] for f in failed[:5])}"
+                                              if failed else "")])
+            self.read_wanted()
+
+        threading.Thread(target=run, name="publish-all", daemon=True).start()
         return ""
 
     def dismiss(self, job: str) -> str:
@@ -580,6 +653,11 @@ def serve(panel: Panel, port: int = 5055) -> str:
                     return
             elif path == "/publish":
                 problem = panel.publish_score(str(body.get("edition") or ""))
+                if problem:
+                    self._json({"problem": problem}, code=400)
+                    return
+            elif path == "/publish-all":
+                problem = panel.publish_all()
                 if problem:
                     self._json({"problem": problem}, code=400)
                     return
@@ -1066,7 +1144,8 @@ function drawScores(rows, indexed){
   const box = document.getElementById('scores');
   if(!box) return;
   if(!indexed){
-    box.innerHTML = '<p class="none">Reading the site\u2019s index of scores\u2026</p>';
+    box.innerHTML = '<p class="none">Indexing the projects on this computer and reading '
+      + 'the site\u2019s index\u2026 the first pass takes a minute.</p>';
     return;
   }
   if(!rows.length){
@@ -1074,7 +1153,24 @@ function drawScores(rows, indexed){
       + 'computer is on the site, as it is here.</p>';
     return;
   }
-  box.innerHTML = rows.map(r => {
+  const p = PUBLISH || {};
+  const bulk = (p.total && p.running)
+    ? '<div class="ask ready"><span class="pc">Sending ' + (p.done + 1) + ' of ' + p.total + '</span>'
+      + '<span class="mt">' + (p.edition || '') + ' \u00b7 ' + ((p.tail || []).slice(-1)[0] || '') + '</span>'
+      + (p.failed && p.failed.length ? '<span class="mt">failed so far: ' + p.failed.length + '</span>' : '')
+      + '</div>'
+    : (p.total && p.ok !== null && !p.running)
+    ? '<div class="ask"><span class="mt"><b>' + ((p.tail || []).slice(-1)[0] || 'Done.') + '</b></span></div>'
+    : '';
+  const sendable = rows.filter(r => r.status !== 'behind').length;
+  const all = (sendable > 1 && !p.running)
+    ? '<div class="row" style="margin:0 0 12px"><button class="plain" id="publishall">Send all '
+      + sendable + ' to the site</button> <span class="mt">one after another; a minute or two each</span></div>'
+    : '';
+  const SHOW = 12, shown = rows.slice(0, SHOW);
+  const more = rows.length > SHOW
+    ? '<p class="none">\u2026 and ' + (rows.length - SHOW) + ' more. "Send all" takes them too.</p>' : '';
+  box.innerHTML = bulk + all + shown.map(r => {
     const p = PUBLISH || {};
     let act;
     if(p.edition === r.edition && p.running){
@@ -1105,10 +1201,12 @@ function drawScores(rows, indexed){
       + (r.dirty ? ' \u00b7 edited since version ' + ((r.version || {}).revision || '?') + ' was minted' : '')
       + ' · ' + (r.open ? 'open in the engraving tool' : 'closed (.spj)') + '</span>'
       + '<div class="row">' + act + '</div></div>';
-  }).join('');
+  }).join('') + more;
   box.querySelectorAll('button[data-publish]').forEach(b => {
     b.onclick = () => send('/publish', {edition: b.dataset.publish});
   });
+  const pa = document.getElementById('publishall');
+  if(pa) pa.onclick = () => send('/publish-all', {});
 }
 
 document.getElementById('knob').onclick = function(){
